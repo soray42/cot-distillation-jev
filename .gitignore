@@ -1,0 +1,46 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+.venv/
+venv/
+env/
+
+# ---- Docs, notes & planning (kept local, not committed) ----
+*.md
+research/
+notes/
+docs/
+
+# ---- Data & run artifacts (large / regenerable) ----
+data/raw/
+data/cache/
+teacher_cache/
+runs/
+checkpoints/
+wandb/
+*.safetensors
+*.pt
+*.bin
+*.ckpt
+*.parquet
+*.zip
+*.gz
+*.tar
+
+# ---- Secrets / env ----
+.env
+*.secret
+secrets.*
+*.key
+config.local.*
+
+# ---- OS / editor ----
+.DS_Store
+Thumbs.db
+*.swp
+*~
+*Zone.Identifier
+.idea/
+.vscode/
