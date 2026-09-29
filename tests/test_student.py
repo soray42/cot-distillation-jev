@@ -59,6 +59,32 @@ class TestStudent(unittest.TestCase):
         _, alone = evaluate(model, tok, items[:1], 256, 1, {})
         self.assertTrue(all(abs(a - b) < 1e-4 for a, b in zip(preds[0]["probs"], alone[0]["probs"])))
 
+    def test_lm_loss_matches_direct_cross_entropy(self):
+        from cotdistill.student import Example, lm_loss
+        tok, model = tiny()
+        model.eval()
+        e = Example("Problem: two plus two.\n\nReasoning:", ["A", "B"], [], 2.0, "lm", "x",
+                    continuation=" add them to get four.\n\nAnswer: B")
+        e2 = Example("Short.\n\nReasoning:", ["A", "B"], [], 1.0, "lm", "y", continuation=" ok\n\nAnswer: A")
+        with torch.no_grad():
+            got = lm_loss(model, tok, [e, e2], 256, chunk=3)
+            want = 0.0
+            for ex in (e, e2):
+                pre = tok.encode(ex.text, add_special_tokens=False)
+                cont = tok.encode(ex.continuation, add_special_tokens=False)
+                ids = torch.tensor([pre + cont])
+                logits = model(input_ids=ids).logits[0, len(pre) - 1:-1]
+                want += ex.weight * torch.nn.functional.cross_entropy(logits, ids[0, len(pre):]).item()
+        self.assertAlmostEqual(got.item(), want, places=4)
+
+    def test_rationale_arm_adds_lm_example(self):
+        from cotdistill.student import build_examples
+        it = dict(toy_item(0, random.Random(0)), rationale="The light is red, so stop.")
+        ex = build_examples(it, final="teacher", subq="none", subq_target="cot", lambda_sub=1,
+                            rng=random.Random(0), rationale_lm=True)
+        self.assertEqual([e.kind for e in ex], ["final", "lm"])
+        self.assertTrue(ex[1].continuation.endswith("Answer: " + max(it["teacher"], key=it["teacher"].get)))
+
     def test_arms_build_expected_examples(self):
         from cotdistill.student import build_examples
         it = toy_item(0, random.Random(0))

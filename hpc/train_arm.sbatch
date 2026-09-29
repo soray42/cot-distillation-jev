@@ -12,6 +12,7 @@
 # Arms (final-question target x sub-question source / target):
 #   A1 gold answer only            A2 teacher answer only         A3 teacher + CoT sub-questions (ours)
 #   A4 teacher + matched control   A5 CoT sub-questions only      A6 teacher + CoT sub-q, program truth
+#   A7 teacher + LM loss on the teacher's CoT and answer (DHRD-style rationale baseline)
 # Override PREC/OPTIM after reading the memory smoke log (default: fp32 master weights + AdamW).
 set -euo pipefail
 cd "$HOME/cotd"
@@ -23,6 +24,7 @@ case "${ARM:?set ARM}" in
   A4) F=teacher; S=random; T=fresh ;;
   A5) F=none;    S=cot;    T=cot ;;
   A6) F=teacher; S=cot;    T=truth ;;
+  A7) F=teacher; S=none;   T=cot; RLM=1 ;;
   *) echo "unknown ARM $ARM"; exit 1 ;;
 esac
 SEED="${SEED:-0}"; MODEL="${MODEL:-$HOME/cotd/models/Qwen3.5-2B-Base}"
@@ -35,5 +37,6 @@ envs/cotd/bin/python repo/scripts/train_student.py --model "$MODEL" \
          jevbench=data/eval/jevbench_public.jsonl td=data/eval/typed_decisions_test.jsonl \
   --final "$F" --subq "$S" --subq-target "$T" --lambda-sub "${LAMBDA:-1.0}" --epochs "${EPOCHS:-2}" \
   --lr "${LR:-1e-5}" --micro-bs "${MBS:-8}" --grad-accum "${GA:-4}" --max-len 1536 \
-  --precision "${PREC:-fp32master}" --optim "${OPTIM:-adamw}" --seed "$SEED" --out "$OUT" ${SAVE:+--save}
+  --precision "${PREC:-fp32master}" --optim "${OPTIM:-adamw}" --seed "$SEED" --out "$OUT" ${SAVE:+--save} \
+  ${RLM:+--rationale-lm --lm-max-len 3072}
 echo "done $OUT"

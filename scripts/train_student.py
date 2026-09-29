@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from cotdistill.student import (Example, build_examples, evaluate, kl_loss, label_logits,  # noqa: E402
-                                load_model)
+                                lm_loss, load_model)
 
 
 def read_jsonl(p: str) -> list[dict]:
@@ -39,6 +39,9 @@ def main() -> None:
     ap.add_argument("--subq", default="none", choices=["none", "cot", "random"])
     ap.add_argument("--subq-target", default="cot", choices=["fresh", "cot", "truth"])
     ap.add_argument("--lambda-sub", type=float, default=1.0)
+    ap.add_argument("--rationale-lm", action="store_true", help="DHRD-style baseline: LM loss on teacher CoT + answer")
+    ap.add_argument("--lambda-lm", type=float, default=1.0)
+    ap.add_argument("--lm-max-len", type=int, default=3072)
     ap.add_argument("--epochs", type=float, default=2.0)
     ap.add_argument("--lr", type=float, default=1e-5)
     ap.add_argument("--warmup", type=float, default=0.05)
@@ -85,7 +88,8 @@ def main() -> None:
         ex = []
         for it in train_items:
             ex += build_examples(it, final=args.final, subq=args.subq, subq_target=args.subq_target,
-                                 lambda_sub=args.lambda_sub, rng=rng)
+                                 lambda_sub=args.lambda_sub, rng=rng, rationale_lm=args.rationale_lm,
+                                 lambda_lm=args.lambda_lm)
         rng.shuffle(ex)
         return ex
 
@@ -106,11 +110,16 @@ def main() -> None:
         if len(ex_iter) < args.micro_bs:
             ex_iter += epoch_examples()
         batch, ex_iter = ex_iter[:args.micro_bs], ex_iter[args.micro_bs:]
+        cls = [e for e in batch if e.kind != "lm"]
+        lms = [e for e in batch if e.kind == "lm"]
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
-            zs = label_logits(model, tok, batch, args.max_len, cache)
-            loss = kl_loss(zs, batch) / args.grad_accum
+            total = kl_loss(label_logits(model, tok, cls, args.max_len, cache), cls) * len(cls) if cls else 0.0
+            if lms:
+                total = total + lm_loss(model, tok, lms, args.lm_max_len)
+            loss = total / len(batch) / args.grad_accum
         loss.backward()
-        seen_tok += sum(min(args.max_len, len(e.text) // 3) for e in batch)   # rough token count for logging
+        seen_tok += sum(min(args.max_len, len(e.text) // 3) for e in cls) + \
+            sum(min(args.lm_max_len, (len(e.text) + len(e.continuation)) // 3) for e in lms)  # rough count
         micro += 1
         if micro % args.grad_accum == 0:
             torch.nn.utils.clip_grad_norm_(params, 1.0)

@@ -49,7 +49,8 @@ def convert(res: dict) -> dict:
                for r in res.get("random_subquestions", [])]
     return {"item_id": it["item_id"], "source": it.get("domain") or it.get("source"), "prompt": res["prompt"],
             "labels": labels, "gold_label": it.get("gold_label"), "teacher": teacher_dist(res),
-            "depth": it.get("depth"), "subqs": subqs, "random_subqs": randoms}
+            "depth": it.get("depth"), "subqs": subqs, "random_subqs": randoms,
+            "rationale": (res["traces"][0].get("reasoning") or None) if res.get("traces") else None}
 
 
 def main() -> None:

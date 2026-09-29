@@ -12,11 +12,13 @@ from dataclasses import dataclass
 
 import torch
 import torch.nn.functional as F
+import torch.utils.checkpoint
 
 from .metrics import calibration  # noqa: F401  (re-exported for scripts)
 
 SUBQ_TEMPLATE = "{problem}\n\nIntermediate question: {question}\nOptions:\nA) {a}\nB) {b}\nAnswer:"
 FINAL_TEMPLATE = "{problem}\n\nAnswer:"
+RATIONALE_PREFIX = "{problem}\n\nReasoning:"          # rationale-LM baseline: CoT text, then the answer
 
 
 @dataclass
@@ -28,6 +30,7 @@ class Example:
     kind: str                    # "final" | "subq"
     item_id: str
     gold: int | None = None      # index of the gold label (final questions, if known)
+    continuation: str | None = None   # kind "lm": text scored token by token after `text`
 
 
 def letter_token_ids(tokenizer, letters: list[str]) -> list[int]:
@@ -47,13 +50,14 @@ def _soft(p_yes: float, yes_first: bool, eps: float = 1e-4) -> list[float]:
 
 
 def build_examples(item: dict, *, final: str, subq: str, subq_target: str, lambda_sub: float,
-                   rng: random.Random) -> list[Example]:
+                   rng: random.Random, rationale_lm: bool = False, lambda_lm: float = 1.0) -> list[Example]:
     """Turn one student-data record into training examples for a given arm.
 
     final: "none" | "teacher" (teacher answer distribution) | "gold" (one-hot gold)
     subq: "none" | "cot" (teacher-extracted sub-questions) | "random" (matched generic questions)
     subq_target: "fresh" (teacher answer without CoT) | "cot" (with CoT) | "truth" (program truth,
                  falling back to the CoT answer, then the fresh one, when no truth is available)
+    rationale_lm: add a token-level LM example on the teacher's reasoning and answer (DHRD-style baseline)
     """
     ex: list[Example] = []
     labels = item["labels"]
@@ -84,6 +88,10 @@ def build_examples(item: dict, *, final: str, subq: str, subq_target: str, lambd
         a, b = ("Yes", "No") if yes_first else ("No", "Yes")
         ex.append(Example(SUBQ_TEMPLATE.format(problem=item["prompt"], question=q, a=a, b=b), ["A", "B"],
                           _soft(p, yes_first), lambda_sub / max(1, len(usable)), "subq", item["item_id"]))
+    if rationale_lm and item.get("rationale") and item.get("teacher"):
+        answer = max(item["teacher"], key=item["teacher"].get)
+        ex.append(Example(RATIONALE_PREFIX.format(problem=item["prompt"]), labels, [], lambda_lm, "lm",
+                          item["item_id"], continuation=f" {item['rationale'].strip()}\n\nAnswer: {answer}"))
     return ex
 
 
@@ -128,6 +136,45 @@ def label_logits(model, tokenizer, batch: list[Example], max_len: int, label_ids
             z = z + head.bias[label_ids_cache[key]]
         out.append(z.float())
     return out
+
+
+def _ce_sum(h: torch.Tensor, w: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    return F.cross_entropy((h.to(w.dtype) @ w.T).float(), y, reduction="sum")
+
+
+def lm_loss(model, tokenizer, batch: list[Example], max_len: int, chunk: int = 512) -> torch.Tensor:
+    """Sum over examples of weight x mean token cross-entropy on each continuation.
+
+    The vocabulary projection runs in checkpointed chunks so full-vocabulary logits (248k for Qwen3.5)
+    are never held for the whole sequence. Continuations longer than the budget keep their start and
+    their last 64 tokens (where the answer is)."""
+    body, head = text_parts(model)
+    dev = head.weight.device
+    seqs, starts = [], []
+    for e in batch:
+        pre = tokenizer.encode(e.text, add_special_tokens=False)[-(max_len // 2):]
+        cont = tokenizer.encode(e.continuation, add_special_tokens=False)
+        room = max_len - len(pre)
+        if len(cont) > room:
+            cont = cont[:room - 64] + cont[-64:]
+        seqs.append(pre + cont)
+        starts.append(len(pre))
+    L = max(len(x) for x in seqs)
+    pad = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
+    ids = torch.full((len(seqs), L), pad, dtype=torch.long)
+    mask = torch.zeros((len(seqs), L), dtype=torch.long)
+    for i, x in enumerate(seqs):
+        ids[i, :len(x)] = torch.tensor(x)
+        mask[i, :len(x)] = 1
+    ids, mask = ids.to(dev), mask.to(dev)
+    hidden = body(input_ids=ids, attention_mask=mask).last_hidden_state
+    total = hidden.new_zeros((), dtype=torch.float32)
+    for i, (x, st) in enumerate(zip(seqs, starts)):
+        h, y = hidden[i, st - 1:len(x) - 1], ids[i, st:len(x)]
+        ce = sum(torch.utils.checkpoint.checkpoint(_ce_sum, h[j:j + chunk], head.weight, y[j:j + chunk],
+                                                   use_reentrant=False) for j in range(0, len(y), chunk))
+        total = total + batch[i].weight * ce / max(1, len(y))
+    return total
 
 
 def kl_loss(logits: list[torch.Tensor], batch: list[Example]) -> torch.Tensor:
