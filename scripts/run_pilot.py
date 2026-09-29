@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from cotdistill.deepseek import DeepSeek  # noqa: E402
+from cotdistill.openrouter import OpenRouter  # noqa: E402
 from cotdistill.policygen import HELDOUT_DOMAINS, TRAIN_DOMAINS, generate  # noqa: E402
 from cotdistill.teacher import run_item, solve  # noqa: E402
 
@@ -32,6 +33,8 @@ def main() -> None:
     ap.add_argument("--domains", default=",".join(TRAIN_DOMAINS),
                     help=f"comma list; held-out: {','.join(HELDOUT_DOMAINS)}")
     ap.add_argument("--model", default="deepseek-flash")
+    ap.add_argument("--backend", default="deepseek", choices=["deepseek", "openrouter"])
+    ap.add_argument("--provider", default=None, help="OpenRouter provider to pin, e.g. Parasail")
     ap.add_argument("--effort", default=None)
     ap.add_argument("--workers", type=int, default=6)
     ap.add_argument("--budget", type=float, default=1.0, help="stop submitting new items above this USD spend")
@@ -47,7 +50,10 @@ def main() -> None:
     with open(out / "items.jsonl", "w") as f:
         for r in recs:
             f.write(json.dumps(r) + "\n")
-    client = DeepSeek(model=args.model, log_path=str(out / "calls.jsonl"))
+    if args.backend == "openrouter":
+        client = OpenRouter(model=args.model, provider=args.provider, log_path=str(out / "calls.jsonl"))
+    else:
+        client = DeepSeek(model=args.model, log_path=str(out / "calls.jsonl"))
     todo = [r for r in recs if not (out / f"{r['item_id']}.json").exists()]
     print(f"{len(recs)} items, {len(todo)} to run, k={args.k}, model={args.model}")
 
