@@ -15,6 +15,7 @@ import json
 import random
 
 from .deepseek import DeepSeek
+from .policygen import render_prompt
 from .readout import label_distribution, locate_span, span_stats, trace_confidence
 
 SOLVE_SUFFIX = "\n\nThink it through, then end with exactly one line: ANSWER: <letter>"
@@ -70,21 +71,33 @@ def _expand(compact: list) -> list[dict]:
             for t, lp, alts in compact]
 
 
-def solve(client: DeepSeek, rec: dict, k: int, effort: str | None = None) -> list[dict]:
-    labels = [chr(65 + i) for i in range(len(rec["label_order"]))]
+def solve(client: DeepSeek, rec: dict, k: int, effort: str | None = None, *, temperature: float | None = None,
+          permute: bool = False, efforts: list[str] | None = None, seed: int = 0) -> list[dict]:
+    """K thinking-mode solutions. Trace i may see a shuffled option order (permute) and its own
+    reasoning effort (efforts, cycled); each trace's distribution is also mapped to outcome keys."""
+    rng = random.Random(f"solve-{seed}-{rec['item_id']}")
     traces = []
     for i in range(k):
-        resp = client.chat([{"role": "user", "content": rec["prompt"] + SOLVE_SUFFIX}], thinking=True,
-                           logprobs=True, max_tokens=16000, effort=effort, tag=f"{rec['item_id']}/solve{i}")
+        order = list(rec["label_order"])
+        if permute and i > 0:
+            rng.shuffle(order)
+        prompt = rec["prompt"] if order == rec["label_order"] else render_prompt(rec, order)
+        labels = [chr(65 + j) for j in range(len(order))]
+        eff = efforts[i % len(efforts)] if efforts else effort
+        resp = client.chat([{"role": "user", "content": prompt + SOLVE_SUFFIX}], thinking=True, logprobs=True,
+                           max_tokens=16000, effort=eff, temperature=temperature, tag=f"{rec['item_id']}/solve{i}")
         ch = resp["choices"][0]
         lp = ch.get("logprobs") or {}
         content_lp = lp.get("content") or []
         reas_lp = lp.get("reasoning_content") or []
+        dist = label_distribution(content_lp, labels, "ANSWER:")
         traces.append({
+            "order": order, "effort": eff, "temperature": temperature,
             "content": ch["message"].get("content") or "",
             "reasoning": ch["message"].get("reasoning_content") or "",
             "finish_reason": ch.get("finish_reason"),
-            "dist": label_distribution(content_lp, labels, "ANSWER:"),
+            "dist": dist,
+            "dist_outcome": {order[ord(l) - 65]: p for l, p in dist["probs"].items()},
             "conf": trace_confidence(reas_lp),
             "reasoning_lp": _compact(reas_lp),
             "usage": resp.get("usage", {}),

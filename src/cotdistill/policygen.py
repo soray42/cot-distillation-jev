@@ -134,7 +134,7 @@ class Case:
             "gold_label": chr(65 + label_order.index(self.gold())),
             "depth": self.depth(), "firing_rule": self.firing_rule(), "n_rules": len(self.rules),
             "path": self.path(), "predicates": self.all_predicates(),
-            "prompt": self.prompt(label_order),
+            "prompt": self.prompt(label_order), "options": dict(self.options),
         }
 
 
@@ -465,3 +465,10 @@ def generate(n: int, domains: tuple[str, ...] = TRAIN_DOMAINS, seed: int = 0,
             made += 1
     rng.shuffle(out)
     return out
+
+
+def render_prompt(rec: dict, order: list[str]) -> str:
+    """Re-render a record's prompt with a different option order (outcome keys in `order`)."""
+    head = rec["prompt"].split("\nOptions:\n", 1)[0]
+    opts = "\n".join(f"{chr(65 + i)}) {rec['options'][k]}" for i, k in enumerate(order))
+    return f"{head}\nOptions:\n{opts}"

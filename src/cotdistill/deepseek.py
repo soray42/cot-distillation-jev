@@ -53,7 +53,8 @@ class DeepSeek:
 
     def chat(self, messages: list[dict], *, thinking: bool = True, logprobs: bool = True,
              top_logprobs: int = 20, max_tokens: int = 8000, effort: str | None = None,
-             json_mode: bool = False, model: str | None = None, tag: str = "") -> dict:
+             json_mode: bool = False, model: str | None = None, temperature: float | None = None,
+             tag: str = "") -> dict:
         model = model or self.model
         body: dict = {"model": model, "messages": messages, "max_tokens": max_tokens, "top_p": 1.0}
         if logprobs:
@@ -63,6 +64,8 @@ class DeepSeek:
             body["thinking"] = {"type": "disabled"}
         if effort:
             body["reasoning_effort"] = effort
+        if temperature is not None:          # documented as ignored in thinking mode
+            body["temperature"] = temperature
         if json_mode:
             body["response_format"] = {"type": "json_object"}
         data = json.dumps(body).encode()

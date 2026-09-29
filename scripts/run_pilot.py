@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from cotdistill.deepseek import DeepSeek  # noqa: E402
 from cotdistill.policygen import HELDOUT_DOMAINS, TRAIN_DOMAINS, generate  # noqa: E402
-from cotdistill.teacher import run_item  # noqa: E402
+from cotdistill.teacher import run_item, solve  # noqa: E402
 
 
 def main() -> None:
@@ -35,6 +35,10 @@ def main() -> None:
     ap.add_argument("--effort", default=None)
     ap.add_argument("--workers", type=int, default=6)
     ap.add_argument("--budget", type=float, default=1.0, help="stop submitting new items above this USD spend")
+    ap.add_argument("--temperature", type=float, default=None)
+    ap.add_argument("--permute", action="store_true", help="shuffle option order for traces 2..K")
+    ap.add_argument("--efforts", default=None, help="comma list cycled over traces, e.g. low,high")
+    ap.add_argument("--solve-only", action="store_true", help="skip sub-question stages")
     args = ap.parse_args()
 
     out = ROOT / "teacher_cache" / args.run
@@ -50,7 +54,14 @@ def main() -> None:
     def work(rec: dict) -> str:
         if client.spent_usd > args.budget:
             return f"{rec['item_id']}: skipped (budget)"
-        res = run_item(client, rec, k=args.k, seed=args.seed, effort=args.effort)
+        if args.solve_only:
+            traces = solve(client, rec, args.k, effort=args.effort, temperature=args.temperature,
+                           permute=args.permute, efforts=args.efforts.split(",") if args.efforts else None,
+                           seed=args.seed)
+            res = {"item": {k2: v for k2, v in rec.items() if k2 != "prompt"}, "prompt": rec["prompt"],
+                   "traces": traces, "subquestions": []}
+        else:
+            res = run_item(client, rec, k=args.k, seed=args.seed, effort=args.effort)
         (out / f"{rec['item_id']}.json").write_text(json.dumps(res))
         return f"{rec['item_id']}: ok, {len(res['subquestions'])} sub-questions"
 
