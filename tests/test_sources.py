@@ -43,6 +43,16 @@ class TestKnightsKnaves(unittest.TestCase):
         self.assertIsNone(S.kk_subq_truth("Is Zed a knight?", rec))
 
 
+class TestResolvePYes(unittest.TestCase):
+    def test_censored_letters_are_symmetric(self):
+        from cotdistill.teacher import resolve_p_yes
+        self.assertEqual(resolve_p_yes({"yes_first": True, "missing": ["A"], "mass": 0.99, "p_yes": None}), 0.0)
+        self.assertEqual(resolve_p_yes({"yes_first": False, "missing": ["B"], "mass": 0.99, "p_yes": None}), 0.0)
+        self.assertEqual(resolve_p_yes({"yes_first": True, "missing": ["B"], "mass": 0.99}, {"A": 1.0}), 1.0)
+        self.assertIsNone(resolve_p_yes({"yes_first": True, "missing": ["A", "B"], "mass": 0.0, "p_yes": None}))
+        self.assertEqual(resolve_p_yes({"yes_first": True, "missing": [], "mass": 1.0}, {"A": 0.3, "B": 0.7}), 0.3)
+
+
 @unittest.skipUnless((ROOT / "data/raw/justlogic/train_dataset.csv").exists(), "JustLogic data not downloaded")
 class TestJustLogic(unittest.TestCase):
     def test_records(self):

@@ -24,7 +24,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True)
     ap.add_argument("--eval", nargs="+", required=True, help="name=path.jsonl")
-    ap.add_argument("--max-len", type=int, default=4096)
+    ap.add_argument("--max-len", type=int, default=6144)
     ap.add_argument("--bs", type=int, default=8)
     ap.add_argument("--out", required=True)
     args = ap.parse_args()

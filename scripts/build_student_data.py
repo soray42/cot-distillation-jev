@@ -12,9 +12,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from cotdistill.teacher import resolve_p_yes  # noqa: E402
 
 
 def teacher_dist(res: dict) -> dict[str, float]:
@@ -37,11 +41,11 @@ def convert(res: dict) -> dict:
     labels = [chr(65 + i) for i in range(len(it["label_order"]))]
     subqs = []
     for sq in res.get("subquestions", []):
-        ps = [a["p_yes"] for a in sq.get("answers", []) if a.get("p_yes") is not None]
+        ps = [p for p in (resolve_p_yes(a) for a in sq.get("answers", [])) if p is not None]
         subqs.append({"question": sq["question"], "p_cot": sum(ps) / len(ps) if ps else None,
-                      "p_fresh": (sq.get("answer_nocot") or {}).get("p_yes"), "truth": sq.get("truth"),
+                      "p_fresh": resolve_p_yes(sq.get("answer_nocot") or {}), "truth": sq.get("truth"),
                       "span_minp": (sq.get("span_stats") or {}).get("min_p"), "status": sq.get("status")})
-    randoms = [{"question": r["question"], "p_fresh": (r.get("answer_nocot") or {}).get("p_yes")}
+    randoms = [{"question": r["question"], "p_fresh": resolve_p_yes(r.get("answer_nocot") or {})}
                for r in res.get("random_subquestions", [])]
     return {"item_id": it["item_id"], "source": it.get("domain") or it.get("source"), "prompt": res["prompt"],
             "labels": labels, "gold_label": it.get("gold_label"), "teacher": teacher_dist(res),

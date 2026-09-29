@@ -49,7 +49,7 @@ def main() -> None:
     ap.add_argument("--optim", default="adamw", choices=["adamw", "adamw8bit"])
     ap.add_argument("--no-grad-ckpt", action="store_true")
     ap.add_argument("--eval-bs", type=int, default=8)
-    ap.add_argument("--eval-max-len", type=int, default=4096, help="long eval states (JevBench hard) need more room")
+    ap.add_argument("--eval-max-len", type=int, default=6144, help="long eval states (JevBench hard) need more room")
     ap.add_argument("--save", action="store_true", help="save the final weights (bf16) to <out>/model")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", required=True)

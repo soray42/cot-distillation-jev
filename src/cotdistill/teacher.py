@@ -184,9 +184,25 @@ def answer_subquestion(client: DeepSeek, rec: dict, trace: dict | None, question
                        max_tokens=3, tag=tag)
     tokens = (resp["choices"][0].get("logprobs") or {}).get("content") or []
     d = label_distribution(tokens, ["A", "B"], marker=None)
-    yes_lab = "A" if yes_first else "B"
-    p_yes = d["probs"].get(yes_lab) if d["probs"] else None
-    return {"p_yes": p_yes, "mass": d["mass"], "missing": d["missing"], "yes_first": yes_first}
+    out = {"p_yes": None, "mass": d["mass"], "missing": d["missing"], "yes_first": yes_first, "bound": d["bound"]}
+    out["p_yes"] = resolve_p_yes(out, d["probs"])
+    return out
+
+
+def resolve_p_yes(ans: dict, probs: dict | None = None) -> float | None:
+    """P(yes) from a sub-question answer. A letter outside the top-20 is censored at a tiny bound, so when
+    only the "no" letter was found P(yes) is ~0 (symmetric with a missing "no" giving ~1); None when
+    neither letter was found."""
+    yes_lab = "A" if ans.get("yes_first") else "B"
+    no_lab = "B" if yes_lab == "A" else "A"
+    missing = set(ans.get("missing") or [])
+    if probs:
+        return probs.get(yes_lab, 0.0)
+    if ans.get("p_yes") is not None:
+        return ans["p_yes"]
+    if (ans.get("mass") or 0) > 0 and yes_lab in missing and no_lab not in missing:
+        return 0.0
+    return None
 
 
 GENERIC_PROMPT = """Below is a decision problem.
