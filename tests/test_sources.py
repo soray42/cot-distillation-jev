@@ -30,6 +30,19 @@ class TestKnightsKnaves(unittest.TestCase):
                     self.assertGreater(violated, 0)
 
 
+    def test_kk_subq_truth(self):
+        rec = S.knights_knaves(1, seed=7, people_range=(5, 5))[0]
+        people, roles = rec["meta"]["people"], {p: n["truth"] for p, n in zip(rec["meta"]["people"], rec["predicates"])}
+        a, b, c = people[:3]
+        self.assertEqual(S.kk_subq_truth(f"Is {a} a knight?", rec), roles[a])
+        self.assertEqual(S.kk_subq_truth(f"Is {a} a knave?", rec), not roles[a])
+        self.assertEqual(S.kk_subq_truth(f"Is {b}'s statement true?", rec), roles[b])
+        self.assertEqual(S.kk_subq_truth(f"Are {a}, {b}, and {c} knights?", rec), roles[a] and roles[b] and roles[c])
+        self.assertEqual(S.kk_subq_truth(f"Are {a} and {b} both knaves?", rec), not roles[a] and not roles[b])
+        self.assertIsNone(S.kk_subq_truth(f"Does {a}'s statement force {b} to be a knight?", rec))
+        self.assertIsNone(S.kk_subq_truth("Is Zed a knight?", rec))
+
+
 @unittest.skipUnless((ROOT / "data/raw/justlogic/train_dataset.csv").exists(), "JustLogic data not downloaded")
 class TestJustLogic(unittest.TestCase):
     def test_records(self):

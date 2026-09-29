@@ -49,6 +49,16 @@ class TestStudent(unittest.TestCase):
         for a, b in zip(both, one):
             self.assertTrue(torch.allclose(a, b, atol=1e-4), (a, b))
 
+    def test_evaluate_returns_input_order(self):
+        from cotdistill.student import evaluate
+        tok, model = tiny()
+        items = [{"item_id": f"e{i}", "prompt": "word " * n + "\nOptions:\nA) x\nB) y", "labels": ["A", "B"],
+                  "gold_label": "A"} for i, n in enumerate([40, 3, 25, 1, 60])]
+        _, preds = evaluate(model, tok, items, 256, 2, {})
+        self.assertEqual([p["item_id"] for p in preds], [it["item_id"] for it in items])
+        _, alone = evaluate(model, tok, items[:1], 256, 1, {})
+        self.assertTrue(all(abs(a - b) < 1e-4 for a, b in zip(preds[0]["probs"], alone[0]["probs"])))
+
     def test_arms_build_expected_examples(self):
         from cotdistill.student import build_examples
         it = toy_item(0, random.Random(0))

@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -18,7 +19,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from cotdistill.deepseek import DeepSeek  # noqa: E402
+from cotdistill.deepseek import DeepSeek, is_peak  # noqa: E402
 from cotdistill.openrouter import OpenRouter  # noqa: E402
 from cotdistill.policygen import HELDOUT_DOMAINS, TRAIN_DOMAINS, generate  # noqa: E402
 from cotdistill.teacher import run_item, solve  # noqa: E402
@@ -43,6 +44,7 @@ def main() -> None:
     ap.add_argument("--efforts", default=None, help="comma list cycled over traces, e.g. low,high")
     ap.add_argument("--solve-only", action="store_true", help="skip sub-question stages")
     ap.add_argument("--no-random", action="store_true", help="skip the random-matched sub-question control")
+    ap.add_argument("--offpeak-only", action="store_true", help="hold new items while DeepSeek peak pricing applies")
     ap.add_argument("--items", default=None, help="jsonl of pre-built records (benchmark items) instead of the generator")
     args = ap.parse_args()
 
@@ -63,6 +65,8 @@ def main() -> None:
     print(f"{len(recs)} items, {len(todo)} to run, k={args.k}, model={args.model}")
 
     def work(rec: dict) -> str:
+        while args.offpeak_only and args.backend == "deepseek" and is_peak():
+            time.sleep(60)
         if client.spent_usd > args.budget:
             return f"{rec['item_id']}: skipped (budget)"
         if args.solve_only:

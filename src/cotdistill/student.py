@@ -52,7 +52,7 @@ def build_examples(item: dict, *, final: str, subq: str, subq_target: str, lambd
     final: "none" | "teacher" (teacher answer distribution) | "gold" (one-hot gold)
     subq: "none" | "cot" (teacher-extracted sub-questions) | "random" (matched generic questions)
     subq_target: "fresh" (teacher answer without CoT) | "cot" (with CoT) | "truth" (program truth,
-                 falling back to fresh when no truth is available)
+                 falling back to the CoT answer, then the fresh one, when no truth is available)
     """
     ex: list[Example] = []
     labels = item["labels"]
@@ -72,7 +72,7 @@ def build_examples(item: dict, *, final: str, subq: str, subq_target: str, lambd
         p = None
         if subq_target == "truth" and sq.get("truth") is not None:
             p = 1.0 if sq["truth"] else 0.0
-        elif subq_target == "cot":
+        elif subq_target in ("cot", "truth"):
             p = sq.get("p_cot")
         if p is None:
             p = sq.get("p_fresh")
@@ -152,3 +152,47 @@ def calibration(probs: list[list[float]], gold: list[int], bins: int = 15) -> di
         if idx:
             ece += len(idx) / n * abs(sum(acc[i] for i in idx) / len(idx) - sum(conf[i] for i in idx) / len(idx))
     return {"n": n, "acc": sum(acc) / n, "nll": nll, "brier": brier, "ece": ece}
+
+
+def load_model(path: str, dtype):
+    import transformers
+    try:
+        m = transformers.AutoModelForCausalLM.from_pretrained(path, torch_dtype=dtype)
+    except Exception:
+        m = transformers.AutoModelForImageTextToText.from_pretrained(path, torch_dtype=dtype)
+    for n, p in m.named_parameters():
+        if "visual" in n or "vision" in n:
+            p.requires_grad = False
+    return m
+
+
+@torch.no_grad()
+def evaluate(model, tok, items: list[dict], max_len: int, bs: int, cache: dict) -> tuple[dict, list[dict]]:
+    """Final-question predictions for eval records (prompt, labels, gold_label; optional gold_probs, group).
+
+    Items are batched by length to limit padding; predictions come back in input order."""
+    was_training = model.training
+    model.eval()
+    dev = next(model.parameters()).device
+    order = sorted(range(len(items)), key=lambda i: len(items[i]["prompt"]))
+    probs_by = {}
+    for s in range(0, len(order), bs):
+        idx = order[s:s + bs]
+        batch = [Example(FINAL_TEMPLATE.format(problem=items[i]["prompt"]), items[i]["labels"],
+                         [0.0] * len(items[i]["labels"]), 1.0, "final", items[i]["item_id"]) for i in idx]
+        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev.type == "cuda"):
+            zs = label_logits(model, tok, batch, max_len, cache)
+        for i, z in zip(idx, zs):
+            probs_by[i] = torch.softmax(z, -1).tolist()
+    probs, gold, preds = [], [], []
+    for i, it in enumerate(items):
+        p = probs_by[i]
+        preds.append({"item_id": it["item_id"], "group": it.get("group"), "labels": it["labels"], "probs": p,
+                      "gold_label": it.get("gold_label"), "gold_probs": it.get("gold_probs")})
+        if it.get("gold_label") in it["labels"]:
+            probs.append(p)
+            gold.append(it["labels"].index(it["gold_label"]))
+    if was_training:
+        model.train()
+    return (calibration(probs, gold) if gold else {"n": 0}), preds
+

@@ -3,7 +3,7 @@
 Example (HPC):
   python scripts/train_student.py --model ~/cotd/models/Qwen3.5-2B-Base \
       --train data/student/train.jsonl --eval val=data/student/val.jsonl \
-      --final teacher --subq cot --subq-target fresh --out runs/A1S1-seed0 --seed 0
+      --final teacher --subq cot --subq-target cot --out runs/A1S1-seed0 --seed 0
 
 Arms: --final {none,teacher,gold} x --subq {none,cot,random}. Writes metrics.json and preds_<set>.jsonl.
 """
@@ -22,44 +22,12 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from cotdistill.student import (FINAL_TEMPLATE, Example, build_examples, calibration,  # noqa: E402
-                                kl_loss, label_logits)
-
-
-def load_model(path: str, dtype):
-    import transformers
-    try:
-        m = transformers.AutoModelForCausalLM.from_pretrained(path, torch_dtype=dtype)
-    except Exception:
-        m = transformers.AutoModelForImageTextToText.from_pretrained(path, torch_dtype=dtype)
-    for n, p in m.named_parameters():
-        if "visual" in n or "vision" in n:
-            p.requires_grad = False
-    return m
+from cotdistill.student import (Example, build_examples, evaluate, kl_loss, label_logits,  # noqa: E402
+                                load_model)
 
 
 def read_jsonl(p: str) -> list[dict]:
     return [json.loads(l) for l in open(p) if l.strip()]
-
-
-@torch.no_grad()
-def evaluate(model, tok, items: list[dict], max_len: int, bs: int, cache: dict) -> tuple[dict, list[dict]]:
-    model.eval()
-    probs, gold, preds = [], [], []
-    for i in range(0, len(items), bs):
-        chunk = items[i:i + bs]
-        batch = [Example(FINAL_TEMPLATE.format(problem=it["prompt"]), it["labels"], [0.0] * len(it["labels"]),
-                         1.0, "final", it["item_id"]) for it in chunk]
-        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=torch.cuda.is_available()):
-            zs = label_logits(model, tok, batch, max_len, cache)
-        for it, z in zip(chunk, zs):
-            p = torch.softmax(z, -1).tolist()
-            preds.append({"item_id": it["item_id"], "labels": it["labels"], "probs": p, "gold_label": it.get("gold_label")})
-            if it.get("gold_label") in it["labels"]:
-                probs.append(p)
-                gold.append(it["labels"].index(it["gold_label"]))
-    model.train()
-    return (calibration(probs, gold) if gold else {"n": 0}), preds
 
 
 def main() -> None:
@@ -69,7 +37,7 @@ def main() -> None:
     ap.add_argument("--eval", nargs="*", default=[], help="name=path.jsonl")
     ap.add_argument("--final", default="teacher", choices=["none", "teacher", "gold"])
     ap.add_argument("--subq", default="none", choices=["none", "cot", "random"])
-    ap.add_argument("--subq-target", default="fresh", choices=["fresh", "cot", "truth"])
+    ap.add_argument("--subq-target", default="cot", choices=["fresh", "cot", "truth"])
     ap.add_argument("--lambda-sub", type=float, default=1.0)
     ap.add_argument("--epochs", type=float, default=2.0)
     ap.add_argument("--lr", type=float, default=1e-5)
@@ -80,7 +48,9 @@ def main() -> None:
     ap.add_argument("--precision", default="fp32master", choices=["fp32master", "bf16"])
     ap.add_argument("--optim", default="adamw", choices=["adamw", "adamw8bit"])
     ap.add_argument("--no-grad-ckpt", action="store_true")
-    ap.add_argument("--eval-bs", type=int, default=16)
+    ap.add_argument("--eval-bs", type=int, default=8)
+    ap.add_argument("--eval-max-len", type=int, default=4096, help="long eval states (JevBench hard) need more room")
+    ap.add_argument("--save", action="store_true", help="save the final weights (bf16) to <out>/model")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", required=True)
     ap.add_argument("--log-every", type=int, default=20)
@@ -158,13 +128,16 @@ def main() -> None:
 
     results = {"args": vars(args), "history": history, "eval": {}}
     for name, items in evals.items():
-        m, preds = evaluate(model, tok, items, args.max_len, args.eval_bs, cache)
+        m, preds = evaluate(model, tok, items, args.eval_max_len, args.eval_bs, cache)
         results["eval"][name] = m
         with open(out / f"preds_{name}.jsonl", "w") as f:
             for p in preds:
                 f.write(json.dumps(p) + "\n")
         print(name, json.dumps(m), flush=True)
     (out / "metrics.json").write_text(json.dumps(results, indent=1))
+    if args.save:
+        model.to(torch.bfloat16).save_pretrained(out / "model", safe_serialization=True)
+        tok.save_pretrained(out / "model")
 
 
 if __name__ == "__main__":

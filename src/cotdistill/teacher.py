@@ -17,6 +17,7 @@ import random
 from .deepseek import DeepSeek
 from .policygen import render_prompt
 from .readout import label_distribution, locate_span, span_stats, trace_confidence
+from .sources import kk_subq_truth
 
 SOLVE_SUFFIX = "\n\nThink it through, then end with exactly one line: ANSWER: <letter>"
 
@@ -32,10 +33,12 @@ EXTRACT_PROMPT = """Below is a decision problem and the reasoning written while 
 
 List the intermediate yes/no judgements this reasoning made about the case before reaching its decision.
 Rules:
-- Each item must be a yes/no question answerable from the policy and the case alone.
-- Do not restate the final decision itself (not "Should the agent deny the request?").
+- Each item must be a yes/no question about this problem, answerable from the problem text alone (possibly with reasoning).
+- Do not restate the final decision itself or ask which option is correct.
 - Include judgements the reasoning first got wrong and later corrected; mark them "revised".
 - For each item give "question"; "quote": a short verbatim span (at most 30 words) copied from the reasoning where the judgement is made; "status": "direct" or "revised"; "answer": the reasoning's final answer to it, "yes" or "no".
+- Use only names and terms that appear in the problem; do not use variables, symbols or abbreviations introduced in the reasoning.
+- Do not ask whether an option is correct or satisfies all conditions; a question may name an option only to check one specific statement or condition against it.
 - At most 12 items, in the order they appear in the reasoning.
 Return JSON: {{"subquestions": [{{"question": "...", "quote": "...", "status": "direct", "answer": "yes"}}]}}"""
 
@@ -122,6 +125,46 @@ def extract_subquestions(client: DeepSeek, rec: dict, trace: dict) -> list[dict]
     return out
 
 
+NEGATE_PROMPT = """Below is a problem and some yes/no questions about it. Rewrite each question so that its correct answer is the opposite, by asking about the negation of what it asks (for example "Is Alice a knight?" -> "Is Alice a knave?", "Does the premise imply X?" -> "Does the premise fail to imply X?"). Keep every name and term; add no new information; keep each question natural and self-contained.
+
+<problem>
+{problem}
+</problem>
+
+Questions:
+{qs}
+
+Return JSON: {{"rewritten": ["...", "..."]}} with one entry per question, in order."""
+
+
+def rebalance_polarity(client: DeepSeek, rec: dict, subqs: list[dict], rng: random.Random) -> None:
+    """Rewrite a subset of sub-questions into their negations so that about half have the answer "no".
+
+    Extracted judgements are mostly phrased affirmatively (about 90% "yes" on K&K); left alone, a student
+    could fit the sub-questions with a label prior. Flipped items keep the original under "orig_question"."""
+    stated = [s for s in subqs if s.get("stated") in ("yes", "no")]
+    n_yes = sum(s["stated"] == "yes" for s in stated)
+    surplus, major = (n_yes - len(stated) // 2, "yes") if n_yes * 2 > len(stated) else \
+        (len(stated) - n_yes - len(stated) // 2, "no")
+    pick = rng.sample([s for s in stated if s["stated"] == major], max(0, surplus))
+    if not pick:
+        return
+    qs = "\n".join(f"{i}. {s['question']}" for i, s in enumerate(pick, start=1))
+    resp = client.chat([{"role": "user", "content": NEGATE_PROMPT.format(problem=rec["prompt"], qs=qs)}],
+                       thinking=False, logprobs=False, max_tokens=2000, json_mode=True, tag=f"{rec['item_id']}/negate")
+    try:
+        new = json.loads(resp["choices"][0]["message"]["content"]).get("rewritten", [])
+    except (json.JSONDecodeError, AttributeError):
+        return
+    if len(new) != len(pick):
+        return
+    for s, q in zip(pick, new):
+        q = str(q).strip()
+        if q and q != s["question"]:
+            s["orig_question"], s["question"] = s["question"], q
+            s["stated"] = "no" if s["stated"] == "yes" else "yes"
+
+
 NOTES = """
 Your earlier reasoning notes on this case:
 <reasoning>
@@ -152,7 +195,8 @@ GENERIC_PROMPT = """Below is a decision problem.
 {problem}
 </problem>
 
-Write {n} yes/no questions about the facts, rules or numbers stated in the problem. They should be answerable from the problem text alone. Do not ask about the final decision or how to decide it, and do not reason about the solution.
+Write {n} yes/no questions about the specific entities, statements, facts, rules or numbers of THIS problem (for example what a named person says, what a particular premise or clause states, or how two stated values compare). They must be answerable by reading the problem text, without solving it. Make roughly half of them have the answer "no" (for example by misquoting a statement or swapping a name or value).
+Do not ask about the general framing or rules that any problem of this kind shares (for example what knights or knaves do, or what the options are), do not ask about the final decision or how to decide it, and do not reason about the solution.
 Return JSON: {{"questions": ["...", "..."]}}"""
 
 
@@ -199,9 +243,11 @@ def run_item(client: DeepSeek, rec: dict, k: int = 2, seed: int = 0, effort: str
     rng = random.Random(f"{seed}-{rec['item_id']}")
     traces = solve(client, rec, k, effort=effort, seed=seed, **solve_kw)
     subqs = extract_subquestions(client, rec, traces[0]) if traces[0]["reasoning"] else []
+    rebalance_polarity(client, rec, subqs, rng)
     reas0 = _expand(traces[0]["reasoning_lp"])
     truth = {p["pid"]: p["truth"] for p in rec.get("predicates", [])}
-    matches = match_predicates(client, rec, subqs)
+    program_truth = rec.get("domain") == "knights_knaves"     # regex check; the LLM matcher conflates claims
+    matches = [{"pid": None, "negated": False} for _ in subqs] if program_truth else match_predicates(client, rec, subqs)
     for j, sq in enumerate(subqs):
         sq["answers"] = [answer_subquestion(client, rec, tr, sq["question"], rng, tag=f"{rec['item_id']}/sq{j}.t{i}")
                          for i, tr in enumerate(traces)]
@@ -211,8 +257,11 @@ def run_item(client: DeepSeek, rec: dict, k: int = 2, seed: int = 0, effort: str
         sq["span_stats"] = span_stats(reas0, span)
         m = matches[j] if j < len(matches) else {"pid": None, "negated": False}
         sq["match"] = m
-        t = truth.get(m["pid"]) if m["pid"] else None
-        sq["truth"] = (not t if m["negated"] else t) if t is not None else None
+        if program_truth:
+            sq["truth"] = kk_subq_truth(sq["question"], rec)
+        else:
+            t = truth.get(m["pid"]) if m["pid"] else None
+            sq["truth"] = (not t if m["negated"] else t) if t is not None else None
     randoms = []
     if random_matched:
         for j, q in enumerate(generic_subquestions(client, rec, len(subqs))):

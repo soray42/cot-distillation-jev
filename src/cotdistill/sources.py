@@ -11,6 +11,7 @@ import ast
 import csv
 import itertools
 import random
+import re
 
 NAMES = ["Alice", "Bob", "Carol", "David", "Emma", "Frank", "Grace", "Henry", "Irene", "Jack",
          "Karen", "Leo", "Mia", "Noah", "Olivia", "Paul"]
@@ -104,6 +105,30 @@ def knights_knaves(n: int, seed: int = 0, people_range: tuple[int, int] = (8, 10
                                  "statements": stmts, "people": people}})
             break
     return out
+
+
+_KK_ONE = re.compile(r"^(?:is|was) (\w+) (?:a|actually a|really a) (knight|knave)\??$", re.I)
+_KK_STMT = re.compile(r"^(?:is|was) (\w+)'s statement (true|false)\??$", re.I)
+_KK_ALL = re.compile(r"^are ((?:\w+, )*\w+,? and \w+|\w+ and \w+) (?:all |both )?(knights|knaves)\??$", re.I)
+
+
+def kk_subq_truth(question: str, rec: dict) -> bool | None:
+    """Program truth for role questions ("Is X a knight?", "Is X's statement true?", "Are X, Y and Z
+    knaves?"); None for anything else (e.g. "Does X's statement force Y to be a knight?")."""
+    roles = {p["question"][3:-10]: p["truth"] for p in rec.get("predicates", [])}
+    q = " ".join(question.strip().split())
+    m = _KK_ONE.match(q)
+    if m and m.group(1) in roles:
+        return roles[m.group(1)] == (m.group(2).lower() == "knight")
+    m = _KK_STMT.match(q)
+    if m and m.group(1) in roles:
+        return roles[m.group(1)] == (m.group(2).lower() == "true")
+    m = _KK_ALL.match(q)
+    if m:
+        names = [x for x in re.split(r",\s*(?:and\s+)?|\s+and\s+", m.group(1)) if x]
+        if names and all(x in roles for x in names):
+            return all(roles[x] == (m.group(2).lower() == "knights") for x in names)
+    return None
 
 
 # ---------------------------------------------------------------- JustLogic

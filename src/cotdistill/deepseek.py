@@ -20,10 +20,17 @@ import urllib.request
 API_URL = "https://api.deepseek.com/chat/completions"
 
 # USD per 1M tokens, off-peak list prices read 2026-09-29 (peak hours cost 2x).
-PRICES = {
+PRICES = {                          # off-peak USD per 1M tokens; peak hours cost twice as much
     "deepseek-flash": {"hit": 0.003, "miss": 0.15, "out": 0.60},
     "deepseek-v4-pro": {"hit": 0.022, "miss": 0.66, "out": 1.98},
 }
+PEAK_HOURS_UTC = {1, 2, 3, 6, 7, 8, 9}   # 01:00-04:00 and 06:00-10:00 UTC, Monday to Friday
+
+
+def is_peak(ts: float | None = None) -> bool:
+    """DeepSeek peak pricing window (Chinese public holidays, which are off-peak, are not modelled)."""
+    t = time.gmtime(ts if ts is not None else time.time())
+    return t.tm_wday < 5 and t.tm_hour in PEAK_HOURS_UTC
 
 
 class DeepSeekError(RuntimeError):
@@ -49,7 +56,8 @@ class DeepSeek:
         p = PRICES.get(model, PRICES["deepseek-flash"])
         hit = usage.get("prompt_cache_hit_tokens", 0)
         miss = usage.get("prompt_cache_miss_tokens", usage.get("prompt_tokens", 0) - hit)
-        return (hit * p["hit"] + miss * p["miss"] + usage.get("completion_tokens", 0) * p["out"]) / 1e6
+        factor = 2.0 if is_peak() else 1.0
+        return factor * (hit * p["hit"] + miss * p["miss"] + usage.get("completion_tokens", 0) * p["out"]) / 1e6
 
     def chat(self, messages: list[dict], *, thinking: bool = True, logprobs: bool = True,
              top_logprobs: int = 20, max_tokens: int = 8000, effort: str | None = None,
