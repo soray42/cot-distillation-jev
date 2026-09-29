@@ -146,9 +146,33 @@ def answer_subquestion(client: DeepSeek, rec: dict, trace: dict | None, question
     return {"p_yes": p_yes, "mass": d["mass"], "missing": d["missing"], "yes_first": yes_first}
 
 
-def match_predicates(client: DeepSeek, rec: dict, subqs: list[dict]) -> list[dict]:
-    if not subqs:
+GENERIC_PROMPT = """Below is a decision problem.
+
+<problem>
+{problem}
+</problem>
+
+Write {n} yes/no questions about the facts, rules or numbers stated in the problem. They should be answerable from the problem text alone. Do not ask about the final decision or how to decide it, and do not reason about the solution.
+Return JSON: {{"questions": ["...", "..."]}}"""
+
+
+def generic_subquestions(client: DeepSeek, rec: dict, n: int) -> list[str]:
+    """Matched-count control: yes/no questions written from the problem only (no CoT)."""
+    if n <= 0:
         return []
+    resp = client.chat([{"role": "user", "content": GENERIC_PROMPT.format(problem=rec["prompt"], n=n)}],
+                       thinking=False, logprobs=False, max_tokens=1500, json_mode=True,
+                       tag=f"{rec['item_id']}/generic")
+    try:
+        qs = json.loads(resp["choices"][0]["message"]["content"]).get("questions", [])
+    except (json.JSONDecodeError, AttributeError):
+        return []
+    return [str(q).strip() for q in qs if str(q).strip()][:n]
+
+
+def match_predicates(client: DeepSeek, rec: dict, subqs: list[dict]) -> list[dict]:
+    if not subqs or not rec.get("predicates"):
+        return [{"pid": None, "negated": False} for _ in subqs]
     refs = "\n".join(f"{p['pid']}: {p['question']}" for p in rec["predicates"])
     qs = "\n".join(f"{i}. {s['question']}" for i, s in enumerate(subqs, start=1))
     resp = client.chat([{"role": "user", "content": MATCH_PROMPT.format(refs=refs, qs=qs)}], thinking=False,
@@ -170,12 +194,13 @@ def match_predicates(client: DeepSeek, rec: dict, subqs: list[dict]) -> list[dic
     return out
 
 
-def run_item(client: DeepSeek, rec: dict, k: int = 2, seed: int = 0, effort: str | None = None) -> dict:
+def run_item(client: DeepSeek, rec: dict, k: int = 2, seed: int = 0, effort: str | None = None,
+             random_matched: bool = True, **solve_kw) -> dict:
     rng = random.Random(f"{seed}-{rec['item_id']}")
-    traces = solve(client, rec, k, effort=effort)
+    traces = solve(client, rec, k, effort=effort, seed=seed, **solve_kw)
     subqs = extract_subquestions(client, rec, traces[0]) if traces[0]["reasoning"] else []
     reas0 = _expand(traces[0]["reasoning_lp"])
-    truth = {p["pid"]: p["truth"] for p in rec["predicates"]}
+    truth = {p["pid"]: p["truth"] for p in rec.get("predicates", [])}
     matches = match_predicates(client, rec, subqs)
     for j, sq in enumerate(subqs):
         sq["answers"] = [answer_subquestion(client, rec, tr, sq["question"], rng, tag=f"{rec['item_id']}/sq{j}.t{i}")
@@ -188,5 +213,10 @@ def run_item(client: DeepSeek, rec: dict, k: int = 2, seed: int = 0, effort: str
         sq["match"] = m
         t = truth.get(m["pid"]) if m["pid"] else None
         sq["truth"] = (not t if m["negated"] else t) if t is not None else None
+    randoms = []
+    if random_matched:
+        for j, q in enumerate(generic_subquestions(client, rec, len(subqs))):
+            randoms.append({"question": q, "answer_nocot": answer_subquestion(client, rec, None, q, rng,
+                                                                              tag=f"{rec['item_id']}/rq{j}.fresh")})
     return {"item": {k2: v for k2, v in rec.items() if k2 != "prompt"}, "prompt": rec["prompt"],
-            "traces": traces, "subquestions": subqs}
+            "traces": traces, "subquestions": subqs, "random_subquestions": randoms}

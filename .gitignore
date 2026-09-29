@@ -14,8 +14,7 @@ notes/
 docs/
 
 # ---- Data & run artifacts (large / regenerable) ----
-data/raw/
-data/cache/
+data/
 teacher_cache/
 runs/
 checkpoints/

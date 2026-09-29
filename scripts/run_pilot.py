@@ -42,11 +42,16 @@ def main() -> None:
     ap.add_argument("--permute", action="store_true", help="shuffle option order for traces 2..K")
     ap.add_argument("--efforts", default=None, help="comma list cycled over traces, e.g. low,high")
     ap.add_argument("--solve-only", action="store_true", help="skip sub-question stages")
+    ap.add_argument("--no-random", action="store_true", help="skip the random-matched sub-question control")
+    ap.add_argument("--items", default=None, help="jsonl of pre-built records (benchmark items) instead of the generator")
     args = ap.parse_args()
 
     out = ROOT / "teacher_cache" / args.run
     out.mkdir(parents=True, exist_ok=True)
-    recs = generate(args.n, tuple(args.domains.split(",")), seed=args.seed)
+    if args.items:
+        recs = [json.loads(l) for l in open(args.items) if l.strip()][:args.n]
+    else:
+        recs = generate(args.n, tuple(args.domains.split(",")), seed=args.seed)
     with open(out / "items.jsonl", "w") as f:
         for r in recs:
             f.write(json.dumps(r) + "\n")
@@ -67,7 +72,9 @@ def main() -> None:
             res = {"item": {k2: v for k2, v in rec.items() if k2 != "prompt"}, "prompt": rec["prompt"],
                    "traces": traces, "subquestions": []}
         else:
-            res = run_item(client, rec, k=args.k, seed=args.seed, effort=args.effort)
+            res = run_item(client, rec, k=args.k, seed=args.seed, effort=args.effort,
+                           random_matched=not args.no_random, temperature=args.temperature, permute=args.permute,
+                           efforts=args.efforts.split(",") if args.efforts else None)
         (out / f"{rec['item_id']}.json").write_text(json.dumps(res))
         return f"{rec['item_id']}: ok, {len(res['subquestions'])} sub-questions"
 
