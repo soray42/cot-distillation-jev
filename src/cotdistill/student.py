@@ -7,12 +7,13 @@ distribution at the last real token, restricted to the option-letter tokens.
 """
 from __future__ import annotations
 
-import math
 import random
 from dataclasses import dataclass
 
 import torch
 import torch.nn.functional as F
+
+from .metrics import calibration  # noqa: F401  (re-exported for scripts)
 
 SUBQ_TEMPLATE = "{problem}\n\nIntermediate question: {question}\nOptions:\nA) {a}\nB) {b}\nAnswer:"
 FINAL_TEMPLATE = "{problem}\n\nAnswer:"
@@ -136,22 +137,6 @@ def kl_loss(logits: list[torch.Tensor], batch: list[Example]) -> torch.Tensor:
         t = torch.tensor(e.target, device=z.device)
         tot = tot + e.weight * -(t * F.log_softmax(z, -1)).sum()
     return tot / len(batch)
-
-
-def calibration(probs: list[list[float]], gold: list[int], bins: int = 15) -> dict:
-    """Accuracy, NLL, multiclass Brier and top-1 ECE (equal-width bins) against gold labels."""
-    n = len(gold)
-    conf = [max(p) for p in probs]
-    acc = [int(max(range(len(p)), key=p.__getitem__) == g) for p, g in zip(probs, gold)]
-    nll = -sum(math.log(max(p[g], 1e-12)) for p, g in zip(probs, gold)) / n
-    brier = sum(sum((pi - (i == g)) ** 2 for i, pi in enumerate(p)) for p, g in zip(probs, gold)) / n
-    ece = 0.0
-    for k in range(bins):
-        lo, hi = k / bins, (k + 1) / bins
-        idx = [i for i, c in enumerate(conf) if (lo < c <= hi) or (k == 0 and c == 0)]
-        if idx:
-            ece += len(idx) / n * abs(sum(acc[i] for i in idx) / len(idx) - sum(conf[i] for i in idx) / len(idx))
-    return {"n": n, "acc": sum(acc) / n, "nll": nll, "brier": brier, "ece": ece}
 
 
 def load_model(path: str, dtype):
