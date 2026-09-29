@@ -54,7 +54,10 @@ def _consistent(stmts: dict[str, tuple], roles: dict[str, bool]) -> int:
 
 
 def knights_knaves(n: int, seed: int = 0, people_range: tuple[int, int] = (8, 10), p_compound: float = 0.7,
-                   n_options: int = 6, max_tries: int = 5000) -> list[dict]:
+                   n_options: int = 6, max_tries: int = 5000, question: str = "assignment") -> list[dict]:
+    """question="assignment": choose the full role assignment (solution + near-miss distractors).
+    question="count": how many inhabitants are knights (options 0..k) - no option can be checked
+    against the statements without solving the whole puzzle."""
     rng = random.Random(seed)
     out = []
     while len(out) < n:
@@ -91,13 +94,21 @@ def knights_knaves(n: int, seed: int = 0, people_range: tuple[int, int] = (8, 10
             lines = [f"- {s} says: \"{_say(stmts[s])[0].upper() + _say(stmts[s])[1:]}.\"" for s in people]
             problem = ("On an island, knights always tell the truth and knaves always lie. "
                        f"Each of the {k} inhabitants below is either a knight or a knave.\n\n" + "\n".join(lines))
-            label_order = keys[:]
-            rng.shuffle(label_order)
+            if question == "count":
+                options = {f"c{c}": str(c) for c in range(k + 1)}
+                gold = f"c{sum(sols[0])}"
+                label_order = list(options)                 # counts stay in numeric order
+                qtext = "How many of the inhabitants are knights?"
+            else:
+                label_order = keys[:]
+                rng.shuffle(label_order)
+                qtext = "Who is a knight and who is a knave?"
             opt_txt = "\n".join(f"{chr(65 + i)}) {options[key]}" for i, key in enumerate(label_order))
-            prompt = f"{problem}\n\nQuestion: Who is a knight and who is a knave?\nOptions:\n{opt_txt}"
+            prompt = f"{problem}\n\nQuestion: {qtext}\nOptions:\n{opt_txt}"
             preds = [{"pid": f"knight_{p}", "question": f"Is {p} a knight?", "truth": truth[p], "kind": "lookup"}
                      for p in people]
-            out.append({"item_id": f"kk-{seed}-{len(out):05d}", "domain": "knights_knaves", "hidden": None,
+            out.append({"item_id": f"kk{'c' if question == 'count' else ''}-{seed}-{len(out):05d}",
+                        "domain": "knights_knaves", "hidden": None,
                         "gold": gold, "label_order": label_order, "gold_label": chr(65 + label_order.index(gold)),
                         "depth": k, "n_rules": k, "path": preds, "predicates": preds, "prompt": prompt,
                         "options": options,

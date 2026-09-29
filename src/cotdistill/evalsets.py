@@ -6,10 +6,14 @@ label), and gold_probs (letter -> probability) where the set ships a soft gold.
 
 - jevbench: JevBench public tiers (MIT; original / easy / hard jsonl from the repo).
 - typed_decisions: Typed Decisions test split (Apache-2.0); one record per (case, question), soft gold.
+- bbeh: BIG-Bench Extra Hard (Apache-2.0) tasks with a closed answer set, as lettered choices. Hard for
+  reasoning models too (DeepSeek R1 averages 37% on BBEH mini), so the teacher is not an oracle here.
 """
 from __future__ import annotations
 
 import json
+import random
+import re
 
 NOUL_NAMES = {"yes": "Yes", "no": "No", "true": "Yes", "false": "No"}
 
@@ -94,4 +98,44 @@ def typed_decisions(parquet_path: str) -> list[dict]:
             out.append({"item_id": f"{row['id']}/{qname}", "source": "typed_decisions",
                         "group": f"{row['workflow']}/{qname}", "type": q["type"], "prompt": prompt,
                         "labels": letters, "gold_label": gl, "label_names": names, "gold_probs": probs})
+    return out
+
+
+BBEH_LETTER_TASKS = ["boolean_expressions", "disambiguation_qa", "geometric_shapes", "hyperbaton",
+                     "movie_recommendation", "nycc", "shuffled_objects"]
+BBEH_SET_TASKS = {"boardgame_qa": ["proved", "disproved", "unknown"],
+                  "causal_understanding": ["Yes", "No", "Ambiguous"]}
+
+
+def bbeh(raw_dir: str, n_per_task: int | None = None, seed: int = 0,
+         tasks: list[str] | None = None) -> list[dict]:
+    """BBEH tasks whose answer is one option letter or one value from a small closed set."""
+    rng = random.Random(seed)
+    out = []
+    for task in tasks or BBEH_LETTER_TASKS + list(BBEH_SET_TASKS) + ["zebra_puzzles"]:
+        exs = json.load(open(f"{raw_dir}/{task}.json"))["examples"]
+        idx = list(range(len(exs)))
+        rng.shuffle(idx)
+        for i in idx[:n_per_task] if n_per_task else idx:
+            text, target = exs[i]["input"].strip(), str(exs[i]["target"]).strip()
+            if task in BBEH_LETTER_TASKS:
+                letters = sorted(set(re.findall(r"^\(([A-Z])\)", text, re.M)))
+                gold = target.strip("()")
+                prompt, names = text, {L: L for L in letters}
+            else:
+                values = BBEH_SET_TASKS.get(task)
+                if values is None:                          # zebra: "What position is ... at?"
+                    m = re.match(r"There are (\d+) (?:people|houses)", text)
+                    if not m:
+                        continue
+                    values = [str(k) for k in range(1, int(m.group(1)) + 1)]
+                letters = [chr(65 + k) for k in range(len(values))]
+                names = dict(zip(letters, values))
+                gold = next((L for L, v in names.items() if v.lower() == target.lower()), None)
+                prompt = text + "\n\nOptions:\n" + "\n".join(f"{L}) {v}" for L, v in names.items())
+            if gold not in letters:
+                continue
+            out.append({"item_id": f"bbeh-{task}-{i:03d}", "source": "bbeh", "group": f"bbeh/{task}",
+                        "type": "choice", "prompt": prompt, "labels": letters, "label_order": letters,
+                        "gold_label": gold, "label_names": names, "gold_probs": None})
     return out

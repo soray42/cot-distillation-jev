@@ -7,6 +7,8 @@ data/eval/kk_heldout.jsonl                  K&K, 4-12 people x 50 (11-12 are bey
 data/eval/jl_heldout.jsonl                  JustLogic validation split, depth 1-7 x 150
 data/eval/jevbench_public.jsonl             JevBench public tiers (evaluation only)
 data/eval/typed_decisions_test.jsonl        Typed Decisions test, one record per decision (evaluation only)
+data/eval/bbeh.jsonl                        BBEH closed-answer tasks, 1,920 items (evaluation only; hard for the teacher too)
+data/eval/bbeh_sub.jsonl                    the first 50 per task in a fixed shuffle, for teacher (System 2) runs
 """
 from __future__ import annotations
 
@@ -60,6 +62,8 @@ def main() -> None:
         "jl_heldout": [to_eval(r, "jl") for r in jl_eval],
         "jevbench_public": E.jevbench({t: str(RAW / f"jevbench/{t}.jsonl") for t in ("original", "easy", "hard")}),
         "typed_decisions_test": E.typed_decisions(str(RAW / "typed_decisions/test.parquet")),
+        "bbeh": E.bbeh(str(RAW / "bbeh"), seed=1),
+        "bbeh_sub": E.bbeh(str(RAW / "bbeh"), n_per_task=50, seed=1),
     }
     train_prompts = {r["prompt"] for r in kk + jl}
     for name, recs in evals.items():

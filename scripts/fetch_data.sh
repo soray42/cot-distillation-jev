@@ -10,6 +10,11 @@ get $HF/michaelchenkj/JustLogic/resolve/main/validate_dataset.csv data/raw/justl
 JB=https://raw.githubusercontent.com/fstandhartinger/jevbench/main
 for t in original easy hard; do get $JB/datasets/public/$t.jsonl data/raw/jevbench/$t.jsonl; done
 get $HF/LocalLLaMA/typed-decisions/resolve/main/all/test-00000-of-00001.parquet data/raw/typed_decisions/test.parquet
+BB=https://raw.githubusercontent.com/google-deepmind/bbeh/main/bbeh/benchmark_tasks   # Apache-2.0, evaluation only
+for t in boolean_expressions disambiguation_qa geometric_shapes hyperbaton movie_recommendation nycc \
+         shuffled_objects boardgame_qa causal_understanding zebra_puzzles; do
+  get $BB/bbeh_$t/task.json data/raw/bbeh/$t.json
+done
 sha256sum -c <<'SUMS'
 e2df49c6f8a8da22173afe6ea291e20de053983a3c2ac54b97b6419e6df26226  data/raw/justlogic/train_dataset.csv
 6dd4d1e13ccd58d356e9cbda9c984ad6062e333630cd70364566d585b466ca96  data/raw/justlogic/validate_dataset.csv

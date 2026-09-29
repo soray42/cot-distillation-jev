@@ -32,6 +32,16 @@ class TestReadout(unittest.TestCase):
         self.assertEqual(d["missing"], ["B"])
         self.assertAlmostEqual(d["probs"]["A"], 1.0)
 
+    def test_parenthesised_and_bold_labels(self):
+        def tok(t, alts):
+            return {"token": t, "logprob": alts[0][1], "top_logprobs": [{"token": a, "logprob": lp} for a, lp in alts]}
+        for opener in ("(", "**", " ("):
+            toks = [tok("ANSWER:", [("ANSWER:", 0.0)]), tok(opener, [(opener, 0.0)]),
+                    tok("E", [("E", -0.1), ("B", -2.5)]), tok(")", [(")", 0.0)])]
+            d = label_distribution(toks, ["A", "B", "E"], "ANSWER:")
+            self.assertEqual(d["sampled"], "E")
+            self.assertGreater(d["probs"]["E"], d["probs"]["B"])
+
     def test_fused_marker_token(self):
         toks = [tok("ANSWER: C", 0.9, [("ANSWER: C", 0.9)])]
         d = label_distribution(toks, ["C", "D"])                     # label fused with the marker token

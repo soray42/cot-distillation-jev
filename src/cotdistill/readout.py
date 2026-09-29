@@ -13,7 +13,7 @@ CENSORED = -9000.0  # anything at or below this is the API's -9999 sentinel
 
 
 def _norm_label(tok: str) -> str:
-    return tok.strip().strip(")].:*").strip()
+    return tok.strip().strip("()[].:*").strip()
 
 
 def label_position(tokens: list[dict], marker: str | None = "ANSWER:") -> int | None:
@@ -22,11 +22,11 @@ def label_position(tokens: list[dict], marker: str | None = "ANSWER:") -> int | 
     for i, t in enumerate(tokens):
         tok = t["token"]
         if marker is None or marker in text:
-            if tok.strip():
+            if _norm_label(tok):          # skip pure punctuation such as "(" or "**" before the letter
                 return i
         elif marker in text + tok:
             rest = (text + tok).split(marker, 1)[1]
-            if rest.strip():          # marker and label fused into one token
+            if _norm_label(rest):     # marker and label fused into one token
                 return i
         text += tok
     return None
