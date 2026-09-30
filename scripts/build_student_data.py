@@ -42,8 +42,14 @@ def convert(res: dict) -> dict:
     subqs = []
     for sq in res.get("subquestions", []):
         ps = [p for p in (resolve_p_yes(a) for a in sq.get("answers", [])) if p is not None]
+        commit = sq.get("commit")
+        p_commit = None
+        if commit and sq.get("stated") in ("yes", "no"):       # teacher's confidence where it settled the node
+            p_commit = commit["conf"] if sq["stated"] == "yes" else 1 - commit["conf"]
         subqs.append({"question": sq["question"], "p_cot": sum(ps) / len(ps) if ps else None,
                       "p_fresh": resolve_p_yes(sq.get("answer_nocot") or {}), "truth": sq.get("truth"),
+                      "type": sq.get("type"), "depends_on": sq.get("depends_on"), "id": sq.get("id"),
+                      "initial": sq.get("initial"), "p_commit": p_commit,
                       "span_minp": (sq.get("span_stats") or {}).get("min_p"), "status": sq.get("status")})
     randoms = [{"question": r["question"], "p_fresh": resolve_p_yes(r.get("answer_nocot") or {})}
                for r in res.get("random_subquestions", [])]
@@ -58,6 +64,8 @@ def main() -> None:
     ap.add_argument("--runs", nargs="+", required=True)
     ap.add_argument("--out", default="data/student")
     ap.add_argument("--val-frac", type=float, default=0.1)
+    ap.add_argument("--filter-wrong-teacher", action="store_true",
+                    help="drop items whose teacher answer disagrees with the gold label (rejection filtering)")
     args = ap.parse_args()
     out = ROOT / args.out
     out.mkdir(parents=True, exist_ok=True)
@@ -70,6 +78,9 @@ def main() -> None:
             if "item" not in res:
                 continue
             rec = convert(res)
+            if args.filter_wrong_teacher and rec["teacher"] and rec["gold_label"] and \
+                    max(rec["teacher"], key=rec["teacher"].get) != rec["gold_label"]:
+                continue
             h = int(hashlib.sha1(rec["item_id"].encode()).hexdigest(), 16) % 1000 / 1000
             splits["val" if h < args.val_frac else "train"].append(rec)
     for name, recs in splits.items():

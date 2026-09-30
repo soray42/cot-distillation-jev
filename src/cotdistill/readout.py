@@ -133,3 +133,47 @@ def span_stats(tokens: list[dict], span: tuple[int, int] | None) -> dict | None:
     ents = [token_entropy(t) for t in seg]
     return {"min_p": min(ps), "mean_p": sum(ps) / len(ps), "max_entropy": max(ents),
             "mean_entropy": sum(ents) / len(ents), "n_tokens": len(seg)}
+
+
+VALUE_POS = {"true", "t", "knight", "knights", "yes", "holds", "valid", "consistent", "satisfied", "proved",
+             "entailed", "follows", "possible"}
+VALUE_NEG = {"false", "f", "knave", "knaves", "no", "untrue", "invalid", "inconsistent",
+             "contradiction", "impossible", "disproved", "uncertain", "unknown"}
+# "not" / "¬" are left out: their meaning depends on the next token ("Bob knight" vs "Bob not knave" say
+# the same thing), so they create false forks.
+
+
+def value_class(tok: str) -> str | None:
+    """"P" / "N" for tokens that state a truth value or role (true, knave, not, ...), else None."""
+    w = re.sub(r"[^0-9a-z¬]+", "", tok.lower())
+    return "P" if w in VALUE_POS else "N" if w in VALUE_NEG else None
+
+
+def value_commitment(tokens: list[dict], span: tuple[int, int] | None) -> dict | None:
+    """How firmly the teacher settled a value inside a CoT span.
+
+    For each value token in the span (true/false, knight/knave, not, ...), the top-5 probability on
+    its own class vs the opposite class; returns the least confident one: {"i", "token", "conf"} with
+    conf = own / (own + opposite) in [0.5, 1]. Wording alternatives ("So" vs "Then") are ignored, which is
+    what separates a judgement fork from phrasing noise. Mass outside the stored top-5 is unknown and
+    counted as zero."""
+    if span is None:
+        return None
+    best = None
+    for i in range(span[0], min(span[1], len(tokens))):
+        c = value_class(tokens[i]["token"])
+        if c is None:
+            continue
+        own = opp = 0.0
+        for a in tokens[i].get("top_logprobs") or [{"token": tokens[i]["token"], "logprob": tokens[i]["logprob"]}]:
+            ac = value_class(a["token"])
+            if a["logprob"] <= CENSORED or ac is None:
+                continue
+            if ac == c:
+                own += math.exp(a["logprob"])
+            else:
+                opp += math.exp(a["logprob"])
+        conf = own / (own + opp) if own + opp > 0 else 1.0
+        if best is None or conf < best["conf"]:
+            best = {"i": i, "token": tokens[i]["token"], "conf": conf}
+    return best

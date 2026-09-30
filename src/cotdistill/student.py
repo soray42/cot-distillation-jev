@@ -56,7 +56,8 @@ def build_examples(item: dict, *, final: str, subq: str, subq_target: str, lambd
     final: "none" | "teacher" (teacher answer distribution) | "gold" (one-hot gold)
     subq: "none" | "cot" (teacher-extracted sub-questions) | "random" (matched generic questions)
     subq_target: "fresh" (teacher answer without CoT) | "cot" (with CoT) | "truth" (program truth,
-                 falling back to the CoT answer, then the fresh one, when no truth is available)
+                 falling back to the CoT answer, then the fresh one, when no truth is available) |
+                 "commit" (the teacher's value-commitment confidence where the CoT settled the node)
     rationale_lm: add a token-level LM example on the teacher's reasoning and answer (DHRD-style baseline)
     """
     ex: list[Example] = []
@@ -77,7 +78,9 @@ def build_examples(item: dict, *, final: str, subq: str, subq_target: str, lambd
         p = None
         if subq_target == "truth" and sq.get("truth") is not None:
             p = 1.0 if sq["truth"] else 0.0
-        elif subq_target in ("cot", "truth"):
+        elif subq_target == "commit" and sq.get("p_commit") is not None:
+            p = sq["p_commit"]
+        elif subq_target in ("cot", "truth", "commit"):
             p = sq.get("p_cot")
         if p is None:
             p = sq.get("p_fresh")

@@ -13,10 +13,11 @@ from __future__ import annotations
 
 import json
 import random
+import re
 
 from .deepseek import DeepSeek
 from .policygen import render_prompt
-from .readout import label_distribution, locate_span, span_stats, trace_confidence
+from .readout import label_distribution, locate_span, span_stats, trace_confidence, value_commitment
 from .sources import kk_subq_truth
 
 SOLVE_SUFFIX = "\n\nThink it through, then end with exactly one line: ANSWER: <letter>"
@@ -123,6 +124,99 @@ def extract_subquestions(client: DeepSeek, rec: dict, trace: dict) -> list[dict]
             out.append({"question": str(it["question"]).strip(), "quote": str(it.get("quote", "")).strip(),
                         "status": it.get("status", "direct"), "stated": str(it.get("answer", "")).lower()})
     return out
+
+
+TREE_PROMPT = """You will turn a solver's reasoning into a tree of intermediate judgements. Each node is one yes/no question about the problem whose answer the reasoning settled on the way to its decision.
+
+Node types:
+- "parse": what a sentence, rule or statement of the problem means (e.g. whether a sentence asserts something or only states a condition).
+- "derive": an intermediate fact the reasoning derived from earlier nodes.
+- "case": a hypothesis the reasoning tried, asked as "If ..., would ...?" (e.g. whether it leads to a contradiction).
+- "verify": a check of a candidate answer against one statement or condition.
+
+Fields per node:
+- "id": "n1", "n2", ... in the order the reasoning settles them.
+- "type": one of the types above.
+- "depends_on": ids of earlier nodes this judgement uses ([] if none).
+- "question": a self-contained yes/no question in the problem's own words.
+- "answer": "yes" or "no", the reasoning's FINAL belief (after any correction).
+- "status": "direct" if the reasoning never believed otherwise; "corrected" if it first believed the opposite and later fixed it.
+- "initial_answer": for "corrected" nodes, the first (wrong) belief; otherwise null.
+- "quote": a verbatim span (at most 30 words) copied from the reasoning where the final value of this node is settled.
+
+Rules:
+1. Use only names and terms from the problem. No variables, symbols or abbreviations introduced by the reasoning, and no questions about the reasoning itself ("did the solver ...").
+2. Do not ask the final question, and do not ask whether an option is correct or satisfies all conditions.
+3. Include judgements the reasoning got wrong at first (status "corrected") and hypotheses it abandoned (type "case").
+4. Choose the natural wording (knight or knave, true or false, asserts or only conditionally states, ...) so that about half of the answers are "no". Never use awkward negations such as "fail to".
+5. Between 4 and 15 nodes; skip trivial restatements of the problem text.
+
+Example.
+<problem>
+A says: "B is a knave." B says: "A and C are both knights." C says: "B is a knight." Who is a knight?
+</problem>
+<reasoning>
+Let A,B,C true=knight. A = not B. B = A and C. C says B knight, so C = not B? wait, C says B is a knight, so C = B. Case B true: then A false, but B = A and C needs A true, contradiction. So B false. Then A true, C = B = false. Check B: A and C = T and F = F, so B's statement is false, consistent with B knave.
+</reasoning>
+{{"nodes": [
+ {{"id": "n1", "type": "parse", "depends_on": [], "question": "Is A a knight exactly when B is a knave?", "answer": "yes", "status": "direct", "initial_answer": null, "quote": "A = not B."}},
+ {{"id": "n2", "type": "parse", "depends_on": [], "question": "Is B a knight exactly when A and C are both knights?", "answer": "yes", "status": "direct", "initial_answer": null, "quote": "B = A and C."}},
+ {{"id": "n3", "type": "parse", "depends_on": [], "question": "Do C and B have opposite roles?", "answer": "no", "status": "corrected", "initial_answer": "yes", "quote": "C says B is a knight, so C = B."}},
+ {{"id": "n4", "type": "case", "depends_on": ["n1", "n2"], "question": "If B were a knight, would the statements contradict each other?", "answer": "yes", "status": "direct", "initial_answer": null, "quote": "Case B true: then A false, but B = A and C needs A true, contradiction."}},
+ {{"id": "n5", "type": "derive", "depends_on": ["n4"], "question": "Is B a knave?", "answer": "yes", "status": "direct", "initial_answer": null, "quote": "So B false."}},
+ {{"id": "n6", "type": "derive", "depends_on": ["n1", "n5"], "question": "Is A a knave?", "answer": "no", "status": "direct", "initial_answer": null, "quote": "Then A true"}},
+ {{"id": "n7", "type": "derive", "depends_on": ["n3", "n5"], "question": "Is C a knight?", "answer": "no", "status": "direct", "initial_answer": null, "quote": "C = B = false."}},
+ {{"id": "n8", "type": "verify", "depends_on": ["n6", "n7"], "question": "With A a knight and C a knave, is B's statement true?", "answer": "no", "status": "direct", "initial_answer": null, "quote": "A and C = T and F = F, so B's statement is false"}}
+]}}
+
+Now do the same for this problem and reasoning. Return only JSON: {{"nodes": [...]}}
+
+<problem>
+{problem}
+</problem>
+<reasoning>
+{cot}
+</reasoning>"""
+
+TREE_TYPES = {"parse", "derive", "case", "verify"}
+_META = re.compile(r"\b(the reasoning|the solver|the solution process|reasoning step|did the model)\b", re.I)
+_AWKWARD = re.compile(r"\bfail(?:s|ed)? to\b", re.I)
+
+
+def parse_tree(raw: str) -> list[dict]:
+    """Validated nodes from the tree-extraction JSON: known types, yes/no answers, dependencies only on
+    earlier kept nodes, no meta questions about the reasoning and no "fail to" negations."""
+    try:
+        nodes = json.loads(raw).get("nodes", [])
+    except (json.JSONDecodeError, AttributeError):
+        return []
+    out, seen = [], set()
+    for n in nodes[:15]:
+        if not isinstance(n, dict):
+            continue
+        q, ans, typ = str(n.get("question", "")).strip(), str(n.get("answer", "")).lower().strip(), n.get("type")
+        nid = str(n.get("id", "")).strip()
+        if not q or ans not in ("yes", "no") or typ not in TREE_TYPES or not nid or nid in seen:
+            continue
+        if _META.search(q) or _AWKWARD.search(q):
+            continue
+        status = "corrected" if n.get("status") == "corrected" else "direct"
+        init = str(n.get("initial_answer") or "").lower().strip()
+        seen.add(nid)
+        out.append({"id": nid, "type": typ, "depends_on": [d for d in n.get("depends_on") or [] if d in seen],
+                    "question": q, "stated": ans, "status": status,
+                    "initial": init if status == "corrected" and init in ("yes", "no") else None,
+                    "quote": str(n.get("quote", "")).strip()})
+    return out
+
+
+def extract_tree(client: DeepSeek, rec: dict, trace: dict) -> list[dict]:
+    """Reasoning tree of typed yes/no nodes from one CoT (passed as text: DeepSeek drops earlier
+    reasoning_content in multi-turn chats). The fixed instructions and example come first so the prefix
+    is cached across items."""
+    resp = client.chat([{"role": "user", "content": TREE_PROMPT.format(problem=rec["prompt"], cot=trace["reasoning"])}],
+                       thinking=False, logprobs=False, max_tokens=4000, json_mode=True, tag=f"{rec['item_id']}/tree")
+    return parse_tree(resp["choices"][0]["message"].get("content") or "")
 
 
 NEGATE_PROMPT = """Below is a problem and some yes/no questions about it. Rewrite each question so that its correct answer is the opposite, by asking about the negation of what it asks (for example "Is Alice a knight?" -> "Is Alice a knave?", "Does the premise imply X?" -> "Does the premise fail to imply X?"). Keep every name and term; add no new information; keep each question natural and self-contained.
@@ -255,11 +349,19 @@ def match_predicates(client: DeepSeek, rec: dict, subqs: list[dict]) -> list[dic
 
 
 def run_item(client: DeepSeek, rec: dict, k: int = 2, seed: int = 0, effort: str | None = None,
-             random_matched: bool = True, **solve_kw) -> dict:
+             random_matched: bool = True, extraction: str = "tree", rebalance: bool = False, **solve_kw) -> dict:
+    """Solve, then extract sub-questions: "tree" (typed reasoning-tree nodes, default) or "flat" (the
+    first pipeline's list of judgements; `rebalance` re-enables its negation rewrite, which produced
+    garbled "fail to" questions and wrong labels, so it is off)."""
     rng = random.Random(f"{seed}-{rec['item_id']}")
     traces = solve(client, rec, k, effort=effort, seed=seed, **solve_kw)
+    if extraction == "tree":
+        res = {"item": {k2: v for k2, v in rec.items() if k2 != "prompt"}, "prompt": rec["prompt"],
+               "traces": traces, "subquestions": [], "random_subquestions": []}
+        return tree_item(client, res, seed=seed, random_matched=random_matched)
     subqs = extract_subquestions(client, rec, traces[0]) if traces[0]["reasoning"] else []
-    rebalance_polarity(client, rec, subqs, rng)
+    if rebalance:
+        rebalance_polarity(client, rec, subqs, rng)
     reas0 = _expand(traces[0]["reasoning_lp"])
     truth = {p["pid"]: p["truth"] for p in rec.get("predicates", [])}
     program_truth = rec.get("domain") == "knights_knaves"     # regex check; the LLM matcher conflates claims
@@ -285,3 +387,30 @@ def run_item(client: DeepSeek, rec: dict, k: int = 2, seed: int = 0, effort: str
                                                                               tag=f"{rec['item_id']}/rq{j}.fresh")})
     return {"item": {k2: v for k2, v in rec.items() if k2 != "prompt"}, "prompt": rec["prompt"],
             "traces": traces, "subquestions": subqs, "random_subquestions": randoms}
+
+
+def tree_item(client: DeepSeek, res: dict, seed: int = 0, random_matched: bool = True) -> dict:
+    """Re-extract the sub-questions of an already solved item as a reasoning tree (no new solve).
+
+    Each node is answered with the CoT in context and without it, anchored to its quote in the CoT, given
+    the teacher's value-commitment confidence there, and program truth for K&K. The matched control keeps
+    the item's existing problem-only questions, topped up if the tree has more nodes."""
+    rec = dict(res["item"], prompt=res["prompt"])
+    rng = random.Random(f"tree-{seed}-{rec['item_id']}")
+    tr = res["traces"][0]
+    nodes = extract_tree(client, rec, tr) if tr.get("reasoning") else []
+    toks = _expand(tr["reasoning_lp"])
+    for j, nd in enumerate(nodes):
+        nd["answers"] = [answer_subquestion(client, rec, tr, nd["question"], rng, tag=f"{rec['item_id']}/node{j}.t0")]
+        nd["answer_nocot"] = answer_subquestion(client, rec, None, nd["question"], rng, tag=f"{rec['item_id']}/node{j}.fresh")
+        span = locate_span(toks, nd["quote"])
+        nd["span"] = list(span) if span else None
+        nd["span_stats"] = span_stats(toks, span)
+        nd["commit"] = value_commitment(toks, span)
+        nd["truth"] = kk_subq_truth(nd["question"], rec) if rec.get("domain") == "knights_knaves" else None
+    randoms = list(res.get("random_subquestions", []))
+    if random_matched and len(randoms) < len(nodes):
+        for j, q in enumerate(generic_subquestions(client, rec, len(nodes) - len(randoms))):
+            randoms.append({"question": q, "answer_nocot": answer_subquestion(client, rec, None, q, rng,
+                                                                              tag=f"{rec['item_id']}/rq{len(randoms) + j}.fresh")})
+    return dict(res, subquestions=nodes, random_subquestions=randoms[:max(len(nodes), 1)], extraction="tree")

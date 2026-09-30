@@ -49,6 +49,7 @@ def main() -> None:
     ap.add_argument("--efforts", default=None, help="comma list cycled over traces, e.g. low,high")
     ap.add_argument("--solve-only", action="store_true", help="skip sub-question stages")
     ap.add_argument("--no-random", action="store_true", help="skip the random-matched sub-question control")
+    ap.add_argument("--extraction", default="tree", choices=["tree", "flat"], help="sub-question extraction")
     ap.add_argument("--offpeak-only", action="store_true", help="hold new items while DeepSeek peak pricing applies")
     ap.add_argument("--items", default=None, help="jsonl of pre-built records (benchmark items) instead of the generator")
     args = ap.parse_args()
@@ -82,7 +83,8 @@ def main() -> None:
                    "traces": traces, "subquestions": []}
         else:
             res = run_item(client, rec, k=args.k, seed=args.seed, effort=args.effort,
-                           random_matched=not args.no_random, temperature=args.temperature, permute=args.permute,
+                           random_matched=not args.no_random, extraction=args.extraction,
+                           temperature=args.temperature, permute=args.permute,
                            efforts=args.efforts.split(",") if args.efforts else None)
         (out / result_name(rec)).write_text(json.dumps(res))
         return f"{rec['item_id']}: ok, {len(res['subquestions'])} sub-questions"
