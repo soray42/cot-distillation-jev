@@ -18,7 +18,7 @@ event() {   # key, message: report once
 for i in $(seq 1 22); do
   R=$(timeout 60 ssh.exe -o BatchMode=yes -o ConnectTimeout=20 -i "$HPC_KEY" "$HPC_HOST" "cd ~/cotd;
       J=\$(grep -oE 'submitted [0-9]+' logs/$RLOG | tail -1 | cut -d' ' -f2); echo \"JID \${J:-none}\";
-      grep -q 'relay4 done\|relay done' logs/$RLOG && echo RELAYDONE;
+      grep -qE 'relay[0-9]* done' logs/$RLOG && echo RELAYDONE;
       if [ -n \"\$J\" ]; then sacct -j \$J -X -n -o State%20,Elapsed | head -1 | sed 's/^/STATE /';
         L=logs/cotd-train-\$J.out;
         grep -E 'SMOKE|smoke passed|JEFF SMOKE SKIPPED|^=== |failed|Traceback|Error|all done|examples/epoch' \$L 2>/dev/null | tail -n 12;
