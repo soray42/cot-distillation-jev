@@ -107,7 +107,7 @@ if [ -n "${EVAL_BASE:-}" ]; then          # untrained backbone control (Jeff nee
     || echo "base eval failed for $M"
 fi
 for ARM in $ARMS; do
-  OUT="runs/${ARM}-$(basename "$MODEL")-$(basename "$DATA")-s${SEED}"
+  OUT="runs/${ARM}${TAG:+-$TAG}-$(basename "$MODEL")-$(basename "$DATA")-s${SEED}"   # TAG names recipe variants
   echo "=== $ARM -> $OUT  $(date +%T)"
   train "$ARM" "$DATA/train.jsonl" "$EVALS" "$OUT" --epochs "${EPOCHS:-2}" --micro-bs "${MBS:-2}" \
     --grad-accum "${GA:-16}" ${SAVE:+--save} || echo "arm $ARM failed"
