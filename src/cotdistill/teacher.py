@@ -140,15 +140,16 @@ Fields per node:
 - "depends_on": ids of earlier nodes this judgement uses ([] if none).
 - "question": a self-contained yes/no question in the problem's own words.
 - "answer": "yes" or "no", the reasoning's FINAL belief (after any correction).
+- "opposite": the same question worded with the natural opposite (knight -> knave, true -> false, consistent -> contradictory, asserts -> only states as a condition), so that its answer is the opposite of "answer". Never use "fail to" or double negations.
 - "status": "direct" if the reasoning never believed otherwise; "corrected" if it first believed the opposite and later fixed it.
 - "initial_answer": for "corrected" nodes, the first (wrong) belief; otherwise null.
 - "quote": a verbatim span (at most 30 words) copied from the reasoning where the final value of this node is settled.
 
 Rules:
 1. Use only names and terms from the problem. No variables, symbols or abbreviations introduced by the reasoning, and no questions about the reasoning itself ("did the solver ...").
-2. Do not ask the final question, and do not ask whether an option is correct or satisfies all conditions.
-3. Include judgements the reasoning got wrong at first (status "corrected") and hypotheses it abandoned (type "case").
-4. Choose the natural wording (knight or knave, true or false, asserts or only conditionally states, ...) so that about half of the answers are "no". Never use awkward negations such as "fail to".
+2. Do not ask the final question in any form (not whether the statement to judge is true, false or uncertain), and do not ask whether an option or a full assignment is correct or consistent with all statements.
+3. Wherever the reasoning notices an error or changes its mind ("wait", "mistake", "actually", "re-evaluate", "restart", "no, ..."), add a node for the judgement that changed, with status "corrected", its first belief in "initial_answer" and the corrected belief in "answer". Also include hypotheses it tried and abandoned (type "case").
+4. A "parse" node states the formal content the reasoning settled on (e.g. "Is Irene a knight exactly when Bob is a knight or Emma is a knight?"), not a paraphrase of the sentence's own wording.
 5. Between 4 and 15 nodes; skip trivial restatements of the problem text.
 
 Example.
@@ -159,14 +160,14 @@ A says: "B is a knave." B says: "A and C are both knights." C says: "B is a knig
 Let A,B,C true=knight. A = not B. B = A and C. C says B knight, so C = not B? wait, C says B is a knight, so C = B. Case B true: then A false, but B = A and C needs A true, contradiction. So B false. Then A true, C = B = false. Check B: A and C = T and F = F, so B's statement is false, consistent with B knave.
 </reasoning>
 {{"nodes": [
- {{"id": "n1", "type": "parse", "depends_on": [], "question": "Is A a knight exactly when B is a knave?", "answer": "yes", "status": "direct", "initial_answer": null, "quote": "A = not B."}},
- {{"id": "n2", "type": "parse", "depends_on": [], "question": "Is B a knight exactly when A and C are both knights?", "answer": "yes", "status": "direct", "initial_answer": null, "quote": "B = A and C."}},
- {{"id": "n3", "type": "parse", "depends_on": [], "question": "Do C and B have opposite roles?", "answer": "no", "status": "corrected", "initial_answer": "yes", "quote": "C says B is a knight, so C = B."}},
- {{"id": "n4", "type": "case", "depends_on": ["n1", "n2"], "question": "If B were a knight, would the statements contradict each other?", "answer": "yes", "status": "direct", "initial_answer": null, "quote": "Case B true: then A false, but B = A and C needs A true, contradiction."}},
- {{"id": "n5", "type": "derive", "depends_on": ["n4"], "question": "Is B a knave?", "answer": "yes", "status": "direct", "initial_answer": null, "quote": "So B false."}},
- {{"id": "n6", "type": "derive", "depends_on": ["n1", "n5"], "question": "Is A a knave?", "answer": "no", "status": "direct", "initial_answer": null, "quote": "Then A true"}},
- {{"id": "n7", "type": "derive", "depends_on": ["n3", "n5"], "question": "Is C a knight?", "answer": "no", "status": "direct", "initial_answer": null, "quote": "C = B = false."}},
- {{"id": "n8", "type": "verify", "depends_on": ["n6", "n7"], "question": "With A a knight and C a knave, is B's statement true?", "answer": "no", "status": "direct", "initial_answer": null, "quote": "A and C = T and F = F, so B's statement is false"}}
+ {{"id": "n1", "type": "parse", "depends_on": [], "question": "Is A a knight exactly when B is a knave?", "answer": "yes", "opposite": "Is A a knave exactly when B is a knave?", "status": "direct", "initial_answer": null, "quote": "A = not B."}},
+ {{"id": "n2", "type": "parse", "depends_on": [], "question": "Is B a knight exactly when A and C are both knights?", "answer": "yes", "opposite": "Is B a knave exactly when A and C are both knights?", "status": "direct", "initial_answer": null, "quote": "B = A and C."}},
+ {{"id": "n3", "type": "parse", "depends_on": [], "question": "Do C and B have opposite roles?", "answer": "no", "opposite": "Do C and B have the same role?", "status": "corrected", "initial_answer": "yes", "quote": "C says B is a knight, so C = B."}},
+ {{"id": "n4", "type": "case", "depends_on": ["n1", "n2"], "question": "If B were a knight, would the statements contradict each other?", "answer": "yes", "opposite": "If B were a knight, would the statements be consistent with each other?", "status": "direct", "initial_answer": null, "quote": "Case B true: then A false, but B = A and C needs A true, contradiction."}},
+ {{"id": "n5", "type": "derive", "depends_on": ["n4"], "question": "Is B a knave?", "answer": "yes", "opposite": "Is B a knight?", "status": "direct", "initial_answer": null, "quote": "So B false."}},
+ {{"id": "n6", "type": "derive", "depends_on": ["n1", "n5"], "question": "Is A a knave?", "answer": "no", "opposite": "Is A a knight?", "status": "direct", "initial_answer": null, "quote": "Then A true"}},
+ {{"id": "n7", "type": "derive", "depends_on": ["n3", "n5"], "question": "Is C a knight?", "answer": "no", "opposite": "Is C a knave?", "status": "direct", "initial_answer": null, "quote": "C = B = false."}},
+ {{"id": "n8", "type": "verify", "depends_on": ["n6", "n7"], "question": "With A a knight and C a knave, is B's statement true?", "answer": "no", "opposite": "With A a knight and C a knave, is B's statement false?", "status": "direct", "initial_answer": null, "quote": "A and C = T and F = F, so B's statement is false"}}
 ]}}
 
 Now do the same for this problem and reasoning. Return only JSON: {{"nodes": [...]}}
@@ -176,7 +177,9 @@ Now do the same for this problem and reasoning. Return only JSON: {{"nodes": [..
 </problem>
 <reasoning>
 {cot}
-</reasoning>"""
+</reasoning>
+
+Reminder: do not solve the problem again. Return only the JSON tree of the reasoning above, as specified at the top: {{"nodes": [...]}}"""
 
 TREE_TYPES = {"parse", "derive", "case", "verify"}
 _META = re.compile(r"\b(the reasoning|the solver|the solution process|reasoning step|did the model)\b", re.I)
@@ -189,7 +192,7 @@ def parse_tree(raw: str) -> list[dict]:
     try:
         nodes = json.loads(raw).get("nodes", [])
     except (json.JSONDecodeError, AttributeError):
-        return []
+        nodes = _salvage_nodes(raw)            # e.g. output cut at max_tokens: keep the complete nodes
     out, seen = [], set()
     for n in nodes[:15]:
         if not isinstance(n, dict):
@@ -202,21 +205,66 @@ def parse_tree(raw: str) -> list[dict]:
             continue
         status = "corrected" if n.get("status") == "corrected" else "direct"
         init = str(n.get("initial_answer") or "").lower().strip()
+        opp = str(n.get("opposite") or "").strip()
+        if not opp or opp == q or _META.search(opp) or _AWKWARD.search(opp):
+            opp = None
         seen.add(nid)
         out.append({"id": nid, "type": typ, "depends_on": [d for d in n.get("depends_on") or [] if d in seen],
-                    "question": q, "stated": ans, "status": status,
+                    "question": q, "stated": ans, "status": status, "opposite": opp,
                     "initial": init if status == "corrected" and init in ("yes", "no") else None,
                     "quote": str(n.get("quote", "")).strip()})
     return out
+
+
+def _salvage_nodes(raw: str) -> list:
+    dec, out, i = json.JSONDecoder(), [], raw.find('{"id"')
+    while i >= 0:
+        try:
+            obj, end = dec.raw_decode(raw, i)
+            out.append(obj)
+            i = raw.find('{"id"', end)
+        except json.JSONDecodeError:
+            i = raw.find('{"id"', i + 1)
+    return out
+
+
+_STATEMENT = re.compile(r"^Statement:\s*(.+)$", re.M)
+_ALL_STATEMENTS = re.compile(r"\b(all|every|each)\b[^?]*\bstatements?\b|\bconsistent with\b|\bassignment\b", re.I)
+_TRUTH_WORDS = re.compile(r"\b(true|false|uncertain|the case|a fact|hold|holds)\b", re.I)
+
+
+def _content(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9']+", text.lower()) if len(w) > 3}
+
+
+def leaks_final(question: str, rec: dict) -> bool:
+    """Whether a node question is the final question in disguise: for K&K a check of an assignment against
+    all statements; for JustLogic the truth of the statement to judge."""
+    if rec.get("domain") == "knights_knaves":
+        # a hypothetical full assignment checked against ONE statement is a branch, not a leak
+        return bool(_ALL_STATEMENTS.search(question))
+    m = _STATEMENT.search(rec.get("prompt", ""))
+    if m:
+        if re.search(r"\bthe statement\b", question, re.I) and _TRUTH_WORDS.search(question):
+            return True
+        target = _content(m.group(1))
+        if target and len(target & _content(question)) >= 0.8 * len(target) and _TRUTH_WORDS.search(question):
+            return True
+    return False
 
 
 def extract_tree(client: DeepSeek, rec: dict, trace: dict) -> list[dict]:
     """Reasoning tree of typed yes/no nodes from one CoT (passed as text: DeepSeek drops earlier
     reasoning_content in multi-turn chats). The fixed instructions and example come first so the prefix
     is cached across items."""
-    resp = client.chat([{"role": "user", "content": TREE_PROMPT.format(problem=rec["prompt"], cot=trace["reasoning"])}],
-                       thinking=False, logprobs=False, max_tokens=4000, json_mode=True, tag=f"{rec['item_id']}/tree")
-    return parse_tree(resp["choices"][0]["message"].get("content") or "")
+    msg = [{"role": "user", "content": TREE_PROMPT.format(problem=rec["prompt"], cot=trace["reasoning"])}]
+    resp = client.chat(msg, thinking=False, logprobs=False, max_tokens=8000, json_mode=True, tag=f"{rec['item_id']}/tree")
+    nodes = parse_tree(resp["choices"][0]["message"].get("content") or "")
+    if not nodes:                  # JSON mode sometimes returns only whitespace on very long inputs
+        resp = client.chat(msg, thinking=False, logprobs=False, max_tokens=8000, json_mode=False,
+                           tag=f"{rec['item_id']}/tree_retry")
+        nodes = parse_tree(resp["choices"][0]["message"].get("content") or "")
+    return nodes
 
 
 NEGATE_PROMPT = """Below is a problem and some yes/no questions about it. Rewrite each question so that its correct answer is the opposite, by asking about the negation of what it asks (for example "Is Alice a knight?" -> "Is Alice a knave?", "Does the premise imply X?" -> "Does the premise fail to imply X?"). Keep every name and term; add no new information; keep each question natural and self-contained.
@@ -399,6 +447,15 @@ def tree_item(client: DeepSeek, res: dict, seed: int = 0, random_matched: bool =
     rng = random.Random(f"tree-{seed}-{rec['item_id']}")
     tr = res["traces"][0]
     nodes = extract_tree(client, rec, tr) if tr.get("reasoning") else []
+    leaked = [nd for nd in nodes if leaks_final(nd["question"], rec)]
+    nodes = [nd for nd in nodes if nd not in leaked]
+    for nd in nodes:                           # use the natural opposite wording for about half the nodes
+        nd["polarity"] = "as_extracted"
+        if nd.get("opposite") and rng.random() < 0.5:
+            nd["question"], nd["opposite"] = nd["opposite"], nd["question"]
+            nd["stated"] = "no" if nd["stated"] == "yes" else "yes"
+            nd["initial"] = None if nd["initial"] is None else ("no" if nd["initial"] == "yes" else "yes")
+            nd["polarity"] = "opposite"
     toks = _expand(tr["reasoning_lp"])
     for j, nd in enumerate(nodes):
         nd["answers"] = [answer_subquestion(client, rec, tr, nd["question"], rng, tag=f"{rec['item_id']}/node{j}.t0")]
@@ -413,4 +470,5 @@ def tree_item(client: DeepSeek, res: dict, seed: int = 0, random_matched: bool =
         for j, q in enumerate(generic_subquestions(client, rec, len(nodes) - len(randoms))):
             randoms.append({"question": q, "answer_nocot": answer_subquestion(client, rec, None, q, rng,
                                                                               tag=f"{rec['item_id']}/rq{len(randoms) + j}.fresh")})
-    return dict(res, subquestions=nodes, random_subquestions=randoms[:max(len(nodes), 1)], extraction="tree")
+    return dict(res, subquestions=nodes, random_subquestions=randoms[:max(len(nodes), 1)], extraction="tree",
+                leaked_nodes=[nd["question"] for nd in leaked])

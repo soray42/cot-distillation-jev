@@ -49,6 +49,22 @@ class TestValueCommitment(unittest.TestCase):
         self.assertIsNone(value_commitment(toks, None))
 
 
+class TestLeaksFinal(unittest.TestCase):
+    def test_kk_and_justlogic(self):
+        from cotdistill.teacher import leaks_final
+        rec = S.knights_knaves(1, seed=7, people_range=(4, 4))[0]
+        ppl = rec["meta"]["people"]
+        branch = "If " + ", ".join(f"{p} were a knight" for p in ppl) + f", would {ppl[0]}'s statement be false?"
+        self.assertFalse(leaks_final(branch, rec))                       # one statement under a hypothesis
+        self.assertTrue(leaks_final("With " + ", ".join(f"{p} a knight" for p in ppl) + ", does every statement hold?", rec))
+        self.assertTrue(leaks_final(f"Is the assignment with {ppl[0]} a knight consistent with all statements?", rec))
+        self.assertFalse(leaks_final(f"Is {ppl[0]} a knight?", rec))
+        jl = {"domain": "justlogic", "prompt": "Passage: ...\n\nStatement: Stops are acts.\n\nQuestion: ..."}
+        self.assertTrue(leaks_final("Is the statement uncertain given the passage?", jl))
+        self.assertTrue(leaks_final("Is it true that stops are acts?", jl))
+        self.assertFalse(leaks_final("Does the passage say that meadow voles live in meadows?", jl))
+
+
 class FakeClient:
     """Canned DeepSeek responses keyed by the call tag, so tree_item runs offline."""
     def __init__(self, tree):
@@ -81,11 +97,19 @@ class TestTreeItem(unittest.TestCase):
             {"id": "n1", "type": "derive", "depends_on": [], "question": f"Is {p0} a {role0}?", "answer": "yes",
              "status": "direct", "initial_answer": None, "quote": f"So {p0} is a {role0}."},
             {"id": "n2", "type": "derive", "depends_on": ["n1"], "question": f"Is {p1} a knight?", "answer": "no",
-             "status": "corrected", "initial_answer": "yes", "quote": f"Then {p1} follows."}]}
+             "opposite": f"Is {p1} a knave?", "status": "corrected", "initial_answer": "yes", "quote": f"Then {p1} follows."},
+            {"id": "n3", "type": "verify", "depends_on": ["n1", "n2"], "question": "Is the assignment consistent with all statements?",
+             "answer": "yes", "status": "direct", "quote": "x"}]}
         client = FakeClient(tree)
         out = tree_item(client, res)
         self.assertEqual(out["extraction"], "tree")
-        self.assertEqual(len(out["subquestions"]), 2)
+        self.assertEqual(len(out["subquestions"]), 2)                # the full-assignment check is dropped as a leak
+        self.assertEqual(len(out["leaked_nodes"]), 1)
+        n2 = out["subquestions"][1]
+        if n2["polarity"] == "opposite":                              # swapped wording flips the answers
+            self.assertEqual((n2["question"], n2["stated"], n2["initial"]), (f"Is {p1} a knave?", "yes", "no"))
+        else:
+            self.assertEqual((n2["stated"], n2["initial"]), ("no", "yes"))
         n1 = out["subquestions"][0]
         self.assertTrue(n1["truth"])                                  # program truth for K&K role questions
         self.assertIsNotNone(n1["span"])
@@ -97,8 +121,8 @@ class TestTreeItem(unittest.TestCase):
         from build_student_data import convert
         out["traces"][0]["dist_outcome"] = {rec["gold"]: 1.0}
         rec_out = convert(out)
-        s1, s2 = rec_out["subqs"]
-        self.assertEqual((s1["type"], s2["initial"], s2["depends_on"]), ("derive", "yes", ["n1"]))
+        s1 = rec_out["subqs"][0]                                       # n2 may be dropped as inconsistent (fake answers say yes)
+        self.assertEqual(s1["type"], "derive")
         self.assertGreater(s1["p_commit"], 0.9)                           # stated "yes", confident commitment
         self.assertEqual(rec_out["teacher"][rec["gold_label"]], 1.0)
 

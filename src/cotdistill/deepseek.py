@@ -24,19 +24,24 @@ PRICES = {                          # off-peak USD per 1M tokens; peak hours cos
     "deepseek-flash": {"hit": 0.003, "miss": 0.15, "out": 0.60},
     "deepseek-v4-pro": {"hit": 0.022, "miss": 0.66, "out": 1.98},
 }
-PEAK_HOURS_UTC = {1, 2, 3, 6, 7, 8, 9}   # the pricing page: 01:00-04:00 and 06:00-10:00 UTC, Monday to Friday
-# The same clock hours read as Beijing time (UTC+8). Our 2026-09-29/30 bill (22:29-00:44 UTC) matched peak
-# prices in this window, not the documented one, so both are treated as peak.
-PEAK_HOURS_BEIJING_AS_UTC = {(h - 8) % 24 for h in PEAK_HOURS_UTC}
+PEAK_HOURS_UTC = {1, 2, 3, 6, 7, 8, 9}   # 01:00-04:00 and 06:00-10:00 UTC, Monday to Friday (pricing page)
 
 
 def is_peak(ts: float | None = None) -> bool:
-    """Conservative DeepSeek peak window: the documented UTC hours or the same hours in Beijing time,
-    on weekdays (Chinese public holidays, which are off-peak, are not modelled)."""
-    ts = ts if ts is not None else time.time()
-    utc, bj = time.gmtime(ts), time.gmtime(ts + 8 * 3600)
-    return (utc.tm_wday < 5 and utc.tm_hour in PEAK_HOURS_UTC) or \
-        (bj.tm_wday < 5 and bj.tm_hour in PEAK_HOURS_UTC)
+    """DeepSeek peak pricing window (Chinese public holidays, which are off-peak, are not modelled).
+    Logged costs matched the balance within 3% over 2026-09-29/30, so the documented UTC hours hold."""
+    t = time.gmtime(ts if ts is not None else time.time())
+    return t.tm_wday < 5 and t.tm_hour in PEAK_HOURS_UTC
+
+
+def usd_balance(api_key: str | None = None) -> float | None:
+    """USD balance from /user/balance (the response also lists a CNY entry, in no fixed order)."""
+    req = urllib.request.Request("https://api.deepseek.com/user/balance",
+                                 headers={"Authorization": f"Bearer {api_key or os.environ.get('DEEPSEEK_API_KEY')}"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        infos = json.loads(r.read()).get("balance_infos", [])
+    usd = [float(b["total_balance"]) for b in infos if b.get("currency") == "USD"]
+    return usd[0] if usd else None
 
 
 class DeepSeekError(RuntimeError):

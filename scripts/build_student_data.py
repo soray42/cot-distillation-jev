@@ -36,12 +36,16 @@ def teacher_dist(res: dict) -> dict[str, float]:
     return {chr(65 + i): acc[k] / n for i, k in enumerate(order)} if n else {}
 
 
-def convert(res: dict) -> dict:
+def convert(res: dict, keep_inconsistent: bool = False) -> dict:
     it = res["item"]
     labels = [chr(65 + i) for i in range(len(it["label_order"]))]
-    subqs = []
+    subqs, dropped = [], 0
     for sq in res.get("subquestions", []):
         ps = [p for p in (resolve_p_yes(a) for a in sq.get("answers", [])) if p is not None]
+        if not keep_inconsistent and ps and sq.get("stated") in ("yes", "no") and \
+                (sum(ps) / len(ps) > 0.5) != (sq["stated"] == "yes"):
+            dropped += 1                         # the extracted answer and the CoT-conditioned answer disagree
+            continue
         commit = sq.get("commit")
         p_commit = None
         if commit and sq.get("stated") in ("yes", "no"):       # teacher's confidence where it settled the node
@@ -56,7 +60,8 @@ def convert(res: dict) -> dict:
     return {"item_id": it["item_id"], "source": it.get("domain") or it.get("source"), "prompt": res["prompt"],
             "labels": labels, "gold_label": it.get("gold_label"), "teacher": teacher_dist(res),
             "depth": it.get("depth"), "subqs": subqs, "random_subqs": randoms,
-            "rationale": (res["traces"][0].get("reasoning") or None) if res.get("traces") else None}
+            "rationale": (res["traces"][0].get("reasoning") or None) if res.get("traces") else None,
+            "n_inconsistent_dropped": dropped}
 
 
 def main() -> None:
@@ -64,6 +69,8 @@ def main() -> None:
     ap.add_argument("--runs", nargs="+", required=True)
     ap.add_argument("--out", default="data/student")
     ap.add_argument("--val-frac", type=float, default=0.1)
+    ap.add_argument("--keep-inconsistent", action="store_true",
+                    help="keep sub-questions whose extracted answer disagrees with the CoT-conditioned answer")
     ap.add_argument("--filter-wrong-teacher", action="store_true",
                     help="drop items whose teacher answer disagrees with the gold label (rejection filtering)")
     args = ap.parse_args()
@@ -77,7 +84,7 @@ def main() -> None:
             res = json.loads(p.read_text())
             if "item" not in res:
                 continue
-            rec = convert(res)
+            rec = convert(res, keep_inconsistent=args.keep_inconsistent)
             if args.filter_wrong_teacher and rec["teacher"] and rec["gold_label"] and \
                     max(rec["teacher"], key=rec["teacher"].get) != rec["gold_label"]:
                 continue
@@ -88,7 +95,8 @@ def main() -> None:
             for r in recs:
                 f.write(json.dumps(r) + "\n")
         n_sq = sum(len(r["subqs"]) for r in recs)
-        print(f"{name}: {len(recs)} items, {n_sq} sub-questions, "
+        n_drop = sum(r.get("n_inconsistent_dropped", 0) for r in recs)
+        print(f"{name}: {len(recs)} items, {n_sq} sub-questions ({n_drop} inconsistent dropped), "
               f"{sum(len(r['random_subqs']) for r in recs)} random sub-questions")
 
 
