@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from cotdistill.deepseek import DeepSeek, is_peak  # noqa: E402
-from cotdistill.teacher import tree_item  # noqa: E402
+from cotdistill.teacher import self_corrects, tree_item  # noqa: E402
 
 
 def main() -> None:
@@ -32,10 +32,14 @@ def main() -> None:
     ap.add_argument("--budget", type=float, default=1.0, help="stop submitting new items above this logged USD")
     ap.add_argument("--offpeak-only", action="store_true")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--thinking", action="store_true", help="extract every tree in thinking mode")
+    ap.add_argument("--think-on-corrections", action="store_true",
+                    help="thinking mode only for CoTs that say they made an error (self_corrects)")
+    ap.add_argument("--suffix", default="_tree", help="output run = <run><suffix>")
     args = ap.parse_args()
     ids = set(args.ids.split(",")) if args.ids else None
     for run in args.runs:
-        src, out = ROOT / "teacher_cache" / run, ROOT / "teacher_cache" / f"{run}_tree"
+        src, out = ROOT / "teacher_cache" / run, ROOT / "teacher_cache" / f"{run}{args.suffix}"
         out.mkdir(parents=True, exist_ok=True)
         files = [p for p in sorted(src.glob("*.json")) if p.name != "summary.json"]
         if ids:
@@ -53,12 +57,13 @@ def main() -> None:
             res = json.loads(p.read_text())
             if "item" not in res or not res.get("traces"):
                 return f"{p.stem}: skipped (no trace)"
-            new = tree_item(client, res, seed=args.seed)
+            think = args.thinking or (args.think_on_corrections and self_corrects(res["traces"][0].get("reasoning")))
+            new = tree_item(client, res, seed=args.seed, thinking=think)
             (out / p.name).write_text(json.dumps(new))
             kinds = {}
             for nd in new["subquestions"]:
                 kinds[nd["type"]] = kinds.get(nd["type"], 0) + 1
-            return f"{p.stem}: {len(new['subquestions'])} nodes {kinds}"
+            return f"{p.stem}: {'think ' if think else ''}{len(new['subquestions'])} nodes {kinds}"
 
         done, streak = 0, 0
         with ThreadPoolExecutor(max_workers=args.workers) as ex:

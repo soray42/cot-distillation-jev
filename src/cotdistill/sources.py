@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import csv
 import itertools
 import random
@@ -139,6 +140,65 @@ def kk_subq_truth(question: str, rec: dict) -> bool | None:
         names = [x for x in re.split(r",\s*(?:and\s+)?|\s+and\s+", m.group(1)) if x]
         if names and all(x in roles for x in names):
             return all(roles[x] == (m.group(2).lower() == "knights") for x in names)
+    return None
+
+
+_KK_PAIR = re.compile(r"^(?:do|are) (\w+) and (\w+) (?:have |of )?(?:the )?(same|opposite) roles?\??$", re.I)
+_KK_HYP = re.compile(r"^(?:with|if|when|given that|assuming) (.+?),? (?:is|would|does|do|are|will) (.+?)\??$", re.I)
+_KK_ASSIGN = re.compile(r"\b([A-Z][a-z]+)(?: were| was| is| being| as| to be)? (?:a |an )?(knight|knave)s?\b")
+_KK_SAID = re.compile(r"^(\w+)'s statement (?:be )?(true|false)$", re.I)
+_KK_CONTRA = re.compile(r"^(?:the |all (?:the |four |five |six |seven |eight |nine |ten )?)?statements (?:be )?"
+                        r"(contradict each other|contradictory|inconsistent|consistent(?: with each other)?|all hold)$", re.I)
+
+
+def _people_in(rec: dict) -> list[str]:
+    return [p["question"][3:-10] for p in rec.get("predicates", [])]
+
+
+def kk_node_truth(question: str, rec: dict) -> bool | None:
+    """Program truth for K&K tree nodes: single roles (kk_subq_truth), same/opposite roles, a statement's
+    truth under a hypothetical assignment, and whether a hypothesis makes the statements contradictory.
+    None whenever the question is not in one of these forms or leaves a needed role unassigned."""
+    t = kk_subq_truth(question, rec)
+    if t is not None:
+        return t
+    meta = rec.get("meta") or {}
+    stmts, people = meta.get("statements"), meta.get("people") or _people_in(rec)
+    sol = {p["question"][3:-10]: p["truth"] for p in rec.get("predicates", [])}
+    if not stmts or not sol:
+        return None
+    q = " ".join(question.strip().split())
+    m = _KK_PAIR.match(q)
+    if m and m.group(1) in sol and m.group(2) in sol:
+        same = sol[m.group(1)] == sol[m.group(2)]
+        return same if m.group(3).lower() == "same" else not same
+    m = _KK_HYP.match(q)
+    if not m:
+        return None
+    hyp, cons = m.group(1), m.group(2).strip()
+    assign = {}
+    for name, role in _KK_ASSIGN.findall(hyp):
+        if name not in sol or assign.get(name, role == "knight") != (role == "knight"):
+            return None
+        assign[name] = role == "knight"
+    named = {w for w in re.findall(r"\b[A-Z][a-z]+\b", hyp) if w in sol}
+    if not assign or named - set(assign):                  # a person mentioned without a role: not parsed
+        return None
+    m2 = _KK_SAID.match(cons)
+    if m2 and m2.group(1) in stmts:
+        st = stmts[m2.group(1)]
+        needed = set(re.findall(r"\b[A-Z][a-z]+\b", json.dumps(st))) & set(sol)
+        if not needed <= set(assign):
+            return None
+        val = _eval(st, assign)
+        return val if m2.group(2).lower() == "true" else not val
+    m3 = _KK_CONTRA.match(cons)
+    if m3:
+        free = [p for p in people if p not in assign]
+        ok = any(_consistent(stmts, dict(assign, **dict(zip(free, bits)))) == 0
+                 for bits in itertools.product([True, False], repeat=len(free)))
+        word = m3.group(1).lower()
+        return (not ok) if word.startswith(("contradict", "inconsistent")) else ok
     return None
 
 

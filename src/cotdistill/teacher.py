@@ -184,6 +184,7 @@ Reminder: do not solve the problem again. Return only the JSON tree of the reaso
 TREE_TYPES = {"parse", "derive", "case", "verify"}
 _META = re.compile(r"\b(the reasoning|the solver|the solution process|reasoning step|did the model)\b", re.I)
 _AWKWARD = re.compile(r"\bfail(?:s|ed)? to\b", re.I)
+_SYMBOLIC = re.compile(r"[¬∨∧→↔⇔⊕]|->|<->|\b[A-Z]\s*=|=\s*\(|\(\s*[A-Z]\s*[,)]")   # notation from the reasoning
 
 
 def parse_tree(raw: str) -> list[dict]:
@@ -201,12 +202,12 @@ def parse_tree(raw: str) -> list[dict]:
         nid = str(n.get("id", "")).strip()
         if not q or ans not in ("yes", "no") or typ not in TREE_TYPES or not nid or nid in seen:
             continue
-        if _META.search(q) or _AWKWARD.search(q):
+        if _META.search(q) or _AWKWARD.search(q) or _SYMBOLIC.search(q):
             continue
         status = "corrected" if n.get("status") == "corrected" else "direct"
         init = str(n.get("initial_answer") or "").lower().strip()
         opp = str(n.get("opposite") or "").strip()
-        if not opp or opp == q or _META.search(opp) or _AWKWARD.search(opp):
+        if not opp or opp == q or _META.search(opp) or _AWKWARD.search(opp) or _SYMBOLIC.search(opp):
             opp = None
         seen.add(nid)
         out.append({"id": nid, "type": typ, "depends_on": [d for d in n.get("depends_on") or [] if d in seen],
@@ -228,13 +229,26 @@ def _salvage_nodes(raw: str) -> list:
     return out
 
 
+SELF_CORRECTION = re.compile(r"\b(mistake|made an error|re-?evaluate|restart|redo|that's wrong|this is wrong|that was wrong|"
+                             r"i was wrong|oops|misread|miscalculat|misinterpret|correction:)\b", re.I)
+
+
+def self_corrects(cot: str) -> bool:
+    """Whether a CoT says it made an error (about 15% of our CoTs); such items get thinking-mode trees."""
+    return bool(SELF_CORRECTION.search(cot or ""))
+
+
 _STATEMENT = re.compile(r"^Statement:\s*(.+)$", re.M)
 _ALL_STATEMENTS = re.compile(r"\b(all|every|each)\b[^?]*\bstatements?\b|\bconsistent with\b|\bassignment\b", re.I)
 _TRUTH_WORDS = re.compile(r"\b(true|false|uncertain|the case|a fact|hold|holds)\b", re.I)
 
 
+_FRAME = {"given", "passage", "valid", "logical", "reasoning", "statement", "must", "true", "false", "uncertain",
+          "considered", "only", "that", "case", "fact", "claim", "judge", "based", "whether", "judged", "determine"}
+
+
 def _content(text: str) -> set[str]:
-    return {w for w in re.findall(r"[a-z0-9']+", text.lower()) if len(w) > 3}
+    return {w for w in re.findall(r"[a-z0-9]+", text.lower()) if len(w) > 3}
 
 
 def leaks_final(question: str, rec: dict) -> bool:
@@ -244,20 +258,29 @@ def leaks_final(question: str, rec: dict) -> bool:
         # a hypothetical full assignment checked against ONE statement is a branch, not a leak
         return bool(_ALL_STATEMENTS.search(question))
     m = _STATEMENT.search(rec.get("prompt", ""))
-    if m:
-        if re.search(r"\bthe statement\b", question, re.I) and _TRUTH_WORDS.search(question):
-            return True
+    if m and _TRUTH_WORDS.search(question):
+        # a leak asks about the statement to judge and little else; a premise that merely contains it, or
+        # another quoted claim, carries its own content
         target = _content(m.group(1))
-        if target and len(target & _content(question)) >= 0.8 * len(target) and _TRUTH_WORDS.search(question):
+        extra = _content(question) - target - _FRAME
+        if target and len(target & _content(question)) >= 0.8 * len(target) and len(extra) <= 3:
+            return True
+        if re.search(r"\bthe statement\b(?!\s*['\"‘“])", question, re.I) and len(extra) <= 3:
             return True
     return False
 
 
-def extract_tree(client: DeepSeek, rec: dict, trace: dict) -> list[dict]:
+def extract_tree(client: DeepSeek, rec: dict, trace: dict, thinking: bool = False) -> list[dict]:
     """Reasoning tree of typed yes/no nodes from one CoT (passed as text: DeepSeek drops earlier
     reasoning_content in multi-turn chats). The fixed instructions and example come first so the prefix
     is cached across items."""
     msg = [{"role": "user", "content": TREE_PROMPT.format(problem=rec["prompt"], cot=trace["reasoning"])}]
+    if thinking:                   # let the teacher work out where the reasoning changed its mind first
+        resp = client.chat(msg, thinking=True, logprobs=False, max_tokens=16000, effort="low",
+                           tag=f"{rec['item_id']}/tree_think")
+        nodes = parse_tree(resp["choices"][0]["message"].get("content") or "")
+        if nodes:
+            return nodes           # otherwise (e.g. the thinking ran out of tokens) fall back to non-thinking
     resp = client.chat(msg, thinking=False, logprobs=False, max_tokens=8000, json_mode=True, tag=f"{rec['item_id']}/tree")
     nodes = parse_tree(resp["choices"][0]["message"].get("content") or "")
     if not nodes:                  # JSON mode sometimes returns only whitespace on very long inputs
@@ -437,7 +460,8 @@ def run_item(client: DeepSeek, rec: dict, k: int = 2, seed: int = 0, effort: str
             "traces": traces, "subquestions": subqs, "random_subquestions": randoms}
 
 
-def tree_item(client: DeepSeek, res: dict, seed: int = 0, random_matched: bool = True) -> dict:
+def tree_item(client: DeepSeek, res: dict, seed: int = 0, random_matched: bool = True,
+              thinking: bool = False) -> dict:
     """Re-extract the sub-questions of an already solved item as a reasoning tree (no new solve).
 
     Each node is answered with the CoT in context and without it, anchored to its quote in the CoT, given
@@ -446,7 +470,7 @@ def tree_item(client: DeepSeek, res: dict, seed: int = 0, random_matched: bool =
     rec = dict(res["item"], prompt=res["prompt"])
     rng = random.Random(f"tree-{seed}-{rec['item_id']}")
     tr = res["traces"][0]
-    nodes = extract_tree(client, rec, tr) if tr.get("reasoning") else []
+    nodes = extract_tree(client, rec, tr, thinking=thinking) if tr.get("reasoning") else []
     leaked = [nd for nd in nodes if leaks_final(nd["question"], rec)]
     nodes = [nd for nd in nodes if nd not in leaked]
     for nd in nodes:                           # use the natural opposite wording for about half the nodes
@@ -472,3 +496,93 @@ def tree_item(client: DeepSeek, res: dict, seed: int = 0, random_matched: bool =
                                                                               tag=f"{rec['item_id']}/rq{len(randoms) + j}.fresh")})
     return dict(res, subquestions=nodes, random_subquestions=randoms[:max(len(nodes), 1)], extraction="tree",
                 leaked_nodes=[nd["question"] for nd in leaked])
+
+
+CORRECTION_PROMPT = """Below is a problem and excerpts from a solver's reasoning, taken where the reasoning noticed an error or changed its mind.
+
+For each excerpt in which a belief about the problem changed, write one node:
+- "question": a self-contained yes/no question in the problem's own words about the judgement that changed. Say what it means in words, never in the reasoning's notation: write "Is Irene a knight exactly when Bob is a knight or Emma is a knight?", not "Is I = B or E?". No questions about the reasoning itself, and not the final question;
+- "answer": "yes" or "no", the corrected belief;
+- "initial_answer": the belief before the correction (the opposite of "answer");
+- "opposite": the same question with the natural opposite wording (knight -> knave, true -> false), never "fail to";
+- "quote": a verbatim span (at most 30 words) from the excerpt where the corrected value is settled.
+Skip excerpts where no judgement about the problem changed (only re-checking, formatting, or answer format).
+
+<problem>
+{problem}
+</problem>
+
+{excerpts}
+
+Return only JSON: {{"corrections": [{{"question": "...", "answer": "yes", "initial_answer": "no", "opposite": "...", "quote": "..."}}]}}"""
+
+
+def correction_windows(cot: str, radius: int = 700, max_windows: int = 5) -> list[str]:
+    """Excerpts of the CoT around self-correction phrases, overlapping windows merged."""
+    spans = []
+    for m in SELF_CORRECTION.finditer(cot or ""):
+        a, b = max(0, m.start() - radius), min(len(cot), m.end() + radius // 2)
+        if spans and a <= spans[-1][1]:
+            spans[-1] = (spans[-1][0], b)
+        else:
+            spans.append((a, b))
+    return [cot[a:b] for a, b in spans[:max_windows]]
+
+
+def _words(q: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9]+", q.lower()))
+
+
+def add_corrections(client: DeepSeek, res: dict, seed: int = 0) -> dict:
+    """Focused pass for CoTs that correct themselves: extract the changed judgements from excerpts around
+    each correction and add them to the item's tree as "corrected" nodes (answered, anchored, checked like
+    the other nodes). Near-duplicates of existing nodes mark those nodes corrected instead."""
+    rec = dict(res["item"], prompt=res["prompt"])
+    tr = res["traces"][0]
+    wins = correction_windows(tr.get("reasoning") or "")
+    if not wins:
+        return dict(res, corrections_added=0)
+    rng = random.Random(f"corr-{seed}-{rec['item_id']}")
+    ex = "\n\n".join(f"<excerpt {i}>\n{w}\n</excerpt {i}>" for i, w in enumerate(wins, start=1))
+    resp = client.chat([{"role": "user", "content": CORRECTION_PROMPT.format(problem=rec["prompt"], excerpts=ex)}],
+                       thinking=False, logprobs=False, max_tokens=3000, json_mode=True, tag=f"{rec['item_id']}/corr")
+    try:
+        raw = json.loads(resp["choices"][0]["message"].get("content") or "").get("corrections", [])
+    except (json.JSONDecodeError, AttributeError):
+        raw = []
+    as_nodes = {"nodes": [dict(c, id=f"c{i}", type="derive", status="corrected", depends_on=[])
+                          for i, c in enumerate(raw, start=1) if isinstance(c, dict)]}
+    new = [n for n in parse_tree(json.dumps(as_nodes)) if n["initial"] and not leaks_final(n["question"], rec)]
+    nodes = list(res.get("subquestions", []))
+    toks = _expand(tr["reasoning_lp"])
+    added = 0
+    for nd in new:
+        dup = next((o for o in nodes if len(_words(o["question"]) ^ _words(nd["question"])) <= 2
+                    or (o.get("opposite") and len(_words(o["opposite"]) ^ _words(nd["question"])) <= 2)), None)
+        if dup is not None:
+            if dup["status"] != "corrected":
+                same = len(_words(dup["question"]) ^ _words(nd["question"])) <= 2
+                dup["status"] = "corrected"
+                dup["initial"] = nd["initial"] if same else ("no" if nd["initial"] == "yes" else "yes")
+            continue
+        nd["polarity"] = "as_extracted"
+        if nd.get("opposite") and rng.random() < 0.5:
+            nd["question"], nd["opposite"] = nd["opposite"], nd["question"]
+            nd["stated"] = "no" if nd["stated"] == "yes" else "yes"
+            nd["initial"] = "no" if nd["initial"] == "yes" else "yes"
+            nd["polarity"] = "opposite"
+        j = len(nodes)
+        nd["answers"] = [answer_subquestion(client, rec, tr, nd["question"], rng, tag=f"{rec['item_id']}/node{j}.t0")]
+        nd["answer_nocot"] = answer_subquestion(client, rec, None, nd["question"], rng, tag=f"{rec['item_id']}/node{j}.fresh")
+        span = locate_span(toks, nd["quote"])
+        nd["span"], nd["span_stats"], nd["commit"] = (list(span) if span else None), span_stats(toks, span), value_commitment(toks, span)
+        nd["truth"] = kk_subq_truth(nd["question"], rec) if rec.get("domain") == "knights_knaves" else None
+        nd["source"] = "correction_pass"
+        nodes.append(nd)
+        added += 1
+    randoms = list(res.get("random_subquestions", []))
+    if len(randoms) < len(nodes):
+        for j, q in enumerate(generic_subquestions(client, rec, len(nodes) - len(randoms))):
+            randoms.append({"question": q, "answer_nocot": answer_subquestion(client, rec, None, q, rng,
+                                                                              tag=f"{rec['item_id']}/rq{len(randoms) + j}.fresh")})
+    return dict(res, subquestions=nodes, random_subquestions=randoms[:max(len(nodes), 1)], corrections_added=added)

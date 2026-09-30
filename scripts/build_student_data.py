@@ -18,6 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from cotdistill.sources import kk_node_truth  # noqa: E402
 from cotdistill.teacher import resolve_p_yes  # noqa: E402
 
 
@@ -40,18 +41,31 @@ def convert(res: dict, keep_inconsistent: bool = False) -> dict:
     it = res["item"]
     labels = [chr(65 + i) for i in range(len(it["label_order"]))]
     subqs, dropped = [], 0
+    item = dict(it, prompt=res["prompt"])
     for sq in res.get("subquestions", []):
         ps = [p for p in (resolve_p_yes(a) for a in sq.get("answers", [])) if p is not None]
-        if not keep_inconsistent and ps and sq.get("stated") in ("yes", "no") and \
-                (sum(ps) / len(ps) > 0.5) != (sq["stated"] == "yes"):
-            dropped += 1                         # the extracted answer and the CoT-conditioned answer disagree
+        truth = sq.get("truth")
+        if truth is None and it.get("domain") == "knights_knaves":
+            truth = kk_node_truth(sq["question"], item)       # hypothetical checks, same/opposite roles, ...
+        stated = sq.get("stated") if sq.get("stated") in ("yes", "no") else None
+        p_cot = sum(ps) / len(ps) if ps else None
+        # keep a node when its signals agree; program truth, when known, outranks the CoT-conditioned re-ask
+        # (a no-thinking re-ask often misjudges hypotheticals such as dead-end branches)
+        if truth is not None and stated is not None:
+            consistent = (stated == "yes") == truth
+        else:
+            consistent = p_cot is None or stated is None or (p_cot > 0.5) == (stated == "yes")
+        if not keep_inconsistent and not consistent:
+            dropped += 1
             continue
+        if stated is not None and (p_cot is None or (p_cot > 0.5) != (stated == "yes")):
+            p_cot = 1.0 if stated == "yes" else 0.0              # the extracted (verified) answer as a hard label
         commit = sq.get("commit")
         p_commit = None
         if commit and sq.get("stated") in ("yes", "no"):       # teacher's confidence where it settled the node
             p_commit = commit["conf"] if sq["stated"] == "yes" else 1 - commit["conf"]
-        subqs.append({"question": sq["question"], "p_cot": sum(ps) / len(ps) if ps else None,
-                      "p_fresh": resolve_p_yes(sq.get("answer_nocot") or {}), "truth": sq.get("truth"),
+        subqs.append({"question": sq["question"], "p_cot": p_cot,
+                      "p_fresh": resolve_p_yes(sq.get("answer_nocot") or {}), "truth": truth,
                       "type": sq.get("type"), "depends_on": sq.get("depends_on"), "id": sq.get("id"),
                       "initial": sq.get("initial"), "p_commit": p_commit,
                       "span_minp": (sq.get("span_stats") or {}).get("min_p"), "status": sq.get("status")})

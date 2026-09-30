@@ -63,6 +63,16 @@ class TestLeaksFinal(unittest.TestCase):
         self.assertTrue(leaks_final("Is the statement uncertain given the passage?", jl))
         self.assertTrue(leaks_final("Is it true that stops are acts?", jl))
         self.assertFalse(leaks_final("Does the passage say that meadow voles live in meadows?", jl))
+        jl2 = {"domain": "justlogic", "prompt": "Passage: ...\n\nStatement: Given that usefulness is quality, it can be "
+               "inferred that prostate cancer affects more men than any other cancer except skin cancer.\n\nQuestion: ..."}
+        self.assertTrue(leaks_final("Must it be true that if usefulness is quality, then prostate cancer affects more men "
+                                    "than any other cancer except skin cancer?", jl2))
+        self.assertFalse(leaks_final("Must it be true that either visual proprioception is present at birth and appears "
+                                     "early on in evolution or if usefulness is quality, then prostate cancer affects more "
+                                     "men than any other cancer except skin cancer?", jl2))
+        self.assertFalse(leaks_final("Can the statement 'if elk eat vegetation, then postmodern spirituality is different "
+                                     "from postmodern philosophy' be considered false?", jl2))
+        self.assertTrue(leaks_final("Given only the passage and valid logical reasoning, is the statement uncertain?", jl2))
 
 
 class FakeClient:

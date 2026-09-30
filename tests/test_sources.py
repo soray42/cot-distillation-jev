@@ -1,3 +1,4 @@
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -51,6 +52,28 @@ class TestResolvePYes(unittest.TestCase):
         self.assertEqual(resolve_p_yes({"yes_first": True, "missing": ["B"], "mass": 0.99}, {"A": 1.0}), 1.0)
         self.assertIsNone(resolve_p_yes({"yes_first": True, "missing": ["A", "B"], "mass": 0.0, "p_yes": None}))
         self.assertEqual(resolve_p_yes({"yes_first": True, "missing": [], "mass": 1.0}, {"A": 0.3, "B": 0.7}), 0.3)
+
+
+class TestKKNodeTruth(unittest.TestCase):
+    def test_hypotheticals_and_pairs(self):
+        import itertools
+        rec = json.loads(json.dumps(S.knights_knaves(1, seed=11, people_range=(5, 5))[0]))   # as stored on disk
+        ppl, stm = rec["meta"]["people"], rec["meta"]["statements"]
+        sol = {p: n["truth"] for p, n in zip(ppl, rec["predicates"])}
+        a, b = ppl[:2]
+        self.assertEqual(S.kk_node_truth(f"Do {a} and {b} have the same role?", rec), sol[a] == sol[b])
+        self.assertEqual(S.kk_node_truth(f"Are {a} and {b} opposite roles?", rec), sol[a] != sol[b])
+        full = ", ".join(f"{p} {'a knight' if sol[p] else 'a knave'}" for p in ppl)
+        for sp in ppl:
+            self.assertEqual(S.kk_node_truth(f"If {full}, would {sp}'s statement be true?", rec), sol[sp])
+        self.assertEqual(S.kk_node_truth(f"If {full}, would the statements contradict each other?", rec), False)
+        wrong = ", ".join(f"{p} {'a knave' if sol[p] else 'a knight'}" for p in ppl)
+        self.assertEqual(S.kk_node_truth(f"If {wrong}, would the statements contradict each other?", rec), True)
+        # a single-person hypothesis: contradiction iff no consistent completion exists
+        flip = f"If {a} were {'a knave' if sol[a] else 'a knight'}, would the statements contradict each other?"
+        self.assertEqual(S.kk_node_truth(flip, rec), True)                       # the solution is unique
+        self.assertIsNone(S.kk_node_truth(f"If {a} were a knight, would {b} be happy?", rec))
+        self.assertIsNone(S.kk_node_truth("Is the sky blue?", rec))
 
 
 @unittest.skipUnless((ROOT / "data/raw/justlogic/train_dataset.csv").exists(), "JustLogic data not downloaded")
