@@ -36,6 +36,7 @@ def main() -> None:
     ap.add_argument("--think-on-corrections", action="store_true",
                     help="thinking mode only for CoTs that say they made an error (self_corrects)")
     ap.add_argument("--suffix", default="_tree", help="output run = <run><suffix>")
+    ap.add_argument("--no-fresh-nodes", action="store_true", help="skip the no-CoT answers to tree nodes (no arm uses them)")
     args = ap.parse_args()
     ids = set(args.ids.split(",")) if args.ids else None
     for run in args.runs:
@@ -58,7 +59,7 @@ def main() -> None:
             if "item" not in res or not res.get("traces"):
                 return f"{p.stem}: skipped (no trace)"
             think = args.thinking or (args.think_on_corrections and self_corrects(res["traces"][0].get("reasoning")))
-            new = tree_item(client, res, seed=args.seed, thinking=think)
+            new = tree_item(client, res, seed=args.seed, thinking=think, fresh_nodes=not args.no_fresh_nodes)
             (out / p.name).write_text(json.dumps(new))
             kinds = {}
             for nd in new["subquestions"]:

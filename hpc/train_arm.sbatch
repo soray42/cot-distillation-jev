@@ -29,7 +29,7 @@ PY=envs/cotd/bin/python
 [ -n "${DRY_RUN:-}" ] && PY="echo [dry-run] python"
 nvidia-smi -L 2>/dev/null || echo "no nvidia-smi here"
 [ -f "$DATA/train.jsonl" ] || { echo "missing $DATA/train.jsonl"; exit 1; }
-EVALS="val=$DATA/val.jsonl kk=data/eval/kk_heldout.jsonl jl=data/eval/jl_heldout.jsonl jevbench=data/eval/jevbench_public.jsonl td=data/eval/typed_decisions_test.jsonl bbeh=data/eval/bbeh.jsonl"
+EVALS="val=$DATA/val.jsonl kk=data/eval/kk_heldout.jsonl jl=data/eval/jl_heldout.jsonl jevbench=data/eval/jevbench_public.jsonl td=data/eval/typed_decisions_test.jsonl bbeh=data/eval/bbeh.jsonl ${EXTRA_EVALS:-}"
 for f in $EVALS; do [ -f "${f#*=}" ] || { echo "missing eval file ${f#*=}"; exit 1; }; done
 
 arm_config() {           # sets F S T RLM for arm $1
@@ -93,7 +93,7 @@ if [ -n "${BASE_SUBQ:-}" ]; then         # sub-question accuracy of the untraine
     --eval-subq "$DATA/val.jsonl" --out runs/base-subq || echo "base eval failed for subq"
 fi
 if [ -n "${EVAL_BASE:-}" ]; then          # untrained base control and the same-backbone answer-only replica
-  for M in Qwen3.5-2B-Base Jeff-Qwen3.5-2B; do
+  for M in Qwen3.5-2B-Base; do          # Jeff needs its own readout: JEFF=1 (scripts/eval_jeff.py)
     if [ ! -f "models/$M/config.json" ]; then echo "skip base eval $M (not downloaded)"; continue; fi
     echo "=== base eval $M  $(date +%T)"
     $PY repo/scripts/eval_student.py --model "models/$M" --eval $EVALS --out "runs/base-$M" || echo "base eval failed for $M"

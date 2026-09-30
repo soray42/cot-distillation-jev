@@ -466,7 +466,7 @@ def run_item(client: DeepSeek, rec: dict, k: int = 2, seed: int = 0, effort: str
 
 
 def tree_item(client: DeepSeek, res: dict, seed: int = 0, random_matched: bool = True,
-              thinking: bool = False) -> dict:
+              thinking: bool = False, fresh_nodes: bool = True) -> dict:
     """Re-extract the sub-questions of an already solved item as a reasoning tree (no new solve).
 
     Each node is answered with the CoT in context and without it, anchored to its quote in the CoT, given
@@ -488,7 +488,8 @@ def tree_item(client: DeepSeek, res: dict, seed: int = 0, random_matched: bool =
     toks = _expand(tr["reasoning_lp"])
     for j, nd in enumerate(nodes):
         nd["answers"] = [answer_subquestion(client, rec, tr, nd["question"], rng, tag=f"{rec['item_id']}/node{j}.t0")]
-        nd["answer_nocot"] = answer_subquestion(client, rec, None, nd["question"], rng, tag=f"{rec['item_id']}/node{j}.fresh")
+        nd["answer_nocot"] = (answer_subquestion(client, rec, None, nd["question"], rng, tag=f"{rec['item_id']}/node{j}.fresh")
+                              if fresh_nodes else {})
         span = locate_span(toks, nd["quote"])
         nd["span"] = list(span) if span else None
         nd["span_stats"] = span_stats(toks, span)

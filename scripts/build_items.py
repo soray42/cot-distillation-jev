@@ -74,6 +74,9 @@ def main() -> None:
         "policy_heldout": [to_eval(r, "policy") for r in generate(300, HELDOUT_DOMAINS, seed=9001)],
         "sharc_dev": [to_eval(r, "sharc") for r in S.sharc(str(RAW / "sharc/sharc_dev.json"), n=300, seed=9000)],
         "folio_val": [to_eval(r, "folio") for r in S.folio(str(RAW / "folio/folio_v2_validation.jsonl"), seed=9000)],
+        # held-out TEST sets (frozen 2026-09-30: never used for error analysis or data decisions)
+        "bbh": E.bbh(str(RAW / "bbh")),
+        "musr": E.musr(str(RAW / "musr")),
         "bbeh_sub": E.bbeh(str(RAW / "bbeh"), n_per_task=50, seed=1),
     }
     train_prompts = {r["prompt"] for r in kk + jl + policy + sharc + folio}

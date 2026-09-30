@@ -8,6 +8,7 @@
   earlier follow-ups) as Yes / No / Irrelevant / More-information choices. Its evidence follow-ups (human
   question-answer pairs about the conditions) are kept as predicates.
 - folio: FOLIO v2 (CC BY-SA 4.0 via tasksource) first-order-logic stories as True / False / Uncertain choices.
+- arc: AI2 ARC (CC BY-SA 4.0) grade-school science multiple choice, Challenge first, options reshuffled.
 """
 from __future__ import annotations
 
@@ -313,4 +314,34 @@ def folio(path: str, n: int | None = None, seed: int = 0) -> list[dict]:
                     "depth": len([x for x in prem.splitlines() if x.strip()]), "n_rules": 0, "path": [],
                     "predicates": [], "prompt": prompt, "options": dict(FOLIO_OPTIONS),
                     "meta": {"story_id": r.get("story_id")}})
+    return out
+
+
+# ---------------------------------------------------------------- ARC
+def arc(paths: list[str], n: int | None = None, seed: int = 0) -> list[dict]:
+    """ARC questions from the given parquet files in order (Challenge first), options reshuffled."""
+    import pandas as pd
+    rng = random.Random(seed)
+    out = []
+    for path in paths:
+        df = pd.read_parquet(path)
+        rows = list(df.itertuples(index=False))
+        rng.shuffle(rows)
+        split = "challenge" if "Challenge" in path else "easy"
+        for r in rows:
+            texts, labs = list(r.choices["text"]), [str(x) for x in r.choices["label"]]
+            if str(r.answerKey) not in labs or len(texts) < 3:
+                continue
+            keys = [f"o{i}" for i in range(len(texts))]
+            options = dict(zip(keys, texts))
+            gold = keys[labs.index(str(r.answerKey))]
+            order = keys[:]
+            rng.shuffle(order)
+            opt_txt = "\n".join(f"{chr(65 + i)}) {options[k]}" for i, k in enumerate(order))
+            prompt = f"Question: {r.question.strip()}\nOptions:\n{opt_txt}"
+            out.append({"item_id": f"arc-{r.id}", "domain": f"arc_{split}", "hidden": None, "gold": gold,
+                        "label_order": order, "gold_label": chr(65 + order.index(gold)), "depth": 1 if split == "easy" else 2,
+                        "n_rules": 0, "path": [], "predicates": [], "prompt": prompt, "options": options, "meta": {"split": split}})
+            if n and len(out) >= n:
+                return out
     return out

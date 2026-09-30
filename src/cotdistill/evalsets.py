@@ -139,3 +139,61 @@ def bbeh(raw_dir: str, n_per_task: int | None = None, seed: int = 0,
                         "type": "choice", "prompt": prompt, "labels": letters, "label_order": letters,
                         "gold_label": gold, "label_names": names, "gold_probs": None})
     return out
+
+
+BBH_SETS = {"boolean_expressions": ["True", "False"], "causal_judgement": ["Yes", "No"],
+            "formal_fallacies": ["valid", "invalid"], "navigate": ["Yes", "No"],
+            "sports_understanding": ["yes", "no"], "web_of_lies": ["Yes", "No"]}
+BBH_FREEFORM = {"dyck_languages", "multistep_arithmetic_two", "object_counting", "word_sorting"}
+
+
+def bbh(raw_dir: str) -> list[dict]:
+    """BIG-Bench Hard (MIT) as lettered choices: option-letter tasks as given, closed-set tasks with an options
+    block; the four free-form tasks are skipped. Held-out TEST set: never inspected for error analysis."""
+    import glob
+
+    import pandas as pd
+    out = []
+    for path in sorted(glob.glob(f"{raw_dir}/*.parquet")):
+        task = path.rsplit("/", 1)[-1][:-len(".parquet")]
+        if task in BBH_FREEFORM:
+            continue
+        df = pd.read_parquet(path)
+        for i, row in enumerate(df.itertuples(index=False)):
+            text, target = str(row.input).strip(), str(row.target).strip()
+            if task in BBH_SETS:
+                values = BBH_SETS[task]
+                letters = [chr(65 + k) for k in range(len(values))]
+                names = dict(zip(letters, values))
+                gold = next((L for L, v in names.items() if v.lower() == target.lower()), None)
+                prompt = text + "\n\nOptions:\n" + "\n".join(f"{L}) {v}" for L, v in names.items())
+            else:
+                letters = sorted(set(re.findall(r"^\(([A-R])\)", text, re.M)))
+                gold, names, prompt = target.strip("()"), None, text
+                names = {L: L for L in letters}
+            if gold not in letters:
+                continue
+            out.append({"item_id": f"bbh-{task}-{i:03d}", "source": "bbh", "group": f"bbh/{task}", "type": "choice",
+                        "prompt": prompt, "labels": letters, "label_order": letters, "gold_label": gold,
+                        "label_names": names, "gold_probs": None})
+    return out
+
+
+def musr(raw_dir: str) -> list[dict]:
+    """MuSR (CC BY 4.0): murder mysteries, object placements, team allocation. Held-out TEST set."""
+    import ast
+
+    import pandas as pd
+    out = []
+    for task in ("murder_mystery", "object_placements", "team_allocation"):
+        df = pd.read_csv(f"{raw_dir}/{task}.csv")
+        for i, row in enumerate(df.itertuples(index=False)):
+            choices = ast.literal_eval(row.choices) if isinstance(row.choices, str) else list(row.choices)
+            letters = [chr(65 + k) for k in range(len(choices))]
+            prompt = (f"{str(row.narrative).strip()}\n\nQuestion: {str(row.question).strip()}\nOptions:\n"
+                      + "\n".join(f"{L}) {c}" for L, c in zip(letters, choices)))
+            out.append({"item_id": f"musr-{task}-{i:03d}", "source": "musr", "group": f"musr/{task}", "type": "choice",
+                        "prompt": prompt, "labels": letters, "label_order": letters,
+                        "gold_label": letters[int(row.answer_index)], "label_names": dict(zip(letters, choices)),
+                        "gold_probs": None})
+    return out
