@@ -8,6 +8,7 @@ distribution at the last real token, restricted to the option-letter tokens.
 from __future__ import annotations
 
 import random
+import re
 from dataclasses import dataclass
 
 import torch
@@ -49,8 +50,33 @@ def _soft(p_yes: float, yes_first: bool, eps: float = 1e-4) -> list[float]:
     return [p, 1 - p] if yes_first else [1 - p, p]
 
 
+_OPT_LINE = re.compile(r"^([A-Z])\) (.*)$")
+
+
+def permute_options(prompt: str, labels: list[str], target: list[float], gold: int | None,
+                    rng: random.Random) -> tuple[str, list[float], int | None] | None:
+    """Shuffle the lettered options of a prompt that ends in an 'Options:' block; the target mass and the gold
+    index follow the option texts. "None of the above" stays last and ordered scales (options starting with a
+    digit) are left alone. Returns None when the prompt does not have exactly the expected option lines."""
+    head, sep, tail = prompt.rpartition("\nOptions:\n")
+    if not sep:
+        return None
+    ms = [_OPT_LINE.match(line) for line in tail.split("\n")]
+    if len(ms) != len(labels) or not all(ms) or [m.group(1) for m in ms] != labels:
+        return None
+    texts = [m.group(2) for m in ms]
+    if all(t[:1].isdigit() for t in texts):
+        return None
+    free = [i for i, t in enumerate(texts) if not t.lower().startswith("none of the above")]
+    pinned = [i for i in range(len(texts)) if i not in free]
+    perm = rng.sample(free, len(free)) + pinned          # new position i shows old option perm[i]
+    body = "\n".join(f"{L}) {texts[j]}" for L, j in zip(labels, perm))
+    return head + sep + body, [target[j] for j in perm], (perm.index(gold) if gold is not None else None)
+
+
 def build_examples(item: dict, *, final: str, subq: str, subq_target: str, lambda_sub: float,
-                   rng: random.Random, rationale_lm: bool = False, lambda_lm: float = 1.0) -> list[Example]:
+                   rng: random.Random, rationale_lm: bool = False, lambda_lm: float = 1.0,
+                   permute_final: float = 0.0) -> list[Example]:
     """Turn one student-data record into training examples for a given arm.
 
     final: "none" | "teacher" (teacher answer distribution) | "gold" (one-hot gold)
@@ -60,19 +86,27 @@ def build_examples(item: dict, *, final: str, subq: str, subq_target: str, lambd
                  falling back to the CoT answer, then the fresh one, when no truth is available) |
                  "commit" (the teacher's value-commitment confidence where the CoT settled the node)
     rationale_lm: add a token-level LM example on the teacher's reasoning and answer (DHRD-style baseline)
+    permute_final: probability of showing the final question with its options in a new random order (the
+                   target follows the option texts), so the student cannot lean on letter positions
     """
     ex: list[Example] = []
     labels = item["labels"]
     gold = labels.index(item["gold_label"]) if item.get("gold_label") in labels else None
+    target = None
     if final == "teacher" and item.get("teacher"):
         t = [item["teacher"].get(L, 0.0) for L in labels]
         s = sum(t)
         if s > 0:
-            ex.append(Example(FINAL_TEMPLATE.format(problem=item["prompt"]), labels, [x / s for x in t], 1.0,
-                              "final", item["item_id"], gold))
+            target = [x / s for x in t]
     elif final == "gold" and gold is not None:
-        ex.append(Example(FINAL_TEMPLATE.format(problem=item["prompt"]), labels,
-                          [1.0 if i == gold else 0.0 for i in range(len(labels))], 1.0, "final", item["item_id"], gold))
+        target = [1.0 if i == gold else 0.0 for i in range(len(labels))]
+    if target is not None:
+        prompt, fgold = item["prompt"], gold
+        if permute_final > 0 and rng.random() < permute_final:
+            shuffled = permute_options(prompt, labels, target, gold, rng)
+            if shuffled:
+                prompt, target, fgold = shuffled
+        ex.append(Example(FINAL_TEMPLATE.format(problem=prompt), labels, target, 1.0, "final", item["item_id"], fgold))
     if subq == "mix":            # same number of sub-questions as "cot": half CoT nodes, half matched controls
         cot = [dict(sq, _kind="cot") for sq in item.get("subqs", [])]
         ctl = [dict(sq, _kind="random") for sq in item.get("random_subqs", [])]
@@ -196,6 +230,15 @@ def kl_loss(logits: list[torch.Tensor], batch: list[Example]) -> torch.Tensor:
     for z, e in zip(logits, batch):
         t = torch.tensor(e.target, device=z.device)
         tot = tot + e.weight * -(t * F.log_softmax(z, -1)).sum()
+    return tot / len(batch)
+
+
+def brier_loss(logits: list[torch.Tensor], batch: list[Example]) -> torch.Tensor:
+    """Weighted Brier score of the readout against the soft target (a proper scoring rule, minimised at p = t)."""
+    tot = 0.0
+    for z, e in zip(logits, batch):
+        t = torch.tensor(e.target, device=z.device)
+        tot = tot + e.weight * ((F.softmax(z, -1) - t) ** 2).sum()
     return tot / len(batch)
 
 

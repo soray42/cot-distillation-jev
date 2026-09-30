@@ -22,8 +22,8 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from cotdistill.student import (Example, build_examples, evaluate, evaluate_subq, kl_loss,  # noqa: E402
-                                label_logits, lm_loss, load_model)
+from cotdistill.student import (Example, brier_loss, build_examples, evaluate, evaluate_subq,  # noqa: E402
+                                kl_loss, label_logits, lm_loss, load_model)
 
 
 def read_jsonl(p: str) -> list[dict]:
@@ -42,6 +42,9 @@ def main() -> None:
     ap.add_argument("--rationale-lm", action="store_true", help="DHRD-style baseline: LM loss on teacher CoT + answer")
     ap.add_argument("--lambda-lm", type=float, default=1.0)
     ap.add_argument("--lm-max-len", type=int, default=3072)
+    ap.add_argument("--lambda-brier", type=float, default=0.0, help="add this x Brier score (vs the soft target)")
+    ap.add_argument("--permute-final", type=float, default=0.0,
+                    help="probability of reordering a final question's options each epoch (target follows the texts)")
     ap.add_argument("--epochs", type=float, default=2.0)
     ap.add_argument("--lr", type=float, default=1e-5)
     ap.add_argument("--warmup", type=float, default=0.05)
@@ -90,7 +93,7 @@ def main() -> None:
         for it in train_items:
             ex += build_examples(it, final=args.final, subq=args.subq, subq_target=args.subq_target,
                                  lambda_sub=args.lambda_sub, rng=rng, rationale_lm=args.rationale_lm,
-                                 lambda_lm=args.lambda_lm)
+                                 lambda_lm=args.lambda_lm, permute_final=args.permute_final)
         rng.shuffle(ex)
         return ex
 
@@ -114,7 +117,12 @@ def main() -> None:
         cls = [e for e in batch if e.kind != "lm"]
         lms = [e for e in batch if e.kind == "lm"]
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
-            total = kl_loss(label_logits(model, tok, cls, args.max_len, cache), cls) * len(cls) if cls else 0.0
+            total = 0.0
+            if cls:
+                z = label_logits(model, tok, cls, args.max_len, cache)
+                total = kl_loss(z, cls) * len(cls)
+                if args.lambda_brier:
+                    total = total + args.lambda_brier * brier_loss(z, cls) * len(cls)
             if lms:
                 total = total + lm_loss(model, tok, lms, args.lm_max_len)
             loss = total / len(batch) / args.grad_accum

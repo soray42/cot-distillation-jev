@@ -138,3 +138,57 @@ class TestStudent(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(HAVE, "needs torch")
+class TestPermuteAndBrier(unittest.TestCase):
+    PROMPT = "Who is lying?\nOptions:\nA) Ann\nB) Bob\nC) Cy\nD) None of the above"
+
+    def test_target_and_gold_follow_texts(self):
+        import random as _r
+        from cotdistill.student import permute_options
+        labels, target = ["A", "B", "C", "D"], [0.1, 0.7, 0.2, 0.0]
+        for seed in range(20):
+            out = permute_options(self.PROMPT, labels, target, 1, _r.Random(seed))
+            self.assertIsNotNone(out)
+            prompt, t, g = out
+            lines = prompt.split("\nOptions:\n")[1].split("\n")
+            text_of = {l[0]: l[3:] for l in lines}
+            self.assertEqual(text_of[labels[g]], "Bob")                         # gold follows its text
+            self.assertAlmostEqual(t[labels.index(next(L for L in labels if text_of[L] == "Bob"))], 0.7)
+            self.assertEqual(text_of["D"], "None of the above")                 # pinned last
+            self.assertAlmostEqual(sum(t), 1.0)
+
+    def test_skips_malformed_and_ordered(self):
+        import random as _r
+        from cotdistill.student import permute_options
+        self.assertIsNone(permute_options("no options here", ["A", "B"], [0.5, 0.5], 0, _r.Random(0)))
+        scale = "Rate it.\nOptions:\nA) 1 - poor\nB) 2 - fair\nC) 3 - good"
+        self.assertIsNone(permute_options(scale, ["A", "B", "C"], [0.2, 0.3, 0.5], 2, _r.Random(0)))
+
+    def test_build_examples_permutes_final(self):
+        import random as _r
+        from cotdistill.student import build_examples
+        item = {"item_id": "x", "prompt": self.PROMPT, "labels": ["A", "B", "C", "D"], "gold_label": "B",
+                "teacher": {"A": 0.1, "B": 0.7, "C": 0.2, "D": 0.0}, "subqs": [], "random_subqs": []}
+        moved = 0
+        for seed in range(10):
+            ex = build_examples(item, final="teacher", subq="none", subq_target="cot", lambda_sub=1.0,
+                                rng=_r.Random(seed), permute_final=1.0)[0]
+            lines = ex.text.split("\nOptions:\n")[1].split("\n\nAnswer:")[0].split("\n")
+            self.assertEqual(lines[ex.gold][3:], "Bob")
+            self.assertAlmostEqual(ex.target[ex.gold], 0.7)
+            moved += ex.gold != 1
+        self.assertGreater(moved, 0)
+
+    def test_brier_zero_at_target_and_positive_otherwise(self):
+        from cotdistill.student import Example, brier_loss
+        t = [0.2, 0.8]
+        e = Example("q", ["A", "B"], t, 1.0, "final", "x")
+        z_exact = torch.log(torch.tensor(t))
+        self.assertAlmostEqual(brier_loss([z_exact], [e]).item(), 0.0, places=6)
+        z = torch.tensor([2.0, -1.0], requires_grad=True)
+        b = brier_loss([z], [e])
+        b.backward()
+        self.assertGreater(b.item(), 0.0)
+        self.assertTrue(torch.isfinite(z.grad).all())
