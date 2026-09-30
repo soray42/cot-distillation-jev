@@ -12,6 +12,7 @@ import argparse
 import collections
 import json
 import random
+import re
 import sys
 from pathlib import Path
 
@@ -22,7 +23,9 @@ from cotdistill.metrics import calibration  # noqa: E402
 
 EVAL_FILES = {"val": None, "kk": "data/eval/kk_heldout.jsonl", "jl": "data/eval/jl_heldout.jsonl",
               "jevbench": "data/eval/jevbench_public.jsonl", "td": "data/eval/typed_decisions_test.jsonl",
-              "bbeh": "data/eval/bbeh.jsonl"}
+              "bbeh": "data/eval/bbeh.jsonl", "bbh": "data/eval/bbh.jsonl", "musr": "data/eval/musr.jsonl",
+              "policy": "data/eval/policy_heldout.jsonl", "sharc": "data/eval/sharc_dev.jsonl",
+              "folio": "data/eval/folio_val.jsonl"}
 
 
 def short(run: str) -> str:
@@ -61,10 +64,12 @@ def main() -> None:
     ap.add_argument("--runs-dir", default="results/runs")
     ap.add_argument("--ref", default="A2", help="short run name to compare against (e.g. A2, base)")
     ap.add_argument("--val", default="data/student_tree/val.jsonl", help="records for the val set")
+    ap.add_argument("--match", default=None, help="regex: only runs whose directory name matches")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
     rd = ROOT / args.runs_dir
-    runs = sorted(p.name for p in rd.iterdir() if p.is_dir() and any(p.glob("preds_*.jsonl")))
+    runs = sorted(p.name for p in rd.iterdir() if p.is_dir() and any(p.glob("preds_*.jsonl"))
+                  and (not args.match or re.search(args.match, p.name)))
     report = {}
     for es, path in EVAL_FILES.items():
         path = args.val if es == "val" else path
