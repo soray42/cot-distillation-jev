@@ -25,6 +25,11 @@ from cotdistill.policygen import HELDOUT_DOMAINS, TRAIN_DOMAINS, generate  # noq
 from cotdistill.teacher import run_item, solve  # noqa: E402
 
 
+def result_name(rec: dict) -> str:
+    """Result file for an item; ids such as "case_001/action" contain "/" and must not become paths."""
+    return rec["item_id"].replace("/", "__") + ".json"
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=50)
@@ -61,7 +66,7 @@ def main() -> None:
         client = OpenRouter(model=args.model, provider=args.provider, log_path=str(out / "calls.jsonl"))
     else:
         client = DeepSeek(model=args.model, log_path=str(out / "calls.jsonl"))
-    todo = [r for r in recs if not (out / f"{r['item_id']}.json").exists()]
+    todo = [r for r in recs if not (out / result_name(r)).exists()]
     print(f"{len(recs)} items, {len(todo)} to run, k={args.k}, model={args.model}")
 
     def work(rec: dict) -> str:
@@ -79,19 +84,25 @@ def main() -> None:
             res = run_item(client, rec, k=args.k, seed=args.seed, effort=args.effort,
                            random_matched=not args.no_random, temperature=args.temperature, permute=args.permute,
                            efforts=args.efforts.split(",") if args.efforts else None)
-        (out / f"{rec['item_id']}.json").write_text(json.dumps(res))
+        (out / result_name(rec)).write_text(json.dumps(res))
         return f"{rec['item_id']}: ok, {len(res['subquestions'])} sub-questions"
 
-    done = 0
+    done, streak = 0, 0
     with ThreadPoolExecutor(max_workers=args.workers) as ex:
         futs = {ex.submit(work, r): r for r in todo}
         for fu in as_completed(futs):
             done += 1
             try:
                 msg = fu.result()
-            except Exception:
-                msg = f"{futs[fu]['item_id']}: ERROR\n{traceback.format_exc(limit=2)}"
+                streak = 0
+            except Exception as e:
+                streak += 1
+                msg = f"{futs[fu]['item_id']}: ERROR {type(e).__name__}: {str(e)[:200]}\n{traceback.format_exc(limit=2)}"
             print(f"[{done}/{len(todo)}] ${client.spent_usd:.4f} {msg}", flush=True)
+            if streak >= 20:             # e.g. balance exhausted or results unwritable: stop spending
+                print("20 consecutive errors; cancelling the remaining items", flush=True)
+                ex.shutdown(wait=True, cancel_futures=True)
+                break
     print(f"done: {client.n_calls} calls, ${client.spent_usd:.4f}")
 
 
