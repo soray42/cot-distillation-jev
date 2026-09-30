@@ -165,13 +165,17 @@ def collate(tokenizer, batch: list[Example], max_len: int, device) -> dict:
             "last": torch.tensor([len(x) - 1 for x in enc], device=device)}
 
 
-def label_logits(model, tokenizer, batch: list[Example], max_len: int, label_ids_cache: dict) -> list[torch.Tensor]:
-    """Logits over each example's option letters at the readout position."""
+def label_logits(model, tokenizer, batch: list[Example], max_len: int, label_ids_cache: dict,
+                 hidden_out: list | None = None) -> list[torch.Tensor]:
+    """Logits over each example's option letters at the readout position (optionally also appends each
+    example's readout hidden state, detached, to hidden_out)."""
     body, head = text_parts(model)
     dev = head.weight.device
     b = collate(tokenizer, batch, max_len, dev)
     hidden = body(input_ids=b["input_ids"], attention_mask=b["attention_mask"]).last_hidden_state
     h = hidden[torch.arange(hidden.shape[0], device=dev), b["last"]]
+    if hidden_out is not None:
+        hidden_out.extend(h.detach().float().cpu())
     out = []
     for i, e in enumerate(batch):
         key = tuple(e.labels)
@@ -255,23 +259,30 @@ def load_model(path: str, dtype):
 
 
 @torch.no_grad()
-def evaluate(model, tok, items: list[dict], max_len: int, bs: int, cache: dict) -> tuple[dict, list[dict]]:
+def evaluate(model, tok, items: list[dict], max_len: int, bs: int, cache: dict,
+             hidden: list | None = None) -> tuple[dict, list[dict]]:
     """Final-question predictions for eval records (prompt, labels, gold_label; optional gold_probs, group).
 
-    Items are batched by length to limit padding; predictions come back in input order."""
+    Items are batched by length to limit padding; predictions come back in input order. If `hidden` is a list,
+    it receives each item's readout hidden state (float32, CPU), also in input order."""
     was_training = model.training
     model.eval()
     dev = next(model.parameters()).device
     order = sorted(range(len(items)), key=lambda i: len(items[i]["prompt"]))
-    probs_by = {}
+    probs_by, hid_by = {}, {}
     for s in range(0, len(order), bs):
         idx = order[s:s + bs]
         batch = [Example(FINAL_TEMPLATE.format(problem=items[i]["prompt"]), items[i]["labels"],
                          [0.0] * len(items[i]["labels"]), 1.0, "final", items[i]["item_id"]) for i in idx]
+        hs = [] if hidden is not None else None
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev.type == "cuda"):
-            zs = label_logits(model, tok, batch, max_len, cache)
-        for i, z in zip(idx, zs):
+            zs = label_logits(model, tok, batch, max_len, cache, hidden_out=hs)
+        for j, (i, z) in enumerate(zip(idx, zs)):
             probs_by[i] = torch.softmax(z, -1).tolist()
+            if hs is not None:
+                hid_by[i] = hs[j]
+    if hidden is not None:
+        hidden.extend(hid_by[i] for i in range(len(items)))
     probs, gold, preds = [], [], []
     for i, it in enumerate(items):
         p = probs_by[i]

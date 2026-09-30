@@ -57,6 +57,8 @@ def main() -> None:
     ap.add_argument("--eval-bs", type=int, default=8)
     ap.add_argument("--eval-max-len", type=int, default=6144, help="long eval states (JevBench hard) need more room")
     ap.add_argument("--save", action="store_true", help="save the final weights (bf16) to <out>/model")
+    ap.add_argument("--dump-hidden", default="", help="comma list of eval-set names whose readout hidden states "
+                    "to save as hidden_<name>.pt (float16, preds order)")
     ap.add_argument("--eval-subq", default=None, help="student data file (e.g. val.jsonl) whose sub-questions to score")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", required=True)
@@ -146,7 +148,10 @@ def main() -> None:
 
     results = {"args": vars(args), "history": history, "eval": {}}
     for name, items in evals.items():
-        m, preds = evaluate(model, tok, items, args.eval_max_len, args.eval_bs, cache)
+        hid = [] if name in args.dump_hidden.split(",") else None
+        m, preds = evaluate(model, tok, items, args.eval_max_len, args.eval_bs, cache, hidden=hid)
+        if hid is not None:
+            torch.save(torch.stack(hid).half(), out / f"hidden_{name}.pt")
         results["eval"][name] = m
         with open(out / f"preds_{name}.jsonl", "w") as f:
             for p in preds:

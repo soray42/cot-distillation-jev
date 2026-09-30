@@ -192,3 +192,21 @@ class TestPermuteAndBrier(unittest.TestCase):
         b.backward()
         self.assertGreater(b.item(), 0.0)
         self.assertTrue(torch.isfinite(z.grad).all())
+
+
+@unittest.skipUnless(HAVE, "needs torch")
+class TestHiddenDump(unittest.TestCase):
+    def test_hidden_in_input_order_and_preds_unchanged(self):
+        from cotdistill.student import evaluate
+        tok, model = tiny()
+        items = [{"item_id": f"i{k}", "prompt": "x " * (k * 7 % 11 + 1) + "\nOptions:\nA) a\nB) b",
+                  "labels": ["A", "B"], "gold_label": "A"} for k in range(7)]
+        m0, p0 = evaluate(model, tok, items, 256, 3, {})
+        hid = []
+        m1, p1 = evaluate(model, tok, items, 256, 3, {}, hidden=hid)
+        self.assertEqual([p["probs"] for p in p0], [p["probs"] for p in p1])
+        self.assertEqual(len(hid), len(items))
+        for k in (0, 4):                         # each row is that item's own readout state
+            one = []
+            evaluate(model, tok, [items[k]], 256, 1, {}, hidden=one)
+            self.assertTrue(torch.allclose(one[0], hid[k], atol=1e-4))

@@ -27,6 +27,8 @@ def main() -> None:
     ap.add_argument("--max-len", type=int, default=6144)
     ap.add_argument("--bs", type=int, default=8)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--dump-hidden", default="", help="comma list of eval-set names whose readout hidden states "
+                    "to save as hidden_<name>.pt (float16, preds order)")
     ap.add_argument("--eval-subq", default=None, help="student data file whose sub-questions to score")
     args = ap.parse_args()
 
@@ -42,7 +44,10 @@ def main() -> None:
     for kv in args.eval:
         name, path = kv.split("=", 1)
         items = [json.loads(l) for l in open(path) if l.strip()]
-        m, preds = evaluate(model, tok, items, args.max_len, args.bs, cache)
+        hid = [] if name in args.dump_hidden.split(",") else None
+        m, preds = evaluate(model, tok, items, args.max_len, args.bs, cache, hidden=hid)
+        if hid is not None:
+            torch.save(torch.stack(hid).half(), out / f"hidden_{name}.pt")
         results["eval"][name] = m
         with open(out / f"preds_{name}.jsonl", "w") as f:
             for p in preds:

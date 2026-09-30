@@ -60,7 +60,8 @@ def _consistent(stmts: dict[str, tuple], roles: dict[str, bool]) -> int:
 
 
 def knights_knaves(n: int, seed: int = 0, people_range: tuple[int, int] = (8, 10), p_compound: float = 0.7,
-                   n_options: int = 6, max_tries: int = 5000, question: str = "assignment") -> list[dict]:
+                   n_options: int = 6, max_tries: int = 5000, question: str = "assignment",
+                   names: list[str] | None = None) -> list[dict]:
     """question="assignment": choose the full role assignment (solution + near-miss distractors).
     question="count": how many inhabitants are knights (options 0..k) - no option can be checked
     against the statements without solving the whole puzzle."""
@@ -68,7 +69,7 @@ def knights_knaves(n: int, seed: int = 0, people_range: tuple[int, int] = (8, 10
     out = []
     while len(out) < n:
         k = rng.randint(*people_range)
-        people = rng.sample(NAMES, k)
+        people = rng.sample(names or NAMES, k)
         for _ in range(max_tries):
             truth = {p: rng.random() < 0.5 for p in people}
             stmts = {}
