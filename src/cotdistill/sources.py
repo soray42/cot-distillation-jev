@@ -4,6 +4,10 @@
   lie) with a unique solution; Choice over full role assignments (the solution plus near-miss
   distractors). Per-person roles are program-verifiable predicates.
 - justlogic: JustLogic (MIT) items as True / False / Uncertain choices, with their depth.
+- sharc: ShARC (CC BY-SA 3.0) rule-application utterances (real government policy text, a user scenario and
+  earlier follow-ups) as Yes / No / Irrelevant / More-information choices. Its evidence follow-ups (human
+  question-answer pairs about the conditions) are kept as predicates.
+- folio: FOLIO v2 (CC BY-SA 4.0 via tasksource) first-order-logic stories as True / False / Uncertain choices.
 """
 from __future__ import annotations
 
@@ -229,4 +233,84 @@ def justlogic(path: str, n: int | None = None, seed: int = 0, min_depth: int = 1
                     "label_order": order, "gold_label": chr(65 + order.index(gold)), "depth": int(r["depth"]),
                     "n_rules": int(r["depth"]), "path": [], "predicates": [], "prompt": prompt,
                     "options": dict(JL_OPTIONS), "meta": {"arg": r["arg"], "statements": statements}})
+    return out
+
+
+# ---------------------------------------------------------------- ShARC
+SHARC_OPTIONS = {"yes": "Yes", "no": "No", "irrelevant": "The rule does not apply to this question",
+                 "more": "More information is needed before answering"}
+
+
+def _sharc_label(answer: str) -> str:
+    a = answer.strip().lower()
+    return a if a in ("yes", "no", "irrelevant") else "more"
+
+
+def sharc(path: str, n: int | None = None, seed: int = 0, min_evidence: int = 2) -> list[dict]:
+    """ShARC utterances needing at least `min_evidence` follow-ups (history + evidence; not required for the
+    "does not apply" class), at most one per (rule, user question, answer class), classes balanced."""
+    rows = json.load(open(path))
+    rng = random.Random(seed)
+    rng.shuffle(rows)
+    seen, by_cls = set(), {k: [] for k in SHARC_OPTIONS}
+    for r in rows:
+        lab = _sharc_label(r["answer"])
+        key = (r["tree_id"], r["question"].strip().lower(), lab)
+        need = 0 if lab == "irrelevant" else min_evidence    # "does not apply" items carry no follow-ups
+        if len(r.get("evidence") or []) + len(r.get("history") or []) < need or key in seen:
+            continue
+        seen.add(key)
+        by_cls[lab].append(r)
+    per = (n // len(SHARC_OPTIONS) + 1) if n else None
+    picked = [r for lab in SHARC_OPTIONS for r in (by_cls[lab][:per] if per else by_cls[lab])]
+    rng.shuffle(picked)
+    out = []
+    for r in picked[:n] if n else picked:
+        gold = _sharc_label(r["answer"])
+        order = list(SHARC_OPTIONS)
+        rng.shuffle(order)
+        hist = "\n".join(f"Q: {h['follow_up_question']}\nA: {h['follow_up_answer']}" for h in r.get("history") or [])
+        opt_txt = "\n".join(f"{chr(65 + i)}) {SHARC_OPTIONS[k]}" for i, k in enumerate(order))
+        prompt = (f"Rule text:\n{r['snippet'].strip()}\n\n"
+                  + (f"User scenario: {r['scenario'].strip()}\n\n" if r.get("scenario") else "")
+                  + (f"Earlier follow-up questions and answers:\n{hist}\n\n" if hist else "")
+                  + f"User question: {r['question'].strip()}\n\n"
+                  "Question: Based only on the rule text, the scenario and the earlier answers, how should the user's "
+                  f"question be answered?\nOptions:\n{opt_txt}")
+        preds = [{"pid": f"ev{i}", "question": e["follow_up_question"], "truth": e["follow_up_answer"].strip().lower() == "yes",
+                  "kind": "evidence"} for i, e in enumerate(r.get("evidence") or [])
+                 if e.get("follow_up_answer", "").strip().lower() in ("yes", "no")]
+        out.append({"item_id": f"sharc-{r['utterance_id'][:12]}", "domain": "sharc", "hidden": None, "gold": gold,
+                    "label_order": order, "gold_label": chr(65 + order.index(gold)),
+                    "depth": len(r.get("evidence") or []), "n_rules": len(r.get("evidence") or []), "path": preds,
+                    "predicates": preds, "prompt": prompt, "options": dict(SHARC_OPTIONS),
+                    "meta": {"tree_id": r["tree_id"], "source_url": r.get("source_url")}})
+    return out
+
+
+# ---------------------------------------------------------------- FOLIO
+FOLIO_OPTIONS = {"True": "True", "False": "False", "Uncertain": "Uncertain"}
+
+
+def folio(path: str, n: int | None = None, seed: int = 0) -> list[dict]:
+    rows = [json.loads(l) for l in open(path) if l.strip()]
+    rng = random.Random(seed)
+    rng.shuffle(rows)
+    out = []
+    for r in rows[:n] if n else rows:
+        gold = r["label"]
+        if gold not in FOLIO_OPTIONS:
+            continue
+        order = list(FOLIO_OPTIONS)
+        rng.shuffle(order)
+        opt_txt = "\n".join(f"{chr(65 + i)}) {FOLIO_OPTIONS[k]}" for i, k in enumerate(order))
+        prem = r["premises"].strip()
+        prompt = ("Read the premises and judge the conclusion using only the premises and valid logical reasoning.\n\n"
+                  f"Premises:\n{prem}\n\nStatement: {r['conclusion'].strip()}\n\n"
+                  f"Question: Is the statement true, false, or uncertain given the premises?\nOptions:\n{opt_txt}")
+        out.append({"item_id": f"folio-{r['example_id']}", "domain": "folio", "hidden": None, "gold": gold,
+                    "label_order": order, "gold_label": chr(65 + order.index(gold)),
+                    "depth": len([x for x in prem.splitlines() if x.strip()]), "n_rules": 0, "path": [],
+                    "predicates": [], "prompt": prompt, "options": dict(FOLIO_OPTIONS),
+                    "meta": {"story_id": r.get("story_id")}})
     return out

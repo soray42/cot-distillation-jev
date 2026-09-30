@@ -15,6 +15,9 @@ for t in boolean_expressions disambiguation_qa geometric_shapes hyperbaton movie
          shuffled_objects boardgame_qa causal_understanding zebra_puzzles; do
   get $BB/bbeh_$t/task.json data/raw/bbeh/$t.json
 done
+get https://sharc-data.github.io/data/sharc1-official.zip data/raw/sharc/sharc1-official.zip       # CC BY-SA 3.0
+(cd data/raw/sharc && python3 -c "import zipfile; z=zipfile.ZipFile('sharc1-official.zip'); [open(n.split('/')[-1],'wb').write(z.read(n)) for n in ('sharc1-official/json/sharc_train.json','sharc1-official/json/sharc_dev.json')]")
+for f in folio_v2_train.jsonl folio_v2_validation.jsonl; do get $HF/tasksource/folio/resolve/main/$f data/raw/folio/$f; done  # CC BY-SA 4.0
 sha256sum -c <<'SUMS'
 e2df49c6f8a8da22173afe6ea291e20de053983a3c2ac54b97b6419e6df26226  data/raw/justlogic/train_dataset.csv
 6dd4d1e13ccd58d356e9cbda9c984ad6062e333630cd70364566d585b466ca96  data/raw/justlogic/validate_dataset.csv
