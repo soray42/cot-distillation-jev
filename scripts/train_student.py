@@ -22,8 +22,8 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from cotdistill.student import (Example, brier_loss, build_examples, evaluate, evaluate_subq,  # noqa: E402
-                                kl_loss, label_logits, lm_loss, load_model)
+from cotdistill.student import (Example, brier_loss, build_examples, build_stage_examples, evaluate,  # noqa: E402
+                                evaluate_subq, kl_loss, label_logits, lm_loss, load_model)
 
 
 def read_jsonl(p: str) -> list[dict]:
@@ -45,6 +45,10 @@ def main() -> None:
     ap.add_argument("--subq-k", type=int, default=0, help="at most K random sub-questions per item and epoch (0 = all)")
     ap.add_argument("--subq-weight", default="split", choices=["split", "each"],
                     help="split: lambda-sub shared by an item's sub-questions; each: every sub-question weighs lambda-sub")
+    ap.add_argument("--depth-stages", type=int, default=0,
+                    help="depth curriculum: N sub-question stages ordered by tree depth (each 1 pass over the items, "
+                         "--stage-k nodes per item), then the final questions for --epochs; 0 = off")
+    ap.add_argument("--stage-k", type=int, default=1, help="sub-questions per item in each depth stage")
     ap.add_argument("--lambda-brier", type=float, default=0.0, help="add this x Brier score (vs the soft target)")
     ap.add_argument("--permute-final", type=float, default=0.0,
                     help="probability of reordering a final question's options each epoch (target follows the texts)")
@@ -103,52 +107,80 @@ def main() -> None:
         rng.shuffle(ex)
         return ex
 
-    n_per_epoch = len(epoch_examples())
-    total_steps = max(1, math.ceil(args.epochs * n_per_epoch / (args.micro_bs * args.grad_accum)))
-    warm = max(1, int(args.warmup * total_steps))
-    sched = torch.optim.lr_scheduler.LambdaLR(
-        opt, lambda s: min(1.0, (s + 1) / warm) * 0.5 * (1 + math.cos(math.pi * min(1.0, s / total_steps))))
-    print(f"examples/epoch={n_per_epoch} steps={total_steps} params={sum(p.numel() for p in params)/1e9:.2f}B "
+    def stage_examples(stage: int):
+        def make() -> list[Example]:
+            ex = []
+            for it in train_items:
+                ex += build_stage_examples(it, stage=stage, n_stages=args.depth_stages, k=args.stage_k, rng=rng,
+                                           subq_target=args.subq_target)
+            rng.shuffle(ex)
+            return ex
+        return make
+
+    per_step = args.micro_bs * args.grad_accum
+    if args.depth_stages:            # sub-question stages by depth, then the final questions, each with its own schedule
+        stages = [(f"depth{s}", stage_examples(s), 1.0) for s in range(args.depth_stages)]
+        def final_examples() -> list[Example]:
+            ex = [e for it in train_items for e in build_examples(
+                it, final=args.final, subq="none", subq_target=args.subq_target, lambda_sub=args.lambda_sub, rng=rng,
+                permute_final=args.permute_final)]
+            rng.shuffle(ex)
+            return ex
+        stages.append(("final", final_examples, args.epochs))
+    else:
+        stages = [("all", epoch_examples, args.epochs)]
+    plan = []
+    for name, make, epochs in stages:
+        n = len(make())
+        plan.append((name, make, n, max(1, math.ceil(epochs * n / per_step))))
+        print(f"stage {name}: {n} examples per pass, {plan[-1][3]} steps", flush=True)
+    total_steps = sum(x[3] for x in plan)
+    print(f"examples/epoch={plan[-1][2]} steps={total_steps} params={sum(p.numel() for p in params)/1e9:.2f}B "
           f"device={dev}", flush=True)
 
     cache: dict = {}
     step, micro, t0, seen_tok = 0, 0, time.time(), 0
     history = []
-    ex_iter: list[Example] = []
     model.train()
-    while step < total_steps:
-        if len(ex_iter) < args.micro_bs:
-            ex_iter += epoch_examples()
-        batch, ex_iter = ex_iter[:args.micro_bs], ex_iter[args.micro_bs:]
-        cls = [e for e in batch if e.kind != "lm"]
-        lms = [e for e in batch if e.kind == "lm"]
-        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
-            total = 0.0
-            if cls:
-                z = label_logits(model, tok, cls, args.max_len, cache)
-                total = kl_loss(z, cls) * len(cls)
-                if args.lambda_brier:
-                    total = total + args.lambda_brier * brier_loss(z, cls) * len(cls)
-            if lms:
-                total = total + lm_loss(model, tok, lms, args.lm_max_len)
-            loss = total / len(batch) / args.grad_accum
-        loss.backward()
-        seen_tok += sum(min(args.max_len, len(e.text) // 3) for e in cls) + \
-            sum(min(args.lm_max_len, (len(e.text) + len(e.continuation)) // 3) for e in lms)  # rough count
-        micro += 1
-        if micro % args.grad_accum == 0:
-            torch.nn.utils.clip_grad_norm_(params, 1.0)
-            opt.step()
-            sched.step()
-            opt.zero_grad(set_to_none=True)
-            step += 1
-            if step % args.log_every == 0 or step == total_steps:
-                dt = time.time() - t0
-                mem = torch.cuda.max_memory_allocated() / 2**30 if dev == "cuda" else 0.0
-                row = {"step": step, "loss": loss.item() * args.grad_accum, "lr": sched.get_last_lr()[0],
-                       "s_per_step": dt / step, "approx_tok_per_s": seen_tok / dt, "peak_gib": mem}
-                history.append(row)
-                print(json.dumps(row), flush=True)
+    for name, make, _, stage_steps in plan:
+        warm = max(1, int(args.warmup * stage_steps))
+        sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s, w=warm, t=stage_steps: min(1.0, (s + 1) / w) * 0.5 * (
+            1 + math.cos(math.pi * min(1.0, s / t))))
+        ex_iter: list[Example] = []
+        end = step + stage_steps
+        while step < end:
+            if len(ex_iter) < args.micro_bs:
+                ex_iter += make()
+            batch, ex_iter = ex_iter[:args.micro_bs], ex_iter[args.micro_bs:]
+            cls = [e for e in batch if e.kind != "lm"]
+            lms = [e for e in batch if e.kind == "lm"]
+            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
+                total = 0.0
+                if cls:
+                    z = label_logits(model, tok, cls, args.max_len, cache)
+                    total = kl_loss(z, cls) * len(cls)
+                    if args.lambda_brier:
+                        total = total + args.lambda_brier * brier_loss(z, cls) * len(cls)
+                if lms:
+                    total = total + lm_loss(model, tok, lms, args.lm_max_len)
+                loss = total / len(batch) / args.grad_accum
+            loss.backward()
+            seen_tok += sum(min(args.max_len, len(e.text) // 3) for e in cls) + \
+                sum(min(args.lm_max_len, (len(e.text) + len(e.continuation)) // 3) for e in lms)  # rough count
+            micro += 1
+            if micro % args.grad_accum == 0:
+                torch.nn.utils.clip_grad_norm_(params, 1.0)
+                opt.step()
+                sched.step()
+                opt.zero_grad(set_to_none=True)
+                step += 1
+                if step % args.log_every == 0 or step == total_steps:
+                    dt = time.time() - t0
+                    mem = torch.cuda.max_memory_allocated() / 2**30 if dev == "cuda" else 0.0
+                    row = {"step": step, "loss": loss.item() * args.grad_accum, "lr": sched.get_last_lr()[0],
+                           "s_per_step": dt / step, "approx_tok_per_s": seen_tok / dt, "peak_gib": mem}
+                    history.append(row)
+                    print(json.dumps(row), flush=True)
 
     results = {"args": vars(args), "history": history, "eval": {}}
     for name, items in evals.items():

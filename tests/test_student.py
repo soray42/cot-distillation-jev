@@ -230,3 +230,57 @@ class TestSubqSampling(unittest.TestCase):
         self.assertTrue(all(abs(e.weight - 0.5) < 1e-9 for e in k_each))
         ctl = [e for e in build_examples(item, subq="random", subq_k=2, subq_weight="each", **kw) if e.kind == "subq"]
         self.assertEqual(len(ctl), 2)                       # the control arm is sampled the same way
+
+
+@unittest.skipUnless(HAVE, "needs torch")
+class TestDepthCurriculum(unittest.TestCase):
+    NODES = [{"id": "n1", "question": "a?", "p_cot": 0.9, "depends_on": []},
+             {"id": "n2", "question": "b?", "p_cot": 0.2, "depends_on": []},
+             {"id": "n3", "question": "c?", "p_cot": 0.8, "depends_on": ["n1"]},
+             {"id": "n4", "question": "d?", "p_cot": 0.7, "depends_on": ["n3", "n2"]},
+             {"id": "n5", "question": "e?", "p_cot": 0.6, "depends_on": ["n4", "zz"]}]
+
+    def test_node_depths(self):
+        from cotdistill.student import node_depths
+        self.assertEqual(node_depths(self.NODES), {"n1": 0, "n2": 0, "n3": 1, "n4": 2, "n5": 3})
+        cyc = [{"id": "a", "depends_on": ["b"]}, {"id": "b", "depends_on": ["a"]}]
+        self.assertTrue(all(isinstance(v, int) for v in node_depths(cyc).values()))
+
+    def test_stages_cover_levels_in_order(self):
+        import random as _r
+        from cotdistill.student import build_stage_examples
+        item = {"item_id": "x", "prompt": "P", "subqs": self.NODES}
+        level = {"a?": 0, "b?": 0, "c?": 1, "d?": 2, "e?": 3}
+        seen = []
+        for s in range(4):                       # 4 levels, 4 stages: stage s may use levels <= s
+            qs = set()
+            for seed in range(200):
+                for e in build_stage_examples(item, stage=s, n_stages=4, k=1, rng=_r.Random(seed)):
+                    qs.add(e.text.split("Intermediate question: ")[1].split("\n")[0])
+            self.assertLessEqual(max(level[q] for q in qs), s)
+            self.assertIn(s, {level[q] for q in qs})          # the new level is actually drawn
+            seen.append(qs)
+        self.assertEqual(build_stage_examples({"item_id": "y", "prompt": "P", "subqs": []}, stage=0, n_stages=4, k=1,
+                                              rng=_r.Random(0)), [])
+
+    def test_train_script_runs_stages_on_cpu(self):
+        import json as _j
+        import subprocess
+        import tempfile
+        tok, model = tiny()
+        with tempfile.TemporaryDirectory() as d:
+            model.save_pretrained(d + "/m"); tok.save_pretrained(d + "/m")
+            recs = [{"item_id": f"i{j}", "prompt": "Q\nOptions:\nA) x\nB) y", "labels": ["A", "B"], "gold_label": "A",
+                     "teacher": {"A": 0.8, "B": 0.2}, "subqs": self.NODES, "random_subqs": []} for j in range(6)]
+            with open(d + "/t.jsonl", "w") as f:
+                f.write("\n".join(_j.dumps(r) for r in recs))
+            out = subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / "scripts/train_student.py"),
+                                  "--model", d + "/m", "--train", d + "/t.jsonl", "--eval", "v=" + d + "/t.jsonl",
+                                  "--depth-stages", "2", "--epochs", "1", "--micro-bs", "2", "--grad-accum", "1",
+                                  "--max-len", "64", "--precision", "bf16", "--no-grad-ckpt", "--out", d + "/o",
+                                  "--log-every", "1"], capture_output=True, text=True, timeout=600)
+            self.assertEqual(out.returncode, 0, out.stderr[-2000:])
+            self.assertIn("stage depth0: 6 examples per pass, 3 steps", out.stdout)
+            self.assertIn("stage final: 6 examples per pass, 3 steps", out.stdout)
+            self.assertIn("steps=9", out.stdout)
+            self.assertTrue((Path(d) / "o/metrics.json").exists())

@@ -7,6 +7,7 @@ distribution at the last real token, restricted to the option-letter tokens.
 """
 from __future__ import annotations
 
+import math
 import random
 import re
 from dataclasses import dataclass
@@ -144,6 +145,55 @@ def build_examples(item: dict, *, final: str, subq: str, subq_target: str, lambd
         answer = max(item["teacher"], key=item["teacher"].get)
         ex.append(Example(RATIONALE_PREFIX.format(problem=item["prompt"]), labels, [], lambda_lm, "lm",
                           item["item_id"], continuation=f" {item['rationale'].strip()}\n\nAnswer: {answer}"))
+    return ex
+
+
+def node_depths(nodes: list[dict]) -> dict[str, int]:
+    """Depth of each tree node: 0 for nodes that depend on no other node (facts read off the problem), else one
+    more than the deepest node it depends on. Unknown ids and cycles count as depth 0."""
+    by = {n["id"]: n for n in nodes if "id" in n}
+    memo: dict[str, int] = {}
+
+    def depth(i: str, seen: frozenset) -> int:
+        if i in memo:
+            return memo[i]
+        if i in seen or i not in by:
+            return 0
+        deps = [x for x in (by[i].get("depends_on") or []) if x in by]
+        memo[i] = 1 + max(depth(x, seen | {i}) for x in deps) if deps else 0
+        return memo[i]
+    return {i: depth(i, frozenset()) for i in by}
+
+
+def build_stage_examples(item: dict, *, stage: int, n_stages: int, k: int, rng: random.Random,
+                         subq_target: str = "cot", p_new: float = 0.5, weight: float = 1.0) -> list[Example]:
+    """Depth-curriculum sub-questions for one item. Stage s (0-based, of n_stages) covers the item's tree up to
+    level ceil((s+1)(M+1)/n_stages) - 1, where M is the item's deepest level, so every item reaches its own top in
+    the last stage. Each of the k drawn nodes comes from the levels this stage adds with probability p_new, else
+    from all levels covered so far (replay); stages that add no level replay only."""
+    nodes = [sq for sq in item.get("subqs", []) if "id" in sq]
+    if not nodes:
+        return []
+    d = node_depths(nodes)
+    top = max(d.values())
+    hi = math.ceil((stage + 1) * (top + 1) / n_stages) - 1
+    lo = math.ceil(stage * (top + 1) / n_stages) - 1 if stage > 0 else -1      # levels <= lo were covered before
+    covered = [sq for sq in nodes if d[sq["id"]] <= hi]
+    new = [sq for sq in covered if d[sq["id"]] > lo]
+    ex = []
+    for _ in range(k):
+        pool = new if new and rng.random() < p_new else covered
+        sq = rng.choice(pool)
+        p = sq.get("truth") if subq_target == "truth" and sq.get("truth") is not None else None
+        p = (1.0 if p else 0.0) if p is not None else sq.get("p_cot" if subq_target != "fresh" else "p_fresh")
+        if p is None:
+            p = sq.get("p_fresh")
+        if p is None:
+            continue
+        yes_first = rng.random() < 0.5
+        a, b = ("Yes", "No") if yes_first else ("No", "Yes")
+        ex.append(Example(SUBQ_TEMPLATE.format(problem=item["prompt"], question=sq["question"], a=a, b=b), ["A", "B"],
+                          _soft(p, yes_first), weight, "subq", item["item_id"]))
     return ex
 
 

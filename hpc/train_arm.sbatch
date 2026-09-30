@@ -23,7 +23,9 @@
 # downloaded on the login node beforehand; compute nodes have no /userScripts).
 # Arms: A1 gold answer only · A2 teacher answer only · A3 teacher + CoT sub-questions (ours) · A4 teacher +
 # matched control · A5 CoT sub-questions only · A6 teacher + CoT sub-q with truth targets · A7 teacher +
-# LM loss on the teacher's CoT and answer.
+# LM loss on the teacher's CoT and answer · A9 depth curriculum: DSTAGES (default 4) passes over the items, each
+# drawing STAGEK (default 1) CoT nodes per item from the next band of tree depth (half new band, half replay), then
+# the final questions for EPOCHS, with a fresh LR schedule per stage.
 set -euo pipefail
 cd "$HOME/cotd"
 module load cuda/12.4 2>/dev/null || true
@@ -36,8 +38,8 @@ nvidia-smi -L 2>/dev/null || echo "no nvidia-smi here"
 EVALS="val=$DATA/val.jsonl kk=data/eval/kk_heldout.jsonl jl=data/eval/jl_heldout.jsonl jevbench=data/eval/jevbench_public.jsonl td=data/eval/typed_decisions_test.jsonl bbeh=data/eval/bbeh.jsonl ${EXTRA_EVALS:-}"
 for f in $EVALS; do [ -f "${f#*=}" ] || { echo "missing eval file ${f#*=}"; exit 1; }; done
 
-arm_config() {           # sets F S T RLM for arm $1
-  RLM=
+arm_config() {           # sets F S T RLM DS for arm $1
+  RLM=; DS=
   case "$1" in
     A1) F=gold;    S=none;   T=cot ;;
     A2) F=teacher; S=none;   T=cot ;;
@@ -47,6 +49,7 @@ arm_config() {           # sets F S T RLM for arm $1
     A6) F=teacher; S=cot;    T=truth ;;
     A7) F=teacher; S=none;   T=cot; RLM=1 ;;
     A8) F=teacher; S=mix;    T=cot ;;           # half CoT nodes, half matched controls (same count as A3)
+    A9) F=teacher; S=cot;    T=cot; DS=${DSTAGES:-4} ;;  # depth curriculum: CoT nodes by tree depth, then finals
     *) echo "unknown ARM $1"; return 1 ;;
   esac
 }
@@ -59,7 +62,7 @@ train() {                # train <arm> <train.jsonl> <evals> <out> [extra args..
     --lr "${LR:-1e-5}" --max-len 1536 --precision "${PREC:-fp32master}" --optim "${OPTIM:-adamw}" \
     --seed "$SEED" --out "$out" --eval-subq "$DATA/val.jsonl" ${RLM:+--rationale-lm --lm-max-len 3072} \
     ${DUMP:+--dump-hidden "$DUMP,smoke"} ${PERM:+--permute-final "$PERM"} ${BRIER:+--lambda-brier "$BRIER"} \
-    ${SUBQK:+--subq-k "$SUBQK"} ${SUBQW:+--subq-weight "$SUBQW"} "$@"
+    ${SUBQK:+--subq-k "$SUBQK"} ${SUBQW:+--subq-weight "$SUBQW"} ${DS:+--depth-stages "$DS" --stage-k "${STAGEK:-1}"} "$@"
 }
 
 ARMS="${ARMS:-${ARM:-}}"
