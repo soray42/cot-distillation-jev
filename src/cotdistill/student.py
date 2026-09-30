@@ -76,7 +76,7 @@ def permute_options(prompt: str, labels: list[str], target: list[float], gold: i
 
 def build_examples(item: dict, *, final: str, subq: str, subq_target: str, lambda_sub: float,
                    rng: random.Random, rationale_lm: bool = False, lambda_lm: float = 1.0,
-                   permute_final: float = 0.0) -> list[Example]:
+                   permute_final: float = 0.0, subq_k: int = 0, subq_weight: str = "split") -> list[Example]:
     """Turn one student-data record into training examples for a given arm.
 
     final: "none" | "teacher" (teacher answer distribution) | "gold" (one-hot gold)
@@ -88,6 +88,8 @@ def build_examples(item: dict, *, final: str, subq: str, subq_target: str, lambd
     rationale_lm: add a token-level LM example on the teacher's reasoning and answer (DHRD-style baseline)
     permute_final: probability of showing the final question with its options in a new random order (the
                    target follows the option texts), so the student cannot lean on letter positions
+    subq_k: if > 0, use at most this many (randomly drawn) sub-questions per item and epoch
+    subq_weight: "split" (each of the n sub-questions weighs lambda_sub / n) | "each" (each weighs lambda_sub)
     """
     ex: list[Example] = []
     labels = item["labels"]
@@ -130,11 +132,14 @@ def build_examples(item: dict, *, final: str, subq: str, subq_target: str, lambd
             p = sq.get("p_fresh")
         if p is not None:
             usable.append((sq["question"], p))
+    if subq_k > 0 and len(usable) > subq_k:
+        usable = rng.sample(usable, subq_k)
+    w = lambda_sub if subq_weight == "each" else lambda_sub / max(1, len(usable))
     for q, p in usable:
         yes_first = rng.random() < 0.5
         a, b = ("Yes", "No") if yes_first else ("No", "Yes")
         ex.append(Example(SUBQ_TEMPLATE.format(problem=item["prompt"], question=q, a=a, b=b), ["A", "B"],
-                          _soft(p, yes_first), lambda_sub / max(1, len(usable)), "subq", item["item_id"]))
+                          _soft(p, yes_first), w, "subq", item["item_id"]))
     if rationale_lm and item.get("rationale") and item.get("teacher"):
         answer = max(item["teacher"], key=item["teacher"].get)
         ex.append(Example(RATIONALE_PREFIX.format(problem=item["prompt"]), labels, [], lambda_lm, "lm",

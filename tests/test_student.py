@@ -210,3 +210,23 @@ class TestHiddenDump(unittest.TestCase):
             one = []
             evaluate(model, tok, [items[k]], 256, 1, {}, hidden=one)
             self.assertTrue(torch.allclose(one[0], hid[k], atol=1e-4))
+
+
+@unittest.skipUnless(HAVE, "needs torch")
+class TestSubqSampling(unittest.TestCase):
+    def test_k_and_weights(self):
+        import random as _r
+        from cotdistill.student import build_examples
+        item = {"item_id": "x", "prompt": "P\nOptions:\nA) a\nB) b", "labels": ["A", "B"], "gold_label": "A",
+                "teacher": {"A": 0.9, "B": 0.1},
+                "subqs": [{"question": f"q{i}?", "p_cot": 0.8, "p_fresh": 0.6} for i in range(6)],
+                "random_subqs": [{"question": f"r{i}?", "p_fresh": 0.3} for i in range(6)]}
+        kw = dict(final="teacher", subq_target="cot", lambda_sub=0.5, rng=_r.Random(0))
+        all_split = [e for e in build_examples(item, subq="cot", **kw) if e.kind == "subq"]
+        self.assertEqual(len(all_split), 6)
+        self.assertAlmostEqual(sum(e.weight for e in all_split), 0.5)
+        k_each = [e for e in build_examples(item, subq="cot", subq_k=2, subq_weight="each", **kw) if e.kind == "subq"]
+        self.assertEqual(len(k_each), 2)
+        self.assertTrue(all(abs(e.weight - 0.5) < 1e-9 for e in k_each))
+        ctl = [e for e in build_examples(item, subq="random", subq_k=2, subq_weight="each", **kw) if e.kind == "subq"]
+        self.assertEqual(len(ctl), 2)                       # the control arm is sampled the same way

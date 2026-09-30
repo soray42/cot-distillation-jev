@@ -42,6 +42,9 @@ def main() -> None:
     ap.add_argument("--rationale-lm", action="store_true", help="DHRD-style baseline: LM loss on teacher CoT + answer")
     ap.add_argument("--lambda-lm", type=float, default=1.0)
     ap.add_argument("--lm-max-len", type=int, default=3072)
+    ap.add_argument("--subq-k", type=int, default=0, help="at most K random sub-questions per item and epoch (0 = all)")
+    ap.add_argument("--subq-weight", default="split", choices=["split", "each"],
+                    help="split: lambda-sub shared by an item's sub-questions; each: every sub-question weighs lambda-sub")
     ap.add_argument("--lambda-brier", type=float, default=0.0, help="add this x Brier score (vs the soft target)")
     ap.add_argument("--permute-final", type=float, default=0.0,
                     help="probability of reordering a final question's options each epoch (target follows the texts)")
@@ -95,7 +98,8 @@ def main() -> None:
         for it in train_items:
             ex += build_examples(it, final=args.final, subq=args.subq, subq_target=args.subq_target,
                                  lambda_sub=args.lambda_sub, rng=rng, rationale_lm=args.rationale_lm,
-                                 lambda_lm=args.lambda_lm, permute_final=args.permute_final)
+                                 lambda_lm=args.lambda_lm, permute_final=args.permute_final,
+                                 subq_k=args.subq_k, subq_weight=args.subq_weight)
         rng.shuffle(ex)
         return ex
 

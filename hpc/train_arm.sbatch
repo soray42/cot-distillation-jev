@@ -11,7 +11,8 @@
 # From ~/cotd:  ARMS="A2 A3 A4 A1" DATA=data/student_tree EVAL_BASE=1 sbatch repo/hpc/train_arm.sbatch
 # JEFF=1 evaluates Jeff with its own serving path (scripts/eval_jeff.py); BASE_SUBQ=1 scores the untrained base on
 # the val sub-questions. Every arm is scored on the sub-questions of $DATA/val.jsonl (--eval-subq). DUMP=val,kk,...
-# saves the readout hidden states of those eval sets (probing); PERM / BRIER set --permute-final / --lambda-brier.
+# saves the readout hidden states of those eval sets (probing); PERM / BRIER / SUBQK / SUBQW set --permute-final /
+# --lambda-brier / --subq-k / --subq-weight.
 # MODEL picks the
 # student backbone (default Qwen3.5-2B-Base; e.g. MODEL=$HOME/cotd/models/Qwen3.5-2B for the post-trained release).
 # Before submitting, dry-run the shell logic on the login node (Python is only echoed):
@@ -57,7 +58,8 @@ train() {                # train <arm> <train.jsonl> <evals> <out> [extra args..
     --final "$F" --subq "$S" --subq-target "$T" --lambda-sub "${LAMBDA:-1.0}" \
     --lr "${LR:-1e-5}" --max-len 1536 --precision "${PREC:-fp32master}" --optim "${OPTIM:-adamw}" \
     --seed "$SEED" --out "$out" --eval-subq "$DATA/val.jsonl" ${RLM:+--rationale-lm --lm-max-len 3072} \
-    ${DUMP:+--dump-hidden "$DUMP,smoke"} ${PERM:+--permute-final "$PERM"} ${BRIER:+--lambda-brier "$BRIER"} "$@"
+    ${DUMP:+--dump-hidden "$DUMP,smoke"} ${PERM:+--permute-final "$PERM"} ${BRIER:+--lambda-brier "$BRIER"} \
+    ${SUBQK:+--subq-k "$SUBQK"} ${SUBQW:+--subq-weight "$SUBQW"} "$@"
 }
 
 ARMS="${ARMS:-${ARM:-}}"
@@ -101,7 +103,8 @@ fi
 if [ -n "${EVAL_BASE:-}" ]; then          # untrained backbone control (Jeff needs its own readout: JEFF=1)
   M=$(basename "$MODEL")
   echo "=== base eval $M  $(date +%T)"
-  $PY repo/scripts/eval_student.py --model "$MODEL" --eval $EVALS --out "runs/base-$M" || echo "base eval failed for $M"
+  $PY repo/scripts/eval_student.py --model "$MODEL" --eval $EVALS --out "runs/base-$M" ${DUMP:+--dump-hidden "$DUMP"} \
+    || echo "base eval failed for $M"
 fi
 for ARM in $ARMS; do
   OUT="runs/${ARM}-$(basename "$MODEL")-$(basename "$DATA")-s${SEED}"
