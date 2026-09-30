@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from cotdistill.sources import kk_node_truth  # noqa: E402
-from cotdistill.teacher import resolve_p_yes  # noqa: E402
+from cotdistill.teacher import node_text_ok, resolve_p_yes  # noqa: E402
 
 
 def teacher_dist(res: dict) -> dict[str, float]:
@@ -43,6 +43,9 @@ def convert(res: dict, keep_inconsistent: bool = False) -> dict:
     subqs, dropped = [], 0
     item = dict(it, prompt=res["prompt"])
     for sq in res.get("subquestions", []):
+        if not node_text_ok(sq["question"]):     # also for trees extracted before the notation filter existed
+            dropped += 1
+            continue
         ps = [p for p in (resolve_p_yes(a) for a in sq.get("answers", [])) if p is not None]
         truth = sq.get("truth")
         if truth is None and it.get("domain") == "knights_knaves":
@@ -70,7 +73,7 @@ def convert(res: dict, keep_inconsistent: bool = False) -> dict:
                       "initial": sq.get("initial"), "p_commit": p_commit,
                       "span_minp": (sq.get("span_stats") or {}).get("min_p"), "status": sq.get("status")})
     randoms = [{"question": r["question"], "p_fresh": resolve_p_yes(r.get("answer_nocot") or {})}
-               for r in res.get("random_subquestions", [])]
+               for r in res.get("random_subquestions", [])][:len(subqs)]     # matched count after filtering
     return {"item_id": it["item_id"], "source": it.get("domain") or it.get("source"), "prompt": res["prompt"],
             "labels": labels, "gold_label": it.get("gold_label"), "teacher": teacher_dist(res),
             "depth": it.get("depth"), "subqs": subqs, "random_subqs": randoms,

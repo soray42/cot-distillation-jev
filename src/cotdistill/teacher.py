@@ -187,6 +187,11 @@ _AWKWARD = re.compile(r"\bfail(?:s|ed)? to\b", re.I)
 _SYMBOLIC = re.compile(r"[¬∨∧→↔⇔⊕]|->|<->|\b[A-Z]\s*=|=\s*\(|\(\s*[A-Z]\s*[,)]")   # notation from the reasoning
 
 
+def node_text_ok(q: str) -> bool:
+    """No questions about the reasoning, no "fail to" negations, no notation introduced by the reasoning."""
+    return not (_META.search(q) or _AWKWARD.search(q) or _SYMBOLIC.search(q))
+
+
 def parse_tree(raw: str) -> list[dict]:
     """Validated nodes from the tree-extraction JSON: known types, yes/no answers, dependencies only on
     earlier kept nodes, no meta questions about the reasoning and no "fail to" negations."""
