@@ -86,7 +86,9 @@ def main() -> None:
             rows[r] = m
             print(f"  {short(r):28s} acc={m['acc_all']:.3f} nll={m.get('nll', float('nan')):.3f} "
                   f"brier={m.get('brier', float('nan')):.3f} ece={m.get('ece', float('nan')):.3f}")
-        ref = next((r for r in have if short(r) == args.ref or r.startswith(args.ref + "-")), None)
+        exact = [r for r in have if short(r) == args.ref or r == args.ref]
+        prefix = [r for r in have if r.startswith(args.ref + "-")]
+        ref = exact[0] if exact else (prefix[0] if len(prefix) == 1 else None)   # never guess between several
         if ref:
             for r in have:
                 if r != ref:
