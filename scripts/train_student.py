@@ -22,8 +22,8 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from cotdistill.student import (Example, build_examples, evaluate, kl_loss, label_logits,  # noqa: E402
-                                lm_loss, load_model)
+from cotdistill.student import (Example, build_examples, evaluate, evaluate_subq, kl_loss,  # noqa: E402
+                                label_logits, lm_loss, load_model)
 
 
 def read_jsonl(p: str) -> list[dict]:
@@ -54,6 +54,7 @@ def main() -> None:
     ap.add_argument("--eval-bs", type=int, default=8)
     ap.add_argument("--eval-max-len", type=int, default=6144, help="long eval states (JevBench hard) need more room")
     ap.add_argument("--save", action="store_true", help="save the final weights (bf16) to <out>/model")
+    ap.add_argument("--eval-subq", default=None, help="student data file (e.g. val.jsonl) whose sub-questions to score")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", required=True)
     ap.add_argument("--log-every", type=int, default=20)
@@ -143,6 +144,13 @@ def main() -> None:
             for p in preds:
                 f.write(json.dumps(p) + "\n")
         print(name, json.dumps(m), flush=True)
+    if args.eval_subq:
+        sm, spreds = evaluate_subq(model, tok, read_jsonl(args.eval_subq), args.max_len, args.eval_bs, cache, seed=args.seed)
+        results["eval"]["subq"] = sm
+        with open(out / "preds_subq.jsonl", "w") as f:
+            for p in spreds:
+                f.write(json.dumps(p) + "\n")
+        print("subq", json.dumps({k: round(v["acc"], 3) for k, v in sm.items()}), flush=True)
     (out / "metrics.json").write_text(json.dumps(results, indent=1))
     if args.save:
         model.to(torch.bfloat16).save_pretrained(out / "model", safe_serialization=True)

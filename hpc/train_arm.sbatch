@@ -9,6 +9,8 @@
 #SBATCH --output=logs/%x-%j.out
 # Student arms, run one after another inside one job (SLURM_COORD: one cotd- job in the system at a time).
 # From ~/cotd:  ARMS="A2 A3 A4 A1" DATA=data/student_tree EVAL_BASE=1 sbatch repo/hpc/train_arm.sbatch
+# JEFF=1 evaluates Jeff with its own serving path (scripts/eval_jeff.py); BASE_SUBQ=1 scores the untrained base on
+# the val sub-questions. Every arm is scored on the sub-questions of $DATA/val.jsonl (--eval-subq).
 # Before submitting, dry-run the shell logic on the login node (Python is only echoed):
 #   DRY_RUN=1 ARMS="A2 A3" DATA=data/student_tree EVAL_BASE=1 bash repo/hpc/train_arm.sbatch
 # The job starts with a smoke stage (every arm on 16 items for about 2 steps, plus a 20-item eval) and exits
@@ -50,7 +52,7 @@ train() {                # train <arm> <train.jsonl> <evals> <out> [extra args..
   $PY repo/scripts/train_student.py --model "$MODEL" --train "$tr" --eval $ev \
     --final "$F" --subq "$S" --subq-target "$T" --lambda-sub "${LAMBDA:-1.0}" \
     --lr "${LR:-1e-5}" --max-len 1536 --precision "${PREC:-fp32master}" --optim "${OPTIM:-adamw}" \
-    --seed "$SEED" --out "$out" ${RLM:+--rationale-lm --lm-max-len 3072} "$@"
+    --seed "$SEED" --out "$out" --eval-subq "$DATA/val.jsonl" ${RLM:+--rationale-lm --lm-max-len 3072} "$@"
 }
 
 ARMS="${ARMS:-${ARM:-}}"
@@ -66,14 +68,30 @@ for ARM in $ARMS; do
   [ -n "${DRY_RUN:-}" ] || grep -q '^smoke {' "$SM/$ARM.log" || { echo "SMOKE FAILED $ARM (no eval line)"; tail -n 30 "$SM/$ARM.log"; exit 1; }
   echo "smoke ok $ARM"
 done
-if [ -n "${EVAL_BASE:-}" ]; then
-  $PY repo/scripts/eval_student.py --model models/Qwen3.5-2B-Base --eval "smoke=$SM/eval.jsonl" --out "$SM/base" \
-    > "$SM/base.log" 2>&1 || { echo "SMOKE FAILED base eval"; tail -n 30 "$SM/base.log"; exit 1; }
+head -n 3 "$DATA/val.jsonl" > "$SM/val3.jsonl"
+if [ -n "${EVAL_BASE:-}${BASE_SUBQ:-}" ]; then
+  $PY repo/scripts/eval_student.py --model models/Qwen3.5-2B-Base --eval "smoke=$SM/eval.jsonl" --eval-subq "$SM/val3.jsonl" \
+    --out "$SM/base" > "$SM/base.log" 2>&1 || { echo "SMOKE FAILED base eval"; tail -n 30 "$SM/base.log"; exit 1; }
   echo "smoke ok base eval"
+fi
+if [ -n "${JEFF:-}" ]; then
+  $PY repo/scripts/eval_jeff.py --model models/Jeff-Qwen3.5-2B --sets jevbench td kk --limit 20 --out "$SM/jeff" \
+    > "$SM/jeff.log" 2>&1 || { echo "SMOKE FAILED jeff eval"; tail -n 30 "$SM/jeff.log"; exit 1; }
+  echo "smoke ok jeff eval"
 fi
 rm -rf "$SM"
 echo "=== smoke passed $(date +%T)"
 
+if [ -n "${JEFF:-}" ]; then               # Jeff with its own prompt, readout matrix and temperature
+  echo "=== jeff eval  $(date +%T)"
+  $PY repo/scripts/eval_jeff.py --model models/Jeff-Qwen3.5-2B --sets jevbench td kk jl bbeh --out runs/jeff-native \
+    || echo "jeff eval failed"
+fi
+if [ -n "${BASE_SUBQ:-}" ]; then         # sub-question accuracy of the untrained base (reference for the arms)
+  echo "=== base sub-question eval  $(date +%T)"
+  $PY repo/scripts/eval_student.py --model models/Qwen3.5-2B-Base --eval "kk=data/eval/kk_heldout.jsonl" \
+    --eval-subq "$DATA/val.jsonl" --out runs/base-subq || echo "base eval failed for subq"
+fi
 if [ -n "${EVAL_BASE:-}" ]; then          # untrained base control and the same-backbone answer-only replica
   for M in Qwen3.5-2B-Base Jeff-Qwen3.5-2B; do
     if [ ! -f "models/$M/config.json" ]; then echo "skip base eval $M (not downloaded)"; continue; fi

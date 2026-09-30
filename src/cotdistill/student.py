@@ -231,3 +231,55 @@ def evaluate(model, tok, items: list[dict], max_len: int, bs: int, cache: dict) 
         model.train()
     return (calibration(probs, gold) if gold else {"n": 0}), preds
 
+
+@torch.no_grad()
+def evaluate_subq(model, tok, items: list[dict], max_len: int, bs: int, cache: dict,
+                  seed: int = 0) -> tuple[dict, list[dict]]:
+    """Student accuracy on the sub-questions of held-out items (the mechanism check: does the one-pass
+    student answer the intermediate judgements?). Target: program truth when known, else the teacher's
+    CoT-conditioned answer. Also scores the matched control questions against the teacher's fresh answer.
+    Broken down by node type and source; yes/no order randomised per question as in training."""
+    rng = random.Random(seed)
+    exs, meta = [], []
+    for it in items:
+        for kind, pool in (("cot", it.get("subqs", [])), ("control", it.get("random_subqs", []))):
+            for sq in pool:
+                if kind == "cot":
+                    tgt = sq["truth"] if sq.get("truth") is not None else (
+                        None if sq.get("p_cot") is None else sq["p_cot"] > 0.5)
+                else:
+                    tgt = None if sq.get("p_fresh") is None else sq["p_fresh"] > 0.5
+                if tgt is None:
+                    continue
+                yes_first = rng.random() < 0.5
+                a, b = ("Yes", "No") if yes_first else ("No", "Yes")
+                exs.append(Example(SUBQ_TEMPLATE.format(problem=it["prompt"], question=sq["question"], a=a, b=b),
+                                   ["A", "B"], [0.5, 0.5], 1.0, "subq", it["item_id"]))
+                meta.append({"item_id": it["item_id"], "source": it.get("source"), "kind": kind,
+                             "type": sq.get("type") or kind, "truth_known": sq.get("truth") is not None,
+                             "target": bool(tgt), "yes_first": yes_first, "question": sq["question"]})
+    was_training = model.training
+    model.eval()
+    dev = next(model.parameters()).device
+    order = sorted(range(len(exs)), key=lambda i: len(exs[i].text))
+    p_yes = [0.0] * len(exs)
+    for s in range(0, len(order), bs):
+        idx = order[s:s + bs]
+        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev.type == "cuda"):
+            zs = label_logits(model, tok, [exs[i] for i in idx], max_len, cache)
+        for i, z in zip(idx, zs):
+            pa = torch.softmax(z, -1)[0].item()
+            p_yes[i] = pa if meta[i]["yes_first"] else 1 - pa
+    if was_training:
+        model.train()
+    groups: dict[str, list[int]] = {}
+    preds = []
+    for m, py in zip(meta, p_yes):
+        ok = int((py > 0.5) == m["target"])
+        preds.append(dict(m, p_yes=py, correct=ok))
+        for g in ("all_" + m["kind"], f"{m['kind']}/{m['source']}", f"{m['kind']}/type/{m['type']}"):
+            groups.setdefault(g, []).append(ok)
+        if m["kind"] == "cot" and m["truth_known"]:
+            groups.setdefault("cot/program_truth", []).append(ok)
+    metrics = {g: {"n": len(v), "acc": sum(v) / len(v)} for g, v in sorted(groups.items())}
+    return metrics, preds
