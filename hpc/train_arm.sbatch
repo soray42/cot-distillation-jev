@@ -8,42 +8,31 @@
 #SBATCH --time=06:00:00
 #SBATCH --output=logs/%x-%j.out
 # Student arms, run one after another inside one job (SLURM_COORD: one cotd- job in the system at a time).
-# From ~/cotd:  ARMS="A1 A2 A7" SEED=0 sbatch repo/hpc/train_arm.sbatch   (or ARM=A3 for a single arm)
-# Arms (final-question target x sub-question source / target):
-#   A1 gold answer only            A2 teacher answer only         A3 teacher + CoT sub-questions (ours)
-#   A4 teacher + matched control   A5 CoT sub-questions only      A6 teacher + CoT sub-q, program truth
-#   A7 teacher + LM loss on the teacher's CoT and answer (DHRD-style rationale baseline)
-# Defaults from check job 677208: fp32 master weights + AdamW at micro-batch 2 x grad-accum 16 peaks at 32 GiB
-# on the 4g.40gb slice (bf16 + 8-bit Adam at micro-batch 4 peaks at 12.6 GiB). EVAL_BASE=1 first evaluates the
-# untrained base and Jeff-Qwen3.5-2B; DATA picks the student data directory.
+# From ~/cotd:  ARMS="A2 A3 A4 A1" DATA=data/student_tree EVAL_BASE=1 sbatch repo/hpc/train_arm.sbatch
+# Before submitting, dry-run the shell logic on the login node (Python is only echoed):
+#   DRY_RUN=1 ARMS="A2 A3" DATA=data/student_tree EVAL_BASE=1 bash repo/hpc/train_arm.sbatch
+# The job starts with a smoke stage (every arm on 16 items for about 2 steps, plus a 20-item eval) and exits
+# at once if any of it fails. Defaults from check job 677208: fp32 master weights + AdamW, micro-batch 2 x
+# grad-accum 16 (peak 32 GiB on the 4g.40gb slice). EVAL_BASE=1 also evaluates the untrained base and
+# Jeff-Qwen3.5-2B (downloaded on the login node beforehand; compute nodes have no /userScripts).
+# Arms: A1 gold answer only · A2 teacher answer only · A3 teacher + CoT sub-questions (ours) · A4 teacher +
+# matched control · A5 CoT sub-questions only · A6 teacher + CoT sub-q with truth targets · A7 teacher +
+# LM loss on the teacher's CoT and answer.
 set -euo pipefail
 cd "$HOME/cotd"
 module load cuda/12.4 2>/dev/null || true
 SEED="${SEED:-0}"; MODEL="${MODEL:-$HOME/cotd/models/Qwen3.5-2B-Base}"; DATA="${DATA:-data/student}"
 export HF_HOME="$HOME/cotd/hf" TOKENIZERS_PARALLELISM=false
 PY=envs/cotd/bin/python
+[ -n "${DRY_RUN:-}" ] && PY="echo [dry-run] python"
+nvidia-smi -L 2>/dev/null || echo "no nvidia-smi here"
+[ -f "$DATA/train.jsonl" ] || { echo "missing $DATA/train.jsonl"; exit 1; }
 EVALS="val=$DATA/val.jsonl kk=data/eval/kk_heldout.jsonl jl=data/eval/jl_heldout.jsonl jevbench=data/eval/jevbench_public.jsonl td=data/eval/typed_decisions_test.jsonl bbeh=data/eval/bbeh.jsonl"
-nvidia-smi -L
-if [ ! -f "$DATA/train.jsonl" ]; then       # sub-question data not pushed yet: never fall back to old sub-questions
-  echo "missing $DATA; answer-only arms on data/student"; DATA=data/student; ONLY_ANSWER=1
-  EVALS="val=$DATA/val.jsonl kk=data/eval/kk_heldout.jsonl jl=data/eval/jl_heldout.jsonl jevbench=data/eval/jevbench_public.jsonl td=data/eval/typed_decisions_test.jsonl bbeh=data/eval/bbeh.jsonl"
-fi
-if [ -n "${EVAL_BASE:-}" ]; then          # untrained base control and the same-backbone answer-only replica
-  USED=$(/userScripts/lquota 2>/dev/null | sed -n 's/.*USED=\([0-9.]*\)GB.*/\1/p')
-  echo "lquota used ${USED:-?} GB of 50"
-  if [ ! -d models/Jeff-Qwen3.5-2B ] && awk "BEGIN{exit !(${USED:-99} <= 42)}"; then   # keep >= 3 GB after 4.5 GB
-    $PY -c "from huggingface_hub import snapshot_download as s; import os; s('mstrasser/Jeff-Qwen3.5-2B', local_dir=os.path.expanduser('~/cotd/models/Jeff-Qwen3.5-2B'))" \
-      || echo "Jeff download failed"
-  fi
-  for M in Qwen3.5-2B-Base Jeff-Qwen3.5-2B; do
-    echo "=== base eval $M  $(date)"
-    [ -d "models/$M" ] && $PY repo/scripts/eval_student.py --model "models/$M" --eval $EVALS --out "runs/base-$M" \
-      || echo "base eval failed for $M"
-  done
-fi
-for ARM in ${ARMS:-$ARM}; do
+for f in $EVALS; do [ -f "${f#*=}" ] || { echo "missing eval file ${f#*=}"; exit 1; }; done
+
+arm_config() {           # sets F S T RLM for arm $1
   RLM=
-  case "$ARM" in
+  case "$1" in
     A1) F=gold;    S=none;   T=cot ;;
     A2) F=teacher; S=none;   T=cot ;;
     A3) F=teacher; S=cot;    T=cot ;;
@@ -51,15 +40,52 @@ for ARM in ${ARMS:-$ARM}; do
     A5) F=none;    S=cot;    T=cot ;;
     A6) F=teacher; S=cot;    T=truth ;;
     A7) F=teacher; S=none;   T=cot; RLM=1 ;;
-    *) echo "unknown ARM $ARM"; exit 1 ;;
+    *) echo "unknown ARM $1"; return 1 ;;
   esac
-  if [ -n "${ONLY_ANSWER:-}" ] && [ "$S" != none -o -n "$RLM" ]; then echo "skip $ARM (no tree data)"; continue; fi
-  OUT="runs/${ARM}-$(basename "$MODEL")-$(basename "$DATA")-s${SEED}"
-  echo "=== $ARM -> $OUT  $(date)"
-  $PY repo/scripts/train_student.py --model "$MODEL" --train "$DATA/train.jsonl" --eval $EVALS \
-    --final "$F" --subq "$S" --subq-target "$T" --lambda-sub "${LAMBDA:-1.0}" --epochs "${EPOCHS:-2}" \
-    --lr "${LR:-1e-5}" --micro-bs "${MBS:-2}" --grad-accum "${GA:-16}" --max-len 1536 \
-    --precision "${PREC:-fp32master}" --optim "${OPTIM:-adamw}" --seed "$SEED" --out "$OUT" ${SAVE:+--save} \
-    ${RLM:+--rationale-lm --lm-max-len 3072} || echo "arm $ARM failed"
-  echo "done $OUT"
+}
+
+train() {                # train <arm> <train.jsonl> <evals> <out> [extra args...]
+  local arm=$1 tr=$2 ev=$3 out=$4; shift 4
+  arm_config "$arm"
+  $PY repo/scripts/train_student.py --model "$MODEL" --train "$tr" --eval $ev \
+    --final "$F" --subq "$S" --subq-target "$T" --lambda-sub "${LAMBDA:-1.0}" \
+    --lr "${LR:-1e-5}" --max-len 1536 --precision "${PREC:-fp32master}" --optim "${OPTIM:-adamw}" \
+    --seed "$SEED" --out "$out" ${RLM:+--rationale-lm --lm-max-len 3072} "$@"
+}
+
+ARMS="${ARMS:-${ARM:-}}"
+[ -n "$ARMS" ] || { echo "set ARMS"; exit 1; }
+
+echo "=== smoke stage $(date +%T)"
+SM=$(mktemp -d)
+head -n 16 "$DATA/train.jsonl" > "$SM/train.jsonl"
+head -n 20 data/eval/kk_heldout.jsonl > "$SM/eval.jsonl"
+for ARM in $ARMS; do
+  train "$ARM" "$SM/train.jsonl" "smoke=$SM/eval.jsonl" "$SM/out-$ARM" --epochs 0.5 --micro-bs 2 --grad-accum 2 \
+    > "$SM/$ARM.log" 2>&1 || { echo "SMOKE FAILED $ARM"; tail -n 30 "$SM/$ARM.log"; exit 1; }
+  [ -n "${DRY_RUN:-}" ] || grep -q '^smoke {' "$SM/$ARM.log" || { echo "SMOKE FAILED $ARM (no eval line)"; tail -n 30 "$SM/$ARM.log"; exit 1; }
+  echo "smoke ok $ARM"
 done
+if [ -n "${EVAL_BASE:-}" ]; then
+  $PY repo/scripts/eval_student.py --model models/Qwen3.5-2B-Base --eval "smoke=$SM/eval.jsonl" --out "$SM/base" \
+    > "$SM/base.log" 2>&1 || { echo "SMOKE FAILED base eval"; tail -n 30 "$SM/base.log"; exit 1; }
+  echo "smoke ok base eval"
+fi
+rm -rf "$SM"
+echo "=== smoke passed $(date +%T)"
+
+if [ -n "${EVAL_BASE:-}" ]; then          # untrained base control and the same-backbone answer-only replica
+  for M in Qwen3.5-2B-Base Jeff-Qwen3.5-2B; do
+    if [ ! -f "models/$M/config.json" ]; then echo "skip base eval $M (not downloaded)"; continue; fi
+    echo "=== base eval $M  $(date +%T)"
+    $PY repo/scripts/eval_student.py --model "models/$M" --eval $EVALS --out "runs/base-$M" || echo "base eval failed for $M"
+  done
+fi
+for ARM in $ARMS; do
+  OUT="runs/${ARM}-$(basename "$MODEL")-$(basename "$DATA")-s${SEED}"
+  echo "=== $ARM -> $OUT  $(date +%T)"
+  train "$ARM" "$DATA/train.jsonl" "$EVALS" "$OUT" --epochs "${EPOCHS:-2}" --micro-bs "${MBS:-2}" \
+    --grad-accum "${GA:-16}" ${SAVE:+--save} || echo "arm $ARM failed"
+  echo "done $OUT  $(date +%T)"
+done
+echo "all done $(date +%T)"
