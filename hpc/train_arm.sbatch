@@ -10,13 +10,14 @@
 # Student arms, run one after another inside one job (SLURM_COORD: one cotd- job in the system at a time).
 # From ~/cotd:  ARMS="A2 A3 A4 A1" DATA=data/student_tree EVAL_BASE=1 sbatch repo/hpc/train_arm.sbatch
 # JEFF=1 evaluates Jeff with its own serving path (scripts/eval_jeff.py); BASE_SUBQ=1 scores the untrained base on
-# the val sub-questions. Every arm is scored on the sub-questions of $DATA/val.jsonl (--eval-subq).
+# the val sub-questions. Every arm is scored on the sub-questions of $DATA/val.jsonl (--eval-subq). MODEL picks the
+# student backbone (default Qwen3.5-2B-Base; e.g. MODEL=$HOME/cotd/models/Qwen3.5-2B for the post-trained release).
 # Before submitting, dry-run the shell logic on the login node (Python is only echoed):
 #   DRY_RUN=1 ARMS="A2 A3" DATA=data/student_tree EVAL_BASE=1 bash repo/hpc/train_arm.sbatch
 # The job starts with a smoke stage (every arm on 16 items for about 2 steps, plus a 20-item eval) and exits
 # at once if any of it fails. Defaults from check job 677208: fp32 master weights + AdamW, micro-batch 2 x
-# grad-accum 16 (peak 32 GiB on the 4g.40gb slice). EVAL_BASE=1 also evaluates the untrained base and
-# Jeff-Qwen3.5-2B (downloaded on the login node beforehand; compute nodes have no /userScripts).
+# grad-accum 16 (peak 32 GiB on the 4g.40gb slice). EVAL_BASE=1 also evaluates the untrained $MODEL (models are
+# downloaded on the login node beforehand; compute nodes have no /userScripts).
 # Arms: A1 gold answer only · A2 teacher answer only · A3 teacher + CoT sub-questions (ours) · A4 teacher +
 # matched control · A5 CoT sub-questions only · A6 teacher + CoT sub-q with truth targets · A7 teacher +
 # LM loss on the teacher's CoT and answer.
@@ -71,7 +72,7 @@ for ARM in $ARMS; do
 done
 head -n 3 "$DATA/val.jsonl" > "$SM/val3.jsonl"
 if [ -n "${EVAL_BASE:-}${BASE_SUBQ:-}" ]; then
-  $PY repo/scripts/eval_student.py --model models/Qwen3.5-2B-Base --eval "smoke=$SM/eval.jsonl" --eval-subq "$SM/val3.jsonl" \
+  $PY repo/scripts/eval_student.py --model "$MODEL" --eval "smoke=$SM/eval.jsonl" --eval-subq "$SM/val3.jsonl" \
     --out "$SM/base" > "$SM/base.log" 2>&1 || { echo "SMOKE FAILED base eval"; tail -n 30 "$SM/base.log"; exit 1; }
   echo "smoke ok base eval"
 fi
@@ -85,20 +86,19 @@ echo "=== smoke passed $(date +%T)"
 
 if [ -n "${JEFF:-}" ]; then               # Jeff with its own prompt, readout matrix and temperature
   echo "=== jeff eval  $(date +%T)"
-  $PY repo/scripts/eval_jeff.py --model models/Jeff-Qwen3.5-2B --sets jevbench td kk jl bbeh --out runs/jeff-native \
+  $PY repo/scripts/eval_jeff.py --model models/Jeff-Qwen3.5-2B --sets jevbench td kk jl bbeh bbh musr policy sharc folio \
+    --out runs/jeff-native \
     || echo "jeff eval failed"
 fi
 if [ -n "${BASE_SUBQ:-}" ]; then         # sub-question accuracy of the untrained base (reference for the arms)
   echo "=== base sub-question eval  $(date +%T)"
-  $PY repo/scripts/eval_student.py --model models/Qwen3.5-2B-Base --eval "kk=data/eval/kk_heldout.jsonl" \
-    --eval-subq "$DATA/val.jsonl" --out runs/base-subq || echo "base eval failed for subq"
+  $PY repo/scripts/eval_student.py --model "$MODEL" --eval "kk=data/eval/kk_heldout.jsonl" \
+    --eval-subq "$DATA/val.jsonl" --out "runs/base-subq-$(basename "$MODEL")" || echo "base eval failed for subq"
 fi
-if [ -n "${EVAL_BASE:-}" ]; then          # untrained base control and the same-backbone answer-only replica
-  for M in Qwen3.5-2B-Base; do          # Jeff needs its own readout: JEFF=1 (scripts/eval_jeff.py)
-    if [ ! -f "models/$M/config.json" ]; then echo "skip base eval $M (not downloaded)"; continue; fi
-    echo "=== base eval $M  $(date +%T)"
-    $PY repo/scripts/eval_student.py --model "models/$M" --eval $EVALS --out "runs/base-$M" || echo "base eval failed for $M"
-  done
+if [ -n "${EVAL_BASE:-}" ]; then          # untrained backbone control (Jeff needs its own readout: JEFF=1)
+  M=$(basename "$MODEL")
+  echo "=== base eval $M  $(date +%T)"
+  $PY repo/scripts/eval_student.py --model "$MODEL" --eval $EVALS --out "runs/base-$M" || echo "base eval failed for $M"
 fi
 for ARM in $ARMS; do
   OUT="runs/${ARM}-$(basename "$MODEL")-$(basename "$DATA")-s${SEED}"

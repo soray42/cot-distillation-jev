@@ -132,7 +132,8 @@ def main() -> None:
 
     evals = {"jevbench": "data/eval/jevbench_public.jsonl", "td": "data/eval/typed_decisions_test.jsonl",
              "kk": "data/eval/kk_heldout.jsonl", "jl": "data/eval/jl_heldout.jsonl", "bbeh": "data/eval/bbeh.jsonl",
-             "val": "data/student_tree/val.jsonl"}
+             "bbh": "data/eval/bbh.jsonl", "musr": "data/eval/musr.jsonl", "policy": "data/eval/policy_heldout.jsonl",
+             "sharc": "data/eval/sharc_dev.jsonl", "folio": "data/eval/folio_val.jsonl", "val": "data/student_tree/val.jsonl"}
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     results = {"args": vars(args), "eval": {}}
