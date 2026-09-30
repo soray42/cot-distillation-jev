@@ -54,7 +54,8 @@ def build_examples(item: dict, *, final: str, subq: str, subq_target: str, lambd
     """Turn one student-data record into training examples for a given arm.
 
     final: "none" | "teacher" (teacher answer distribution) | "gold" (one-hot gold)
-    subq: "none" | "cot" (teacher-extracted sub-questions) | "random" (matched generic questions)
+    subq: "none" | "cot" (teacher-extracted sub-questions) | "random" (matched generic questions) |
+          "mix" (as many sub-questions as "cot", half CoT nodes and half matched controls)
     subq_target: "fresh" (teacher answer without CoT) | "cot" (with CoT) | "truth" (program truth,
                  falling back to the CoT answer, then the fresh one, when no truth is available) |
                  "commit" (the teacher's value-commitment confidence where the CoT settled the node)
@@ -72,11 +73,20 @@ def build_examples(item: dict, *, final: str, subq: str, subq_target: str, lambd
     elif final == "gold" and gold is not None:
         ex.append(Example(FINAL_TEMPLATE.format(problem=item["prompt"]), labels,
                           [1.0 if i == gold else 0.0 for i in range(len(labels))], 1.0, "final", item["item_id"], gold))
-    pool = {"cot": item.get("subqs", []), "random": item.get("random_subqs", [])}.get(subq, [])
+    if subq == "mix":            # same number of sub-questions as "cot": half CoT nodes, half matched controls
+        cot = [dict(sq, _kind="cot") for sq in item.get("subqs", [])]
+        ctl = [dict(sq, _kind="random") for sq in item.get("random_subqs", [])]
+        n = len(cot)
+        k = (n + 1) // 2
+        pool = rng.sample(cot, k) + rng.sample(ctl, min(n - k, len(ctl)))
+    else:
+        pool = {"cot": item.get("subqs", []), "random": item.get("random_subqs", [])}.get(subq, [])
     usable = []
     for sq in pool:
         p = None
-        if subq_target == "truth" and sq.get("truth") is not None:
+        if sq.get("_kind") == "random":      # controls in a mix keep their own (fresh) target
+            p = sq.get("p_fresh")
+        elif subq_target == "truth" and sq.get("truth") is not None:
             p = 1.0 if sq["truth"] else 0.0
         elif subq_target == "commit" and sq.get("p_commit") is not None:
             p = sq["p_commit"]

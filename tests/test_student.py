@@ -85,6 +85,16 @@ class TestStudent(unittest.TestCase):
         self.assertEqual([e.kind for e in ex], ["final", "lm"])
         self.assertTrue(ex[1].continuation.endswith("Answer: " + max(it["teacher"], key=it["teacher"].get)))
 
+    def test_mix_arm_matches_cot_count(self):
+        from cotdistill.student import build_examples
+        it = toy_item(0, random.Random(0))
+        it["subqs"] = [dict(it["subqs"][0], question=f"cot {i}?", p_cot=0.9) for i in range(5)]
+        it["random_subqs"] = [{"question": f"ctl {i}?", "p_fresh": 0.1} for i in range(5)]
+        ex = build_examples(it, final="teacher", subq="mix", subq_target="cot", lambda_sub=1, rng=random.Random(1))
+        qs = [e.text.split("Intermediate question: ")[1].split("\n")[0] for e in ex if e.kind == "subq"]
+        self.assertEqual(len(qs), 5)
+        self.assertEqual(sum(q.startswith("cot") for q in qs), 3)
+
     def test_arms_build_expected_examples(self):
         from cotdistill.student import build_examples
         it = toy_item(0, random.Random(0))

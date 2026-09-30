@@ -42,6 +42,7 @@ arm_config() {           # sets F S T RLM for arm $1
     A5) F=none;    S=cot;    T=cot ;;
     A6) F=teacher; S=cot;    T=truth ;;
     A7) F=teacher; S=none;   T=cot; RLM=1 ;;
+    A8) F=teacher; S=mix;    T=cot ;;           # half CoT nodes, half matched controls (same count as A3)
     *) echo "unknown ARM $1"; return 1 ;;
   esac
 }

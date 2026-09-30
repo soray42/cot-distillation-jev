@@ -36,7 +36,7 @@ def main() -> None:
     ap.add_argument("--train", required=True)
     ap.add_argument("--eval", nargs="*", default=[], help="name=path.jsonl")
     ap.add_argument("--final", default="teacher", choices=["none", "teacher", "gold"])
-    ap.add_argument("--subq", default="none", choices=["none", "cot", "random"])
+    ap.add_argument("--subq", default="none", choices=["none", "cot", "random", "mix"])
     ap.add_argument("--subq-target", default="cot", choices=["fresh", "cot", "truth", "commit"])
     ap.add_argument("--lambda-sub", type=float, default=1.0)
     ap.add_argument("--rationale-lm", action="store_true", help="DHRD-style baseline: LM loss on teacher CoT + answer")
