@@ -22,7 +22,7 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from cotdistill.student import (Example, brier_loss, build_examples, build_fact_examples, build_group,  # noqa: E402
+from cotdistill.student import (Example, brier_loss, build_examples, build_fact_examples, build_full_tree, build_group,  # noqa: E402
                                 build_stage_examples, evaluate, evaluate_subq, kl_loss, label_logits, lm_loss,
                                 load_model)
 
@@ -71,6 +71,13 @@ def main() -> None:
     ap.add_argument("--aux-kind", default="cot", choices=["cot", "random", "placebo", "tree", "tree_shuf"],
                     help="grouped training: CoT nodes, matched controls, the CoT views with zero loss (placebo), CoT "
                          "nodes with their parents' results stated (tree), or with unrelated nodes' results (tree_shuf)")
+    ap.add_argument("--tree-full", default="", choices=["", "true", "matched", "plain", "placebo", "control"],
+                    help="full-tree groups: every problem with ALL its nodes (up to --tree-cap) in one update; true = "
+                         "parents' results stated, matched = as many depth-matched non-parent results, plain = no "
+                         "facts, placebo = plain at zero weight, control = the control questions")
+    ap.add_argument("--tree-cap", type=int, default=10, help="full-tree groups: at most this many nodes per problem")
+    ap.add_argument("--aux-total", type=float, default=1.0,
+                    help="full-tree groups: auxiliary weight per problem, split evenly over its node views")
     ap.add_argument("--aux-sources", default="", help="grouped training: comma list of item sources whose auxiliary "
                     "views keep their weight; items of other sources get the same views at zero weight (placebo)")
     ap.add_argument("--fact-withdraw", type=float, default=0.0,
@@ -195,7 +202,22 @@ def main() -> None:
         passes["n"] += 1
         return ex
 
-    if args.grouped_aux:
+    def fulltree_updates() -> list[list[Example]]:
+        """Problems in shuffled order, each as [final] + all its node views; items_per_update problems per update
+        (the number of sequences per update varies with tree size)."""
+        items = train_items[:]
+        rng.shuffle(items)
+        groups = [g for g in (build_full_tree(it, mode=args.tree_full, rng=rng, cap=args.tree_cap,
+                                              aux_total=args.aux_total, final=args.final,
+                                              subq_target=args.subq_target, permute_final=args.permute_final)
+                              for it in items) if g]
+        b = args.items_per_update
+        return [[e for g in groups[i:i + b] for e in g] for i in range(0, len(groups), b)]
+
+    if args.tree_full:
+        per_step = 1                 # make() returns whole updates
+        stages = [("fulltree", fulltree_updates, args.epochs)]
+    elif args.grouped_aux:
         group = (1 + args.grouped_aux) * args.items_per_update
         if group % args.micro_bs:
             raise SystemExit(f"(1 + grouped_aux) x items_per_update = {group} must be a multiple of micro_bs")
@@ -264,6 +286,36 @@ def main() -> None:
             1 + math.cos(math.pi * min(1.0, s / t))))
         ex_iter: list[Example] = []
         end = step + stage_steps
+        upd_iter: list[list[Example]] = []
+        while name == "fulltree" and step < end:
+            # One problem group per update; the loss is scaled by 1 / (3 x items_per_update), the per-sequence
+            # normalisation of the 1 final + 2 auxiliary grouped arms, so the learning-rate scale is comparable.
+            if not upd_iter:
+                upd_iter = make()
+            upd, upd_iter = upd_iter[0], upd_iter[1:]
+            norm, upd_loss = 3 * args.items_per_update, 0.0
+            for i in range(0, len(upd), args.micro_bs):
+                mb = upd[i:i + args.micro_bs]
+                with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
+                    z = label_logits(model, tok, mb, args.max_len, cache)
+                    loss = kl_loss(z, mb) * len(mb) / norm
+                loss.backward()
+                upd_loss += loss.item()
+                seen_tok += sum(min(args.max_len, len(e.text) // 3) for e in mb)
+            torch.nn.utils.clip_grad_norm_(params, 1.0)
+            opt.step()
+            sched.step()
+            opt.zero_grad(set_to_none=True)
+            step += 1
+            if step % args.log_every == 0 or step == total_steps:
+                dt = time.time() - t0
+                mem = torch.cuda.max_memory_allocated() / 2**30 if dev == "cuda" else 0.0
+                row = {"step": step, "loss": upd_loss, "lr": sched.get_last_lr()[0], "s_per_step": dt / step,
+                       "approx_tok_per_s": seen_tok / dt, "peak_gib": mem, "seqs": len(upd)}
+                history.append(row)
+                print(json.dumps(row), flush=True)
+            if step in eval_steps:
+                mid_eval(step)
         while step < end:
             if len(ex_iter) < args.micro_bs:
                 ex_iter += make()

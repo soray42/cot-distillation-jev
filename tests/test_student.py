@@ -622,3 +622,80 @@ class TestAuxSources(unittest.TestCase):
         self.assertEqual([e.weight for e in on][1:], [0.5, 0.5])
         self.assertEqual([e.weight for e in off][1:], [0.0, 0.0])
         self.assertEqual(on[0].weight, off[0].weight)
+
+
+@unittest.skipUnless(HAVE, "needs torch")
+class TestFullTree(unittest.TestCase):
+    # n1 n2 -> n3 -> n5 ; n4 -> n6 ; n7 depends on n5 and is the near-answer sink at max depth
+    NODES = [{"id": "n1", "question": "q1?", "p_cot": 0.9, "depends_on": []},
+             {"id": "n2", "question": "q2?", "p_cot": 0.1, "depends_on": []},
+             {"id": "n3", "question": "q3?", "p_cot": 0.9, "depends_on": ["n1", "n2"]},
+             {"id": "n4", "question": "q4?", "p_cot": 0.8, "depends_on": []},
+             {"id": "n5", "question": "q5?", "p_cot": 0.2, "depends_on": ["n3"]},
+             {"id": "n6", "question": "q6?", "p_cot": 0.9, "depends_on": ["n4"]},
+             {"id": "n7", "question": "q7?", "p_cot": 0.95, "depends_on": ["n5"]}]
+    ITEM = {"item_id": "x", "prompt": "P\nOptions:\nA) a\nB) b\nC) c", "labels": ["A", "B", "C"], "gold_label": "A",
+            "teacher": {"A": 0.7, "B": 0.2, "C": 0.1}, "subqs": NODES,
+            "random_subqs": [{"question": f"c{i}?", "p_fresh": 0.3} for i in range(4)]}
+
+    def facts_of(self, e):
+        head = e.text.split("\n\nIntermediate question: ")[0]
+        q = e.text.split("\n\nIntermediate question: ")[1].split("\n")[0]
+        return q, [l.split(" A: ")[0][3:] for l in head.split("\n") if l.startswith("Q: ")]
+
+    def test_plan_invariants(self):
+        import random as _r
+        from cotdistill.student import full_tree_plan, node_depths
+        depth = node_depths(self.NODES)
+        desc = {"n1": {"n3", "n5", "n7"}, "n2": {"n3", "n5", "n7"}, "n3": {"n5", "n7"}, "n4": {"n6"}, "n5": {"n7"},
+                "n6": set(), "n7": set()}
+        for seed in range(30):
+            plan = full_tree_plan(self.ITEM, cap=10, rng=_r.Random(seed))
+            self.assertEqual(len(plan), 7)
+            for e in plan:
+                i, par, m = e["node"]["id"], e["parents"], e["matched"]
+                self.assertEqual(len(par), len(m))
+                self.assertFalse(set(m) & ({i} | set(par) | desc[i] | {"n7"}))   # n7: near-answer sink
+            n3 = [e for e in plan if e["node"]["id"] == "n3"][0]
+            self.assertEqual(sorted(n3["parents"]), ["n1", "n2"])
+            self.assertEqual(set(n3["matched"]), {"n4", "n6"})                  # the only unrelated nodes
+            n6 = [e for e in plan if e["node"]["id"] == "n6"][0]                 # parent n4 has depth 0
+            self.assertEqual(len(n6["matched"]), 1)
+            self.assertEqual(depth[n6["matched"][0]], 0)                         # depth-matched replacement
+
+    def test_modes_state_equal_counts(self):
+        import random as _r
+        from cotdistill.student import build_full_tree
+        for seed in range(10):
+            t = build_full_tree(self.ITEM, mode="true", rng=_r.Random(seed))
+            m = build_full_tree(self.ITEM, mode="matched", rng=_r.Random(seed))
+            self.assertEqual(len(t), 8)                                       # final + 7 nodes
+            ct = sorted((q, len(f)) for q, f in map(self.facts_of, t[1:]))
+            cm = sorted((q, len(f)) for q, f in map(self.facts_of, m[1:]))
+            self.assertEqual(ct, cm)
+            self.assertAlmostEqual(sum(e.weight for e in t[1:]), 1.0)
+        pl = build_full_tree(self.ITEM, mode="placebo", rng=_r.Random(0))
+        self.assertTrue(all(e.weight == 0 for e in pl[1:]) and pl[0].weight > 0)
+        self.assertTrue(all("Known intermediate" not in e.text for e in pl))
+        ctl = build_full_tree(self.ITEM, mode="control", rng=_r.Random(0))
+        self.assertEqual(len(ctl), 5)
+
+    def test_training_on_cpu(self):
+        import json as _j
+        import os
+        import subprocess
+        import tempfile
+        tok, model = tiny()
+        with tempfile.TemporaryDirectory() as d:
+            model.save_pretrained(d + "/m"); tok.save_pretrained(d + "/m")
+            Path(d + "/t.jsonl").write_text("\n".join(_j.dumps(dict(self.ITEM, item_id=f"i{j}")) for j in range(5)))
+            for mode in ("true", "matched"):
+                out = subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / "scripts/train_student.py"),
+                                      "--model", d + "/m", "--train", d + "/t.jsonl", "--eval", "v=" + d + "/t.jsonl",
+                                      "--tree-full", mode, "--items-per-update", "2", "--epochs", "2", "--micro-bs", "3",
+                                      "--max-len", "128", "--precision", "bf16", "--no-grad-ckpt", "--log-every", "1", "--out", d + "/o"],
+                                     capture_output=True, text=True, timeout=600,
+                                     env={**os.environ, "CUDA_VISIBLE_DEVICES": ""})
+                self.assertEqual(out.returncode, 0, out.stderr[-2000:])
+                self.assertIn("steps=6", out.stdout)                          # ceil(5/2) = 3 updates per pass
+                self.assertIn('"seqs": 16', out.stdout)                         # 2 problems x (final + 7 nodes)

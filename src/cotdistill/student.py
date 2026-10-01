@@ -266,6 +266,98 @@ def build_transition_views(item: dict, *, k: int, rng: random.Random, shuffled: 
     return ex
 
 
+def _descendants(nodes: list[dict]) -> dict[str, set]:
+    by = {sq["id"] for sq in nodes}
+    children = {i: [sq["id"] for sq in nodes if i in (sq.get("depends_on") or [])] for i in by}
+    out = {}
+    for i in by:
+        seen, todo = set(), list(children[i])
+        while todo:
+            j = todo.pop()
+            if j not in seen:
+                seen.add(j)
+                todo += children[j]
+        out[i] = seen
+    return out
+
+
+def full_tree_plan(item: dict, *, cap: int, rng: random.Random, subq_target: str = "cot") -> list[dict]:
+    """The nodes of a full-tree group (at most `cap`, sampled if the tree is larger) with both fact sets:
+    "parents" (true parent results) and "matched" (as many results from other nodes of the same item, depth-matched
+    where possible, excluding the node, its parents, its descendants and the near-answer nodes: sinks at the maximum
+    depth). A node gets facts in both modes only if it is eligible: it has parents, every parent has a confident
+    answer, and enough matched replacements exist. Otherwise it is asked plainly in every mode, so the two tree
+    modes differ only in which results are stated, never in how many."""
+    nodes = [sq for sq in item.get("subqs", []) if "id" in sq]
+    asked = [sq for sq in nodes if _node_p(sq, subq_target) is not None]
+    if len(asked) > cap:
+        asked = rng.sample(asked, cap)
+    if not nodes:
+        return []
+    by = {sq["id"]: sq for sq in nodes}
+    depth = node_depths(nodes)
+    desc = _descendants(nodes)
+    maxd = max(depth.values())
+    sinks = {i for i in by if not any(i in (sq.get("depends_on") or []) for sq in nodes)}
+    confident = {i for i in by if _fact_line(by[i])}
+    plan = []
+    for sq in asked:
+        i = sq["id"]
+        par = [x for x in (sq.get("depends_on") or []) if x in by]
+        entry = {"node": sq, "parents": [], "matched": []}
+        if par and all(x in confident for x in par):
+            pool = [j for j in by if j in confident and j != i and j not in par and j not in desc[i]
+                    and not (j in sinks and depth[j] == maxd)]
+            if len(pool) >= len(par):
+                rest, matched = pool[:], []
+                for x in par:
+                    same = [j for j in rest if depth[j] == depth[x]]
+                    cand = same or sorted(rest, key=lambda j: abs(depth[j] - depth[x]))[:max(1, len(rest))]
+                    j = rng.choice(same) if same else cand[0]
+                    matched.append(j)
+                    rest.remove(j)
+                entry = {"node": sq, "parents": par, "matched": matched}
+        plan.append(entry)
+    return plan
+
+
+def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10, aux_total: float = 1.0,
+                    final: str = "teacher", subq_target: str = "cot", permute_final: float = 0.0) -> list[Example]:
+    """One problem with ALL its tree nodes (up to `cap`) instead of k sampled ones: [final] + one view per node.
+    mode "true": eligible nodes are asked with their parents' results stated; "matched": with the same number of
+    depth-matched non-parent results (see full_tree_plan); "plain": every node asked without facts; "placebo": the
+    plain views at zero weight; "control": the item's control questions (fresh targets), plainly. The auxiliary
+    weight is normalised per problem (aux_total / number of views), so larger trees do not weigh more."""
+    fin = [e for e in build_examples(item, final=final, subq="none", subq_target=subq_target, lambda_sub=0.0, rng=rng,
+                                     permute_final=permute_final) if e.kind == "final"]
+    if not fin:
+        return []
+    wi = item.get("weight", 1.0)
+    views = []
+    if mode == "control":
+        pool = [sq for sq in item.get("random_subqs", []) if sq.get("p_fresh") is not None]
+        if len(pool) > cap:
+            pool = rng.sample(pool, cap)
+        views = [(sq, [], "fresh") for sq in pool]
+    else:
+        plan = full_tree_plan(item, cap=cap, rng=rng, subq_target=subq_target)
+        by = {sq["id"]: sq for sq in item.get("subqs", []) if "id" in sq}
+        for e in plan:
+            facts = {"true": e["parents"], "matched": e["matched"]}.get(mode, [])
+            views.append((e["node"], [by[j] for j in facts], subq_target))
+    out = list(fin)
+    w = 0.0 if mode == "placebo" else aux_total / max(1, len(views))
+    for sq, facts, tgt in views:
+        lines = [_fact_line(x) for x in facts]
+        rng.shuffle(lines)
+        problem = item["prompt"] + (f"\n\n{FACTS_HEADER}\n" + "\n".join(lines) if lines else "")
+        yes_first = rng.random() < 0.5
+        a, b = ("Yes", "No") if yes_first else ("No", "Yes")
+        out.append(Example(SUBQ_TEMPLATE.format(problem=problem, question=sq["question"], a=a, b=b), ["A", "B"],
+                           _soft(_node_p(sq, tgt), yes_first), w * wi, "subq", item["item_id"]))
+    return out
+
+
 def build_group(item: dict, *, aux_kind: str, k: int, aux_weight: float, rng: random.Random, final: str = "teacher",
                 subq_target: str = "cot", permute_final: float = 0.0, keep_prob: float = 1.0,
                 aux_active: bool = True) -> list[Example]:
