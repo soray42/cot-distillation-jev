@@ -5,7 +5,8 @@
 # rerunning the script resumes. Micro-batch 4 without gradient checkpointing (80 GB); on OOM the run is retried with
 # checkpointing, then with micro-batch 2 (the grouped update and its loss normalisation do not depend on these).
 #   cd ~/cotd && setsid nohup bash repo/cloud/run_e2.sh "0 1" > run_e2.out 2>&1 < /dev/null &
-# Options (environment): CC1D=1 causal-conv1d kernel; EVAL_BS (default 8); DUMP_LAYERS e.g. 4,8,12,16,20,24; SMOKE=0.
+# Options (environment): CC1D=1 causal-conv1d kernel; EVAL_BS (default 8); DUMP_LAYERS e.g. 4,8,12,16,20,24; SMOKE=0;
+# SAVE=1 keeps the final weights (bf16, ~4 GB per run) for interventions and later diagnostics.
 set -uo pipefail
 cd "$(dirname "$0")/../.."                      # ~/cotd
 SEEDS=${1:-"0 1"}; SMOKE=${SMOKE:-1}
@@ -69,7 +70,7 @@ for seed in $SEEDS; do
     if [ -f "$out/metrics.json" ]; then echo "skip $out (done)"; continue; fi
     echo "=== $arm seed $seed -> $out $(date +%T)"
     run_with_fallback "logs/$arm-s$seed.log" "$arm" "$seed" "$DATA/train.jsonl" "$EVALS" "$out" \
-      --epochs 2 --dump-hidden val,kk,kkdeep,diag ${DUMP_LAYERS:+--dump-layers "$DUMP_LAYERS"} \
+      --epochs 2 --dump-hidden val,kk,kkdeep,diag ${DUMP_LAYERS:+--dump-layers "$DUMP_LAYERS"} ${SAVE:+--save} \
       || echo "arm $arm seed $seed failed (see logs/$arm-s$seed.log)"
     grep -E '"step": (20|100|451),' "logs/$arm-s$seed.log" | tail -2 | cut -c1-120
     echo "done $out $(date +%T)"
