@@ -123,6 +123,10 @@ def main() -> None:
 
     torch.manual_seed(args.seed)
     rng = random.Random(args.seed)
+    # Problem order for the grouped and full-tree arms comes from its own generator, so every arm with the same seed
+    # sees the same problems in the same updates in every epoch (common random numbers for paired comparisons);
+    # sampling inside a group still uses rng.
+    order_rng = random.Random(f"order-{args.seed}")
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     dev = "cuda" if torch.cuda.is_available() else "cpu"
@@ -191,7 +195,7 @@ def main() -> None:
         problems with the same number of sequences in every arm. With --fact-withdraw, stated results fade out with
         training progress (counted in passes over the data)."""
         items = train_items[:]
-        rng.shuffle(items)
+        order_rng.shuffle(items)
         ex, n = [], len(items)
         for j, it in enumerate(items):
             progress = (passes["n"] + j / n) / max(args.epochs, 1e-9)
@@ -206,7 +210,7 @@ def main() -> None:
         """Problems in shuffled order, each as [final] + all its node views; items_per_update problems per update
         (the number of sequences per update varies with tree size)."""
         items = train_items[:]
-        rng.shuffle(items)
+        order_rng.shuffle(items)
         groups = [g for g in (build_full_tree(it, mode=args.tree_full, rng=rng, cap=args.tree_cap,
                                               aux_total=args.aux_total, final=args.final,
                                               subq_target=args.subq_target, permute_final=args.permute_final)

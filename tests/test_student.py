@@ -735,3 +735,21 @@ class TestMCViews(unittest.TestCase):
         for kind in ("cot_mc", "random_mc"):                                   # both arms: min of the capacities
             g = build_group(self.ITEM, aux_kind=kind, k=2, aux_weight=0.5, rng=_r.Random(0))
             self.assertEqual([e.weight for e in g][1:], [0.5, 0.0])              # padded with a zero-weight filler
+
+
+@unittest.skipUnless(HAVE, "needs torch")
+class TestCommonOrder(unittest.TestCase):
+    def test_arms_share_problem_order_across_epochs(self):
+        import random as _r
+        from cotdistill.student import build_full_tree
+        items = [dict(TestFullTree.ITEM, item_id=f"i{j}") for j in range(12)]
+        def order(mode):
+            order_rng, rng, out = _r.Random("order-0"), _r.Random(0), []
+            for _ in range(2):                                   # two epochs, as fulltree_updates does
+                its = items[:]
+                order_rng.shuffle(its)
+                for it in its:
+                    build_full_tree(it, mode=mode, rng=rng)       # consumes rng differently per mode
+                out.append([it["item_id"] for it in its])
+            return out
+        self.assertEqual(order("true"), order("matched"))
