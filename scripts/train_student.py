@@ -91,6 +91,12 @@ def main() -> None:
     ap.add_argument("--eval-bs", type=int, default=8)
     ap.add_argument("--eval-max-len", type=int, default=6144, help="long eval states (JevBench hard) need more room")
     ap.add_argument("--save", action="store_true", help="save the final weights (bf16) to <out>/model")
+    ap.add_argument("--eval-at", default="", help="training-length curve: comma list of points, in epochs, at which "
+                    "the --eval-mid sets are evaluated during training (e.g. 0.5,1,2,4); stored as metrics.json trajectory")
+    ap.add_argument("--eval-mid", default="", help="comma list of --eval set names for the --eval-at points (default all)")
+    ap.add_argument("--eval-mid-max", type=int, default=600,
+                    help="at --eval-at points each set is cut to at most this many items (every k-th item, spread "
+                         "across the file's task groups); the final eval always uses the full sets")
     ap.add_argument("--lora-r", type=int, default=0, help="LoRA rank (0 = full fine-tuning)")
     ap.add_argument("--lora-alpha", type=float, default=0.0, help="LoRA alpha (default 2 x rank)")
     ap.add_argument("--lora-dropout", type=float, default=0.05)
@@ -225,7 +231,27 @@ def main() -> None:
 
     cache: dict = {}
     step, micro, t0, seen_tok = 0, 0, time.time(), 0
-    history = []
+    history, trajectory = [], []
+    epochs_total = args.epochs if not args.depth_stages and not args.fact_stages else None
+    eval_steps = {}
+    for e in (float(x) for x in args.eval_at.split(",") if x):
+        assert epochs_total, "--eval-at needs a single-stage run (no --depth-stages/--fact-stages)"
+        eval_steps[max(1, round(e / epochs_total * total_steps))] = e
+    mid_names = [x for x in args.eval_mid.split(",") if x in evals] or list(evals)   # absent names (smoke) skipped
+    mid_sets = {}
+    for name in mid_names:
+        items = evals[name]
+        k = max(1, -(-len(items) // args.eval_mid_max))
+        mid_sets[name] = items[::k]
+
+    def mid_eval(at_step: int) -> None:
+        row = {"step": at_step, "epoch": eval_steps[at_step], "s_elapsed": round(time.time() - t0, 1)}
+        for name, items in mid_sets.items():
+            m, _ = evaluate(model, tok, items, args.eval_max_len, args.eval_bs, cache)
+            row[name] = {k: m[k] for k in ("acc", "nll", "ece", "brier") if k in m}
+        trajectory.append(row)
+        print("trajectory", json.dumps(row), flush=True)
+        (out / "trajectory.json").write_text(json.dumps(trajectory, indent=1))
     model.train()
     for si, (name, make, _, stage_steps) in enumerate(plan):
         if args.reset_optim and si > 0:
@@ -268,8 +294,10 @@ def main() -> None:
                            "s_per_step": dt / step, "approx_tok_per_s": seen_tok / dt, "peak_gib": mem}
                     history.append(row)
                     print(json.dumps(row), flush=True)
+                if step in eval_steps:
+                    mid_eval(step)
 
-    results = {"args": vars(args), "history": history, "eval": {}}
+    results = {"args": vars(args), "history": history, "trajectory": trajectory, "eval": {}}
     for name, items in evals.items():
         hid = [] if name in args.dump_hidden.split(",") else None
         m, preds = evaluate(model, tok, items, args.eval_max_len, args.eval_bs, cache, hidden=hid,

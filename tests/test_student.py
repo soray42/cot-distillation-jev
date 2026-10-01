@@ -578,3 +578,30 @@ class TestTreeTransitions(unittest.TestCase):
                                      env={**os.environ, "CUDA_VISIBLE_DEVICES": ""})
                 self.assertEqual(out.returncode, 0, out.stderr[-2000:])
                 self.assertIn("steps=6", out.stdout)
+
+
+@unittest.skipUnless(HAVE, "needs torch")
+class TestEvalAt(unittest.TestCase):
+    def test_trajectory_points(self):
+        import json as _j
+        import os
+        import subprocess
+        import tempfile
+        tok, model = tiny()
+        item = {"prompt": "Q one two\nOptions:\nA) x\nB) y", "labels": ["A", "B"], "gold_label": "A",
+                "teacher": {"A": 0.8, "B": 0.2}, "subqs": [], "random_subqs": []}
+        with tempfile.TemporaryDirectory() as d:
+            model.save_pretrained(d + "/m"); tok.save_pretrained(d + "/m")
+            Path(d + "/t.jsonl").write_text("\n".join(_j.dumps(dict(item, item_id=f"i{j}")) for j in range(8)))
+            out = subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / "scripts/train_student.py"),
+                                  "--model", d + "/m", "--train", d + "/t.jsonl", "--eval", "v=" + d + "/t.jsonl",
+                                  "w=" + d + "/t.jsonl", "--epochs", "4", "--micro-bs", "2", "--grad-accum", "2",
+                                  "--eval-at", "0.5,1,4", "--eval-mid", "v", "--eval-mid-max", "3", "--max-len", "96",
+                                  "--precision", "bf16", "--no-grad-ckpt", "--out", d + "/o"],
+                                 capture_output=True, text=True, timeout=600, env={**os.environ, "CUDA_VISIBLE_DEVICES": ""})
+            self.assertEqual(out.returncode, 0, out.stderr[-2000:])
+            traj = _j.loads(Path(d + "/o/metrics.json").read_text())["trajectory"]
+            self.assertEqual([r["step"] for r in traj], [1, 2, 8])          # 8 items / 4 per step = 2 steps per epoch
+            self.assertEqual([r["epoch"] for r in traj], [0.5, 1.0, 4.0])
+            self.assertEqual(set(traj[0]) - {"step", "epoch", "s_elapsed"}, {"v"})
+            self.assertEqual(traj[0]["v"].keys() >= {"acc", "nll", "ece"}, True)
