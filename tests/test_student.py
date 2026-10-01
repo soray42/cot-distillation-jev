@@ -494,3 +494,28 @@ class TestLayerDump(unittest.TestCase):
         self.assertEqual(tuple(multi[0].shape), (3, model.config.hidden_size))
         for a, b in zip(plain, multi):
             self.assertTrue(torch.allclose(a, b[-1], atol=1e-5))
+
+
+@unittest.skipUnless(HAVE, "needs torch")
+class TestPlaceboGradient(unittest.TestCase):
+    def test_placebo_gradient_is_final_only_gradient_over_group_size(self):
+        """G0 (zero-weight auxiliary views) must give exactly the final-only gradient scaled by 1/(1+K), the factor
+        coming from the loss denominator that counts every view in the update (train_student's normalisation)."""
+        import random as _r
+        from cotdistill.student import build_group, kl_loss, label_logits
+        tok, model = tiny()
+        model.eval()                                  # no dropout: both passes see identical arithmetic
+        item = {"item_id": "x", "prompt": "Q one two\nOptions:\nA) x\nB) y", "labels": ["A", "B"], "gold_label": "A",
+                "teacher": {"A": 0.8, "B": 0.2},
+                "subqs": [{"id": f"n{i}", "question": f"is c{i} true?", "p_cot": 0.9, "depends_on": []} for i in range(3)],
+                "random_subqs": []}
+        group = build_group(item, aux_kind="placebo", k=2, aux_weight=0.5, rng=_r.Random(0))
+        def grads(batch):
+            model.zero_grad()
+            z = label_logits(model, tok, batch, 64, {})
+            (kl_loss(z, batch) * len(batch) / len(batch)).backward()     # total / len(batch), grad_accum = 1
+            return [p.grad.detach().clone() for p in model.parameters() if p.grad is not None]
+        g_group, g_final = grads(group), grads(group[:1])
+        self.assertEqual(len(g_group), len(g_final))
+        for a, b in zip(g_group, g_final):
+            self.assertTrue(torch.allclose(a, b / 3, atol=1e-6, rtol=1e-4))
