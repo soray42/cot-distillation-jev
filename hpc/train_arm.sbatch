@@ -117,7 +117,7 @@ SM=$(mktemp -d)
 head -n 16 "$DATA/train.jsonl" > "$SM/train.jsonl"
 head -n 20 data/eval/kk_heldout.jsonl > "$SM/eval.jsonl"
 for ARM in $ARMS; do
-  train "$ARM" "$SM/train.jsonl" "smoke=$SM/eval.jsonl" "$SM/out-$ARM" --epochs 0.5 --micro-bs 2 --grad-accum 2 \
+  SUBQ_EXTRA= train "$ARM" "$SM/train.jsonl" "smoke=$SM/eval.jsonl" "$SM/out-$ARM" --epochs 0.5 --micro-bs 2 --grad-accum 2 \
     > "$SM/$ARM.log" 2>&1 || { echo "SMOKE FAILED $ARM"; tail -n 30 "$SM/$ARM.log"; exit 1; }
   [ -n "${DRY_RUN:-}" ] || grep -q '^smoke {' "$SM/$ARM.log" || { echo "SMOKE FAILED $ARM (no eval line)"; tail -n 30 "$SM/$ARM.log"; exit 1; }
   echo "smoke ok $ARM"

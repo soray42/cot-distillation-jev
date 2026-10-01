@@ -3,6 +3,7 @@ evaluation sets, and program-exact counterfactual pairs.
 
   data/student_rule/{train,val}.jsonl    training domains, renderers list/bullets; subqs = program tree nodes
                                          (truth-valued), random_subqs = matched questions about unread facts
+  data/student_rule_p/{train,val}.jsonl  the same items with predicate nodes only (arm G3P, no rule-applies nodes)
   data/eval/rule_id.jsonl                training domains, new policies and cases (list renderer)
   data/eval/rule_ho.jsonl                held-out domains (list renderer)
   data/eval/rule_ho_prose.jsonl          the same held-out cases in the held-out prose renderer
@@ -86,6 +87,11 @@ def main() -> None:
     rng = random.Random(0)
     write(ROOT / "data/student_rule/train.jsonl", [rg.train_record(c, rng) for c in train])
     write(ROOT / "data/student_rule/val.jsonl", [rg.train_record(c, rng) for c in val])
+    for split in ("train", "val"):                      # G3P: the same items with predicate nodes only (no rule nodes)
+        rows = [json.loads(l) for l in open(ROOT / f"data/student_rule/{split}.jsonl")]
+        for r in rows:
+            r["subqs"] = [q for q in r["subqs"] if q["var"].startswith("p:")]
+        write(ROOT / f"data/student_rule_p/{split}.jsonl", rows)
     write(ROOT / "data/eval/rule_id.jsonl", [rg.eval_record(c) for c in test_id])
     write(ROOT / "data/eval/rule_ho.jsonl", [rg.eval_record(c) for c in test_ho])
     prose = []
