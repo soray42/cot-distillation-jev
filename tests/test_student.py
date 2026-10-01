@@ -310,3 +310,42 @@ class TestItemWeightAndFrac(unittest.TestCase):
         sub = [e for e in ex if e.kind == "subq"]
         self.assertEqual(len(sub), 3)
         self.assertAlmostEqual(sum(e.weight for e in sub), 1.5)          # split weights still sum to lambda x item weight
+
+
+@unittest.skipUnless(HAVE, "needs torch")
+class TestA9b(unittest.TestCase):
+    NODES = TestDepthCurriculum.NODES
+
+    def test_level_balanced_replay(self):
+        import collections
+        import random as _r
+        from cotdistill.student import build_stage_examples
+        item = {"item_id": "x", "prompt": "P", "subqs": self.NODES}
+        level = {"a?": 0, "b?": 0, "c?": 1, "d?": 2, "e?": 3}
+        c = collections.Counter()
+        for seed in range(2000):
+            for e in build_stage_examples(item, stage=3, n_stages=4, k=1, rng=_r.Random(seed), p_new=0.0,
+                                          level_balanced=True):
+                c[level[e.text.split("Intermediate question: ")[1].split("\n")[0]]] += 1
+        for lv in range(4):                       # each of the 4 levels ~ 1/4, although level 0 has 2 nodes
+            self.assertAlmostEqual(c[lv] / 2000, 0.25, delta=0.04)
+
+    def test_train_script_a9b_on_cpu(self):
+        import json as _j
+        import subprocess
+        import tempfile
+        tok, model = tiny()
+        with tempfile.TemporaryDirectory() as d:
+            model.save_pretrained(d + "/m"); tok.save_pretrained(d + "/m")
+            recs = [{"item_id": f"i{j}", "prompt": "Q\nOptions:\nA) x\nB) y", "labels": ["A", "B"], "gold_label": "A",
+                     "teacher": {"A": 0.8, "B": 0.2}, "subqs": self.NODES, "random_subqs": []} for j in range(6)]
+            Path(d + "/t.jsonl").write_text("\n".join(_j.dumps(r) for r in recs))
+            out = subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / "scripts/train_student.py"),
+                                  "--model", d + "/m", "--train", d + "/t.jsonl", "--eval", "v=" + d + "/t.jsonl",
+                                  "--depth-stages", "2", "--final-replay", "1", "--level-balanced", "--reset-optim",
+                                  "--epochs", "1", "--micro-bs", "2", "--grad-accum", "1", "--max-len", "64",
+                                  "--precision", "bf16", "--no-grad-ckpt", "--out", d + "/o"],
+                                 capture_output=True, text=True, timeout=600, env={**__import__("os").environ, "CUDA_VISIBLE_DEVICES": ""})
+            self.assertEqual(out.returncode, 0, out.stderr[-2000:])
+            self.assertIn("stage final: 12 examples per pass, 6 steps", out.stdout)
+            self.assertIn("steps=12", out.stdout)

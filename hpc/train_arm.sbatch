@@ -25,7 +25,9 @@
 # matched control · A5 CoT sub-questions only · A6 teacher + CoT sub-q with truth targets · A7 teacher +
 # LM loss on the teacher's CoT and answer · A9 depth curriculum: DSTAGES (default 4) passes over the items, each
 # drawing STAGEK (default 1) CoT nodes per item from the next band of tree depth (half new band, half replay), then
-# the final questions for EPOCHS, with a fresh LR schedule per stage.
+# the final questions for EPOCHS, with a fresh LR schedule per stage · A9b: A9 + one level-balanced tree node per item
+# and epoch kept during the final stage, level-balanced replay, AdamW state reset per stage (Yao et al. 2505.17923;
+# Deng et al. 2405.14838; Saparov et al. 2412.04703).
 set -euo pipefail
 cd "$HOME/cotd"
 module load cuda/12.4 2>/dev/null || true
@@ -39,7 +41,7 @@ EVALS="val=$DATA/val.jsonl kk=data/eval/kk_heldout.jsonl jl=data/eval/jl_heldout
 for f in $EVALS; do [ -f "${f#*=}" ] || { echo "missing eval file ${f#*=}"; exit 1; }; done
 
 arm_config() {           # sets F S T RLM DS for arm $1
-  RLM=; DS=
+  RLM=; DS=; DX=
   case "$1" in
     A1) F=gold;    S=none;   T=cot ;;
     A2) F=teacher; S=none;   T=cot ;;
@@ -50,6 +52,7 @@ arm_config() {           # sets F S T RLM DS for arm $1
     A7) F=teacher; S=none;   T=cot; RLM=1 ;;
     A8) F=teacher; S=mix;    T=cot ;;           # half CoT nodes, half matched controls (same count as A3)
     A9) F=teacher; S=cot;    T=cot; DS=${DSTAGES:-4} ;;  # depth curriculum: CoT nodes by tree depth, then finals
+    A9b) F=teacher; S=cot;   T=cot; DS=${DSTAGES:-4}; DX="--final-replay 1 --level-balanced --reset-optim" ;;
     *) echo "unknown ARM $1"; return 1 ;;
   esac
 }
@@ -63,7 +66,7 @@ train() {                # train <arm> <train.jsonl> <evals> <out> [extra args..
     --seed "$SEED" --out "$out" --eval-subq "$DATA/val.jsonl" ${RLM:+--rationale-lm --lm-max-len 3072} \
     ${DUMP:+--dump-hidden "$DUMP,smoke"} ${PERM:+--permute-final "$PERM"} ${BRIER:+--lambda-brier "$BRIER"} \
     ${SUBQK:+--subq-k "$SUBQK"} ${SUBQW:+--subq-weight "$SUBQW"} ${DS:+--depth-stages "$DS" --stage-k "${STAGEK:-1}"} \
-    ${SUBQF:+--subq-frac "$SUBQF"} "$@"
+    ${SUBQF:+--subq-frac "$SUBQF"} $DX "$@"
 }
 
 ARMS="${ARMS:-${ARM:-}}"

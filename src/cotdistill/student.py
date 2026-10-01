@@ -172,11 +172,14 @@ def node_depths(nodes: list[dict]) -> dict[str, int]:
 
 
 def build_stage_examples(item: dict, *, stage: int, n_stages: int, k: int, rng: random.Random,
-                         subq_target: str = "cot", p_new: float = 0.5, weight: float = 1.0) -> list[Example]:
+                         subq_target: str = "cot", p_new: float = 0.5, weight: float = 1.0,
+                         level_balanced: bool = False) -> list[Example]:
     """Depth-curriculum sub-questions for one item. Stage s (0-based, of n_stages) covers the item's tree up to
     level ceil((s+1)(M+1)/n_stages) - 1, where M is the item's deepest level, so every item reaches its own top in
     the last stage. Each of the k drawn nodes comes from the levels this stage adds with probability p_new, else
-    from all levels covered so far (replay); stages that add no level replay only."""
+    from all levels covered so far (replay); stages that add no level replay only. level_balanced draws a covered
+    level uniformly first (so the many depth-0 facts do not dominate replay); stage=n_stages-1 with p_new=0 is
+    plain replay over the whole tree (used for node replay during the final stage)."""
     nodes = [sq for sq in item.get("subqs", []) if "id" in sq]
     if not nodes:
         return []
@@ -189,6 +192,9 @@ def build_stage_examples(item: dict, *, stage: int, n_stages: int, k: int, rng: 
     ex = []
     for _ in range(k):
         pool = new if new and rng.random() < p_new else covered
+        if level_balanced:
+            lv = rng.choice(sorted({d[x["id"]] for x in pool}))
+            pool = [x for x in pool if d[x["id"]] == lv]
         sq = rng.choice(pool)
         p = sq.get("truth") if subq_target == "truth" and sq.get("truth") is not None else None
         p = (1.0 if p else 0.0) if p is not None else sq.get("p_cot" if subq_target != "fresh" else "p_fresh")

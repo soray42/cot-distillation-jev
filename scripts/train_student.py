@@ -51,6 +51,10 @@ def main() -> None:
                     help="depth curriculum: N sub-question stages ordered by tree depth (each 1 pass over the items, "
                          "--stage-k nodes per item), then the final questions for --epochs; 0 = off")
     ap.add_argument("--stage-k", type=int, default=1, help="sub-questions per item in each depth stage")
+    ap.add_argument("--final-replay", type=int, default=0,
+                    help="depth curriculum: also train this many tree nodes per item and epoch in the final stage")
+    ap.add_argument("--level-balanced", action="store_true", help="depth curriculum: draw replay nodes level-uniformly")
+    ap.add_argument("--reset-optim", action="store_true", help="depth curriculum: reset the AdamW state at each stage")
     ap.add_argument("--lambda-brier", type=float, default=0.0, help="add this x Brier score (vs the soft target)")
     ap.add_argument("--permute-final", type=float, default=0.0,
                     help="probability of reordering a final question's options each epoch (target follows the texts)")
@@ -114,7 +118,7 @@ def main() -> None:
             ex = []
             for it in train_items:
                 ex += build_stage_examples(it, stage=stage, n_stages=args.depth_stages, k=args.stage_k, rng=rng,
-                                           subq_target=args.subq_target)
+                                           subq_target=args.subq_target, level_balanced=args.level_balanced)
             rng.shuffle(ex)
             return ex
         return make
@@ -126,6 +130,10 @@ def main() -> None:
             ex = [e for it in train_items for e in build_examples(
                 it, final=args.final, subq="none", subq_target=args.subq_target, lambda_sub=args.lambda_sub, rng=rng,
                 permute_final=args.permute_final)]
+            if args.final_replay:            # keep the whole tree in play while the final answer is calibrated
+                ex += [e for it in train_items for e in build_stage_examples(
+                    it, stage=args.depth_stages - 1, n_stages=args.depth_stages, k=args.final_replay, rng=rng,
+                    subq_target=args.subq_target, p_new=0.0, level_balanced=args.level_balanced)]
             rng.shuffle(ex)
             return ex
         stages.append(("final", final_examples, args.epochs))
@@ -144,7 +152,9 @@ def main() -> None:
     step, micro, t0, seen_tok = 0, 0, time.time(), 0
     history = []
     model.train()
-    for name, make, _, stage_steps in plan:
+    for si, (name, make, _, stage_steps) in enumerate(plan):
+        if args.reset_optim and si > 0:
+            opt.state.clear()
         warm = max(1, int(args.warmup * stage_steps))
         sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s, w=warm, t=stage_steps: min(1.0, (s + 1) / w) * 0.5 * (
             1 + math.cos(math.pi * min(1.0, s / t))))
