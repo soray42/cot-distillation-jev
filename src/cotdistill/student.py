@@ -285,16 +285,24 @@ def collate(tokenizer, batch: list[Example], max_len: int, device) -> dict:
 
 
 def label_logits(model, tokenizer, batch: list[Example], max_len: int, label_ids_cache: dict,
-                 hidden_out: list | None = None) -> list[torch.Tensor]:
+                 hidden_out: list | None = None, layers: list[int] | None = None) -> list[torch.Tensor]:
     """Logits over each example's option letters at the readout position (optionally also appends each
-    example's readout hidden state, detached, to hidden_out)."""
+    example's readout hidden state, detached, to hidden_out; with layers, a [len(layers) + 1, hidden] stack of the
+    readout position's states after those decoder layers plus the final readout state)."""
     body, head = text_parts(model)
     dev = head.weight.device
     b = collate(tokenizer, batch, max_len, dev)
-    hidden = body(input_ids=b["input_ids"], attention_mask=b["attention_mask"]).last_hidden_state
-    h = hidden[torch.arange(hidden.shape[0], device=dev), b["last"]]
+    want_layers = bool(layers) and hidden_out is not None
+    res = body(input_ids=b["input_ids"], attention_mask=b["attention_mask"], output_hidden_states=want_layers)
+    hidden = res.last_hidden_state
+    rows = torch.arange(hidden.shape[0], device=dev)
+    h = hidden[rows, b["last"]]
     if hidden_out is not None:
-        hidden_out.extend(h.detach().float().cpu())
+        if want_layers:
+            per = [res.hidden_states[l][rows, b["last"]] for l in layers] + [h]
+            hidden_out.extend(torch.stack(per, 1).detach().float().cpu())
+        else:
+            hidden_out.extend(h.detach().float().cpu())
     out = []
     for i, e in enumerate(batch):
         key = tuple(e.labels)
@@ -379,7 +387,7 @@ def load_model(path: str, dtype):
 
 @torch.no_grad()
 def evaluate(model, tok, items: list[dict], max_len: int, bs: int, cache: dict,
-             hidden: list | None = None) -> tuple[dict, list[dict]]:
+             hidden: list | None = None, layers: list[int] | None = None) -> tuple[dict, list[dict]]:
     """Final-question predictions for eval records (prompt, labels, gold_label; optional gold_probs, group).
 
     Items are batched by length to limit padding; predictions come back in input order. If `hidden` is a list,
@@ -395,7 +403,7 @@ def evaluate(model, tok, items: list[dict], max_len: int, bs: int, cache: dict,
                          [0.0] * len(items[i]["labels"]), 1.0, "final", items[i]["item_id"]) for i in idx]
         hs = [] if hidden is not None else None
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev.type == "cuda"):
-            zs = label_logits(model, tok, batch, max_len, cache, hidden_out=hs)
+            zs = label_logits(model, tok, batch, max_len, cache, hidden_out=hs, layers=layers)
         for j, (i, z) in enumerate(zip(idx, zs)):
             probs_by[i] = torch.softmax(z, -1).tolist()
             if hs is not None:

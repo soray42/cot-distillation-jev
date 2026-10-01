@@ -4,11 +4,14 @@
 # (1 final + 2 auxiliary views). Runs are named <arm>-a100-...-s<seed> and skipped once their metrics.json exists, so
 # rerunning the script resumes. Micro-batch 4 without gradient checkpointing (80 GB); on OOM the run is retried with
 # checkpointing, then with micro-batch 2 (the grouped update and its loss normalisation do not depend on these).
-#   cd ~/cotd && nohup bash repo/cloud/run_e2.sh "0 1" > run_e2.out 2>&1 &
+#   cd ~/cotd && setsid nohup bash repo/cloud/run_e2.sh "0 1" > run_e2.out 2>&1 < /dev/null &
+# Options (environment): CC1D=1 causal-conv1d kernel; EVAL_BS (default 8); DUMP_LAYERS e.g. 4,8,12,16,20,24; SMOKE=0.
 set -uo pipefail
 cd "$(dirname "$0")/../.."                      # ~/cotd
-SEEDS=${1:-"0 1"}
+SEEDS=${1:-"0 1"}; SMOKE=${SMOKE:-1}
 PY=env/bin/python
+# CC1D=1: causal-conv1d CUDA kernel from /root/cc1d (built by build_cc1d.sh); keep it fixed within a seed's arms
+[ -n "${CC1D:-}" ] && export PYTHONPATH="/root/cc1d${PYTHONPATH:+:$PYTHONPATH}"
 MODEL=models/Qwen3.5-2B-Base; DATA=data/student_v3; E=data/eval
 EVALS="val=$DATA/val.jsonl kk=$E/kk_heldout.jsonl jl=$E/jl_heldout.jsonl jevbench=$E/jevbench_public.jsonl \
 td=$E/typed_decisions_test.jsonl bbeh=$E/bbeh.jsonl bbh=$E/bbh.jsonl musr=$E/musr.jsonl policy=$E/policy_heldout.jsonl \
@@ -28,7 +31,7 @@ train() {                                       # train <arm> <seed> <train.json
   local arm=$1 seed=$2 tr=$3 ev=$4 out=$5 mbs=$6 ckpt=$7; shift 7
   $PY repo/scripts/train_student.py --model "$MODEL" --train "$tr" --eval $ev --final teacher $(arm_args "$arm") \
     --lambda-sub 1.0 --lr 1e-5 --max-len 1536 --precision fp32master --optim adamw --seed "$seed" --out "$out" \
-    --eval-subq "$DATA/val.jsonl" --grouped-aux 2 --aux-weight 0.5 --micro-bs "$mbs" \
+    --eval-subq "$DATA/val.jsonl" --grouped-aux 2 --aux-weight 0.5 --micro-bs "$mbs" --eval-bs "${EVAL_BS:-8}" \
     $([ "$ckpt" = 1 ] || echo --no-grad-ckpt) "$@"
 }
 run_with_fallback() {                           # run_with_fallback <log> <train args without mbs/ckpt>...
@@ -44,6 +47,7 @@ run_with_fallback() {                           # run_with_fallback <log> <train
   return 1
 }
 
+if [ "$SMOKE" = 1 ]; then
 echo "=== smoke $(date +%T)"
 SM=$(mktemp -d)
 head -n 16 "$DATA/train.jsonl" > "$SM/train.jsonl"
@@ -57,6 +61,7 @@ for arm in G3 G4 G0; do
 done
 rm -rf "$SM"
 echo "=== smoke passed $(date +%T)"
+fi
 
 for seed in $SEEDS; do
   for arm in G3 G4 G0; do
@@ -64,7 +69,8 @@ for seed in $SEEDS; do
     if [ -f "$out/metrics.json" ]; then echo "skip $out (done)"; continue; fi
     echo "=== $arm seed $seed -> $out $(date +%T)"
     run_with_fallback "logs/$arm-s$seed.log" "$arm" "$seed" "$DATA/train.jsonl" "$EVALS" "$out" \
-      --epochs 2 --dump-hidden val,kk,kkdeep,diag || echo "arm $arm seed $seed failed (see logs/$arm-s$seed.log)"
+      --epochs 2 --dump-hidden val,kk,kkdeep,diag ${DUMP_LAYERS:+--dump-layers "$DUMP_LAYERS"} \
+      || echo "arm $arm seed $seed failed (see logs/$arm-s$seed.log)"
     grep -E '"step": (20|100|451),' "logs/$arm-s$seed.log" | tail -2 | cut -c1-120
     echo "done $out $(date +%T)"
   done

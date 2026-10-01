@@ -478,3 +478,19 @@ class TestGroupedAux(unittest.TestCase):
                                      env={**os.environ, "CUDA_VISIBLE_DEVICES": ""})
                 self.assertEqual(out.returncode, 0, out.stderr[-2000:])
                 self.assertIn("stage grouped: 18 examples per pass, 3 steps", out.stdout)
+
+
+@unittest.skipUnless(HAVE, "needs torch")
+class TestLayerDump(unittest.TestCase):
+    def test_layer_stack_shape_and_last_entry(self):
+        from cotdistill.student import evaluate
+        tok, model = tiny()
+        items = [{"item_id": f"i{k}", "prompt": "x " * (k + 1) + "\nOptions:\nA) a\nB) b", "labels": ["A", "B"],
+                  "gold_label": "A"} for k in range(5)]
+        plain, multi = [], []
+        _, p0 = evaluate(model, tok, items, 128, 2, {}, hidden=plain)
+        _, p1 = evaluate(model, tok, items, 128, 2, {}, hidden=multi, layers=[0, 1])
+        self.assertEqual([p["probs"] for p in p0], [p["probs"] for p in p1])
+        self.assertEqual(tuple(multi[0].shape), (3, model.config.hidden_size))
+        for a, b in zip(plain, multi):
+            self.assertTrue(torch.allclose(a, b[-1], atol=1e-5))

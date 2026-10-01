@@ -92,6 +92,8 @@ def main() -> None:
     ap.add_argument("--lora-dropout", type=float, default=0.05)
     ap.add_argument("--lora-targets", default=",".join(LORA_TARGETS),
                     help="module names to adapt (names absent from the model are skipped)")
+    ap.add_argument("--dump-layers", default="", help="comma list of decoder layers whose readout states are saved "
+                    "with --dump-hidden (shape [n, layers + 1, hidden]; the last entry is the final readout state)")
     ap.add_argument("--dump-hidden", default="", help="comma list of eval-set names whose readout hidden states "
                     "to save as hidden_<name>.pt (float16, preds order)")
     ap.add_argument("--eval-subq", default=None, help="student data file (e.g. val.jsonl) whose sub-questions to score")
@@ -256,7 +258,8 @@ def main() -> None:
     results = {"args": vars(args), "history": history, "eval": {}}
     for name, items in evals.items():
         hid = [] if name in args.dump_hidden.split(",") else None
-        m, preds = evaluate(model, tok, items, args.eval_max_len, args.eval_bs, cache, hidden=hid)
+        m, preds = evaluate(model, tok, items, args.eval_max_len, args.eval_bs, cache, hidden=hid,
+                            layers=[int(x) for x in args.dump_layers.split(",") if x] or None)
         if hid is not None:
             torch.save(torch.stack(hid).half(), out / f"hidden_{name}.pt")
         results["eval"][name] = m
