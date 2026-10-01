@@ -25,7 +25,7 @@ EVAL_FILES = {"val": None, "kk": "data/eval/kk_heldout.jsonl", "jl": "data/eval/
               "jevbench": "data/eval/jevbench_public.jsonl", "td": "data/eval/typed_decisions_test.jsonl",
               "bbeh": "data/eval/bbeh.jsonl", "bbh": "data/eval/bbh.jsonl", "musr": "data/eval/musr.jsonl",
               "policy": "data/eval/policy_heldout.jsonl", "sharc": "data/eval/sharc_dev.jsonl",
-              "folio": "data/eval/folio_val.jsonl"}
+              "folio": "data/eval/folio_val.jsonl", "kkdeep": "data/eval/kk_deep.jsonl"}
 
 
 def short(run: str) -> str:
@@ -100,7 +100,7 @@ def main() -> None:
                     d, lo, hi = bootstrap(vecs[r], vecs[ref])
                     rows[r][f"vs_{args.ref}"] = [d, lo, hi]
                     print(f"    {short(r):26s} - {args.ref}: {d:+.3f} [{lo:+.3f}, {hi:+.3f}]")
-        if es in ("kk", "jl"):
+        if es in ("kk", "jl", "kkdeep"):
             depth = collections.defaultdict(list)
             for n, i in enumerate(ids):
                 depth[items[i].get("depth")].append(n)
