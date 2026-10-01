@@ -68,8 +68,12 @@ def main() -> None:
     ap.add_argument("--grouped-aux", type=int, default=0,
                     help="exposure-matched grouped training: every optimizer update holds --items-per-update problems, "
                          "each as 1 final view + K auxiliary views (0 = off)")
-    ap.add_argument("--aux-kind", default="cot", choices=["cot", "random", "placebo"],
-                    help="grouped training: CoT nodes, matched controls, or the CoT views with zero loss (placebo)")
+    ap.add_argument("--aux-kind", default="cot", choices=["cot", "random", "placebo", "tree", "tree_shuf"],
+                    help="grouped training: CoT nodes, matched controls, the CoT views with zero loss (placebo), CoT "
+                         "nodes with their parents' results stated (tree), or with unrelated nodes' results (tree_shuf)")
+    ap.add_argument("--fact-withdraw", type=float, default=0.0,
+                    help="tree aux views: the stated results are kept with probability 1 - progress / F over the first "
+                         "fraction F of training and dropped entirely afterwards (0 = always kept)")
     ap.add_argument("--aux-weight", type=float, default=0.5, help="grouped training: loss weight of each auxiliary view")
     ap.add_argument("--items-per-update", type=int, default=32, help="grouped training: problems per optimizer update")
     ap.add_argument("--lambda-brier", type=float, default=0.0, help="add this x Brier score (vs the soft target)")
@@ -164,14 +168,23 @@ def main() -> None:
             return ex
         return make
 
+    passes = {"n": 0}
+
     def grouped_examples() -> list[Example]:
         """Problems in shuffled order, each as build_group's [final] + K auxiliary views, so every update covers the same
-        problems with the same number of sequences in every arm."""
+        problems with the same number of sequences in every arm. With --fact-withdraw, stated results fade out with
+        training progress (counted in passes over the data)."""
         items = train_items[:]
         rng.shuffle(items)
-        return [e for it in items for e in build_group(it, aux_kind=args.aux_kind, k=args.grouped_aux,
-                                                         aux_weight=args.aux_weight, rng=rng, final=args.final,
-                                                         subq_target=args.subq_target, permute_final=args.permute_final)]
+        ex, n = [], len(items)
+        for j, it in enumerate(items):
+            progress = (passes["n"] + j / n) / max(args.epochs, 1e-9)
+            keep = 1.0 if not args.fact_withdraw else max(0.0, 1.0 - progress / args.fact_withdraw)
+            ex += build_group(it, aux_kind=args.aux_kind, k=args.grouped_aux, aux_weight=args.aux_weight, rng=rng,
+                              final=args.final, subq_target=args.subq_target, permute_final=args.permute_final,
+                              keep_prob=keep)
+        passes["n"] += 1
+        return ex
 
     if args.grouped_aux:
         group = (1 + args.grouped_aux) * args.items_per_update
@@ -206,6 +219,7 @@ def main() -> None:
         plan.append((name, make, n, max(1, math.ceil(epochs * n / per_step))))
         print(f"stage {name}: {n} examples per pass, {plan[-1][3]} steps", flush=True)
     total_steps = sum(x[3] for x in plan)
+    passes["n"] = 0                  # the counting pass above does not count as training progress
     print(f"examples/epoch={plan[-1][2]} steps={total_steps} params={sum(p.numel() for p in params)/1e9:.2f}B "
           f"device={dev}", flush=True)
 

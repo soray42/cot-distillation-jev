@@ -210,11 +210,77 @@ def build_stage_examples(item: dict, *, stage: int, n_stages: int, k: int, rng: 
     return ex
 
 
+def _node_p(sq: dict, subq_target: str = "cot") -> float | None:
+    if subq_target == "truth" and sq.get("truth") is not None:
+        return 1.0 if sq["truth"] else 0.0
+    p = sq.get("p_cot") if subq_target != "fresh" else sq.get("p_fresh")
+    return sq.get("p_fresh") if p is None else p
+
+
+def _fact_line(sq: dict) -> str | None:
+    p = (1.0 if sq["truth"] else 0.0) if sq.get("truth") is not None else sq.get("p_cot")
+    if p is None or 0.3 < p < 0.7:
+        return None
+    return f"Q: {sq['question']} A: {'Yes' if p >= 0.5 else 'No'}"
+
+
+def build_transition_views(item: dict, *, k: int, rng: random.Random, shuffled: bool = False, keep_prob: float = 1.0,
+                           weight: float = 0.5, subq_target: str = "cot") -> list[Example]:
+    """Tree-transition auxiliary views: k nodes, each asked with the results of its parent nodes stated in the prompt
+    (the local step parents -> child of the teacher's dependency tree). Nodes with parents are drawn first.
+    shuffled=True is the edge-rewiring control: the same node, label and number of stated results, but the stated
+    results come from nodes of the same item that are neither the node's parents nor its descendants. keep_prob drops
+    each stated result independently (scaffold withdrawal; 0 gives plain node questions)."""
+    nodes = [sq for sq in item.get("subqs", []) if "id" in sq]
+    if not nodes:
+        return []
+    by = {sq["id"]: sq for sq in nodes}
+    parents = {sq["id"]: [x for x in (sq.get("depends_on") or []) if x in by] for sq in nodes}
+    children = {i: [j for j in by if i in parents[j]] for i in by}
+    def descendants(i: str) -> set:
+        out, todo = set(), list(children[i])
+        while todo:
+            j = todo.pop()
+            if j not in out:
+                out.add(j)
+                todo += children[j]
+        return out
+    with_p = [sq for sq in nodes if parents[sq["id"]] and _node_p(sq, subq_target) is not None]
+    without = [sq for sq in nodes if not parents[sq["id"]] and _node_p(sq, subq_target) is not None]
+    pick = rng.sample(with_p, min(k, len(with_p)))
+    pick += rng.sample(without, min(k - len(pick), len(without)))
+    ex = []
+    for sq in pick:
+        given = [by[x] for x in parents[sq["id"]]]
+        if shuffled and given:
+            banned = {sq["id"], *parents[sq["id"]], *descendants(sq["id"])}
+            pool = [x for x in nodes if x["id"] not in banned]
+            given = rng.sample(pool, min(len(given), len(pool)))
+        lines = [ln for ln in (_fact_line(x) for x in given) if ln and rng.random() < keep_prob]
+        problem = item["prompt"] + (f"\n\n{FACTS_HEADER}\n" + "\n".join(lines) if lines else "")
+        yes_first = rng.random() < 0.5
+        a, b = ("Yes", "No") if yes_first else ("No", "Yes")
+        ex.append(Example(SUBQ_TEMPLATE.format(problem=problem, question=sq["question"], a=a, b=b), ["A", "B"],
+                          _soft(_node_p(sq, subq_target), yes_first), weight * item.get("weight", 1.0), "subq",
+                          item["item_id"]))
+    return ex
+
+
 def build_group(item: dict, *, aux_kind: str, k: int, aux_weight: float, rng: random.Random, final: str = "teacher",
-                subq_target: str = "cot", permute_final: float = 0.0) -> list[Example]:
+                subq_target: str = "cot", permute_final: float = 0.0, keep_prob: float = 1.0) -> list[Example]:
     """One problem for exposure-matched grouped training: [final] + exactly k auxiliary views. aux_kind "cot" uses
     CoT nodes, "random" the matched control questions (fresh targets), "placebo" the same CoT views with zero loss
-    weight (same forward/backward work, no auxiliary signal). Missing views are zero-weight copies of the final."""
+    weight (same forward/backward work, no auxiliary signal), "tree" CoT nodes asked with their parents' results
+    stated, "tree_shuf" the same with unrelated nodes' results stated (edge-rewiring control). Missing views are
+    zero-weight copies of the final."""
+    if aux_kind in ("tree", "tree_shuf"):
+        fin = [e for e in build_examples(item, final=final, subq="none", subq_target=subq_target, lambda_sub=0.0,
+                                         rng=rng, permute_final=permute_final) if e.kind == "final"]
+        if not fin:
+            return []
+        aux = build_transition_views(item, k=k, rng=rng, shuffled=aux_kind == "tree_shuf", keep_prob=keep_prob,
+                                     weight=aux_weight, subq_target=subq_target)
+        return fin + aux + [dataclasses.replace(fin[0], weight=0.0) for _ in range(k - len(aux))]
     sub, tgt = ("random", "fresh") if aux_kind == "random" else ("cot", subq_target)
     views = build_examples(item, final=final, subq=sub, subq_target=tgt, lambda_sub=aux_weight, rng=rng,
                            permute_final=permute_final, subq_k=k, subq_weight="each")

@@ -9,7 +9,7 @@
 # SAVE=1 keeps the final weights (bf16, ~4 GB per run) for interventions and later diagnostics.
 set -uo pipefail
 cd "$(dirname "$0")/../.."                      # ~/cotd
-SEEDS=${1:-"0 1"}; SMOKE=${SMOKE:-1}
+SEEDS=${1:-"0 1"}; SMOKE=${SMOKE:-1}; ARMS_LIST=${ARMS_LIST:-"G3 G4 G0"}
 PY=env/bin/python
 # CC1D=1: causal-conv1d CUDA kernel from /root/cc1d (built by build_cc1d.sh); keep it fixed within a seed's arms
 [ -n "${CC1D:-}" ] && export PYTHONPATH="/root/cc1d${PYTHONPATH:+:$PYTHONPATH}"
@@ -26,6 +26,9 @@ arm_args() {                                    # same subq/target/aux settings 
     G0) echo "--subq cot --subq-target cot --aux-kind placebo" ;;
     G3) echo "--subq cot --subq-target cot --aux-kind cot" ;;
     G4) echo "--subq random --subq-target fresh --aux-kind random" ;;
+    T1) echo "--subq cot --subq-target cot --aux-kind tree" ;;
+    T1S) echo "--subq cot --subq-target cot --aux-kind tree_shuf" ;;
+    T2) echo "--subq cot --subq-target cot --aux-kind tree --fact-withdraw 0.75" ;;
   esac
 }
 train() {                                       # train <arm> <seed> <train.jsonl> <evals> <out> <mbs> <ckpt 0|1> [extra]
@@ -53,7 +56,7 @@ echo "=== smoke $(date +%T)"
 SM=$(mktemp -d)
 head -n 16 "$DATA/train.jsonl" > "$SM/train.jsonl"
 head -n 20 "$E/kk_heldout.jsonl" > "$SM/eval.jsonl"
-for arm in G3 G4 G0; do
+for arm in $ARMS_LIST; do
   run_with_fallback "$SM/$arm.log" "$arm" 0 "$SM/train.jsonl" "smoke=$SM/eval.jsonl" "$SM/out-$arm" \
     --epochs 0.5 --items-per-update 4 --dump-hidden smoke \
     || { echo "SMOKE FAILED $arm"; tail -n 30 "$SM/$arm.log"; exit 1; }
@@ -65,7 +68,7 @@ echo "=== smoke passed $(date +%T)"
 fi
 
 for seed in $SEEDS; do
-  for arm in G3 G4 G0; do
+  for arm in $ARMS_LIST; do
     out="runs/$arm-a100-Qwen3.5-2B-Base-student_v3-s$seed"
     if [ -f "$out/metrics.json" ]; then echo "skip $out (done)"; continue; fi
     echo "=== $arm seed $seed -> $out $(date +%T)"

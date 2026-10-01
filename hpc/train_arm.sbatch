@@ -34,6 +34,9 @@
 # shallow-first, then plain final questions for EPOCHS (stepwise internalization, Deng et al. 2405.14838).
 # G0/G3/G4: exposure-matched grouped training (collaborator review E2): every update holds 32 problems, each as 1 final
 # view + 2 auxiliary views (placebo = CoT views with zero loss / CoT nodes at 0.5 / matched controls at 0.5).
+# T1/T1S/T2: tree transitions in the same grouped setting: each auxiliary node is asked with its parents' results
+# stated (T1), with as many unrelated nodes' results stated (T1S, edge-rewiring control), or with the parents' results
+# withdrawn over the first 75% of training (T2, internalization).
 set -euo pipefail
 cd "$HOME/cotd"
 module load cuda/12.4 2>/dev/null || true
@@ -67,6 +70,9 @@ arm_config() {           # sets F S T RLM DS for arm $1
     G0) F=teacher; S=cot;    T=cot; DX="--grouped-aux 2 --aux-kind placebo --aux-weight 0.5" ;;  # E2 placebo
     G3) F=teacher; S=cot;    T=cot; DX="--grouped-aux 2 --aux-kind cot --aux-weight 0.5" ;;      # E2 CoT nodes
     G4) F=teacher; S=random; T=fresh; DX="--grouped-aux 2 --aux-kind random --aux-weight 0.5" ;; # E2 matched controls
+    T1) F=teacher; S=cot;    T=cot; DX="--grouped-aux 2 --aux-kind tree --aux-weight 0.5" ;;     # tree: true parents
+    T1S) F=teacher; S=cot;   T=cot; DX="--grouped-aux 2 --aux-kind tree_shuf --aux-weight 0.5" ;; # tree: rewired edges
+    T2) F=teacher; S=cot;    T=cot; DX="--grouped-aux 2 --aux-kind tree --aux-weight 0.5 --fact-withdraw 0.75" ;;
     *) echo "unknown ARM $1"; return 1 ;;
   esac
 }

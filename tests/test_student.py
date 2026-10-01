@@ -519,3 +519,62 @@ class TestPlaceboGradient(unittest.TestCase):
         self.assertEqual(len(g_group), len(g_final))
         for a, b in zip(g_group, g_final):
             self.assertTrue(torch.allclose(a, b / 3, atol=1e-6, rtol=1e-4))
+
+
+@unittest.skipUnless(HAVE, "needs torch")
+class TestTreeTransitions(unittest.TestCase):
+    # n1 n2 -> n3 -> n5 ; n4 independent ; n6 depends on n4
+    NODES = [{"id": "n1", "question": "q1?", "p_cot": 0.9, "depends_on": []},
+             {"id": "n2", "question": "q2?", "p_cot": 0.1, "depends_on": []},
+             {"id": "n3", "question": "q3?", "p_cot": 0.9, "depends_on": ["n1", "n2"]},
+             {"id": "n4", "question": "q4?", "p_cot": 0.8, "depends_on": []},
+             {"id": "n5", "question": "q5?", "p_cot": 0.2, "depends_on": ["n3"]},
+             {"id": "n6", "question": "q6?", "p_cot": 0.9, "depends_on": ["n4"]}]
+    ITEM = {"item_id": "x", "prompt": "P", "labels": ["A", "B"], "gold_label": "A", "teacher": {"A": 0.7, "B": 0.3},
+            "subqs": NODES, "random_subqs": []}
+
+    def parse(self, e):
+        head, q = e.text.split("\n\nIntermediate question: ")
+        facts = [l.split(" A: ")[0][3:] for l in head.split("\n") if l.startswith("Q: ")]
+        return q.split("\n")[0], facts
+
+    def test_true_parents_and_shuffled_control(self):
+        import random as _r
+        from cotdistill.student import build_transition_views
+        par = {"q3?": {"q1?", "q2?"}, "q5?": {"q3?"}, "q6?": {"q4?"}}
+        desc = {"q3?": {"q5?"}, "q5?": set(), "q6?": set()}
+        for seed in range(30):
+            for e in build_transition_views(self.ITEM, k=2, rng=_r.Random(seed)):
+                q, facts = self.parse(e)
+                self.assertIn(q, par)                                  # nodes with parents are drawn first
+                self.assertEqual(set(facts), par[q])
+            for e in build_transition_views(self.ITEM, k=2, rng=_r.Random(seed), shuffled=True):
+                q, facts = self.parse(e)
+                self.assertTrue(len(facts) <= len(par[q]) and facts)
+                self.assertFalse(set(facts) & (par[q] | desc[q] | {q}))
+        none = build_transition_views(self.ITEM, k=2, rng=_r.Random(0), keep_prob=0.0)
+        self.assertTrue(all("Known intermediate results" not in e.text for e in none))
+
+    def test_group_and_training_on_cpu(self):
+        import json as _j
+        import os
+        import random as _r
+        import subprocess
+        import tempfile
+        from cotdistill.student import build_group
+        g = build_group(self.ITEM, aux_kind="tree", k=2, aux_weight=0.5, rng=_r.Random(0))
+        self.assertEqual([e.kind for e in g], ["final", "subq", "subq"])
+        self.assertNotIn("Known intermediate results", g[0].text)        # the final question never gets facts
+        tok, model = tiny()
+        with tempfile.TemporaryDirectory() as d:
+            model.save_pretrained(d + "/m"); tok.save_pretrained(d + "/m")
+            Path(d + "/t.jsonl").write_text("\n".join(_j.dumps(dict(self.ITEM, item_id=f"i{j}")) for j in range(6)))
+            for kind, extra in (("tree", ["--fact-withdraw", "0.75"]), ("tree_shuf", [])):
+                out = subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / "scripts/train_student.py"),
+                                      "--model", d + "/m", "--train", d + "/t.jsonl", "--eval", "v=" + d + "/t.jsonl",
+                                      "--grouped-aux", "2", "--aux-kind", kind, "--items-per-update", "2", "--epochs", "2",
+                                      "--micro-bs", "2", "--max-len", "96", "--precision", "bf16", "--no-grad-ckpt",
+                                      "--out", d + "/o"] + extra, capture_output=True, text=True, timeout=600,
+                                     env={**os.environ, "CUDA_VISIBLE_DEVICES": ""})
+                self.assertEqual(out.returncode, 0, out.stderr[-2000:])
+                self.assertIn("steps=6", out.stdout)
