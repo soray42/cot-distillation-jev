@@ -319,6 +319,68 @@ def folio(path: str, n: int | None = None, seed: int = 0) -> list[dict]:
 
 
 # ---------------------------------------------------------------- ARC
+_CALC = re.compile(r"<<[^=<>]*=([^<>]+)>>")
+
+
+def _num(x: str) -> float | None:
+    try:
+        return float(x.replace(",", "").replace("$", "").strip())
+    except ValueError:
+        return None
+
+
+def _fmt(v: float) -> str:
+    return str(int(round(v))) if abs(v - round(v)) < 1e-9 else f"{v:.2f}".rstrip("0").rstrip(".")
+
+
+def gsm8k(path: str, n: int | None = None, seed: int = 0, n_options: int = 5) -> list[dict]:
+    """GSM8K word problems as multiple choice. Distractors are the solution's own intermediate results (from the
+    <<a*b=c>> calculator notes) plus one-sided perturbations of the answer or of an intermediate result, so that
+    neither "largest", "smallest", "middle value" nor "has a near neighbour" picks the answer. depth = number of
+    calculator steps in the reference solution."""
+    import pandas as pd
+    rng = random.Random(seed)
+    rows = list(pd.read_parquet(path).itertuples(index=False))
+    split = "test" if "test" in path else "train"
+    idx = list(range(len(rows)))
+    rng.shuffle(idx)
+    out = []
+    for i in idx:
+        q, sol = rows[i].question.strip(), rows[i].answer
+        gold = _num(sol.rsplit("####", 1)[-1])
+        if gold is None or gold < 0:
+            continue
+        steps = [v for v in (_num(m) for m in _CALC.findall(sol)) if v is not None]
+        inter = [v for v in dict.fromkeys(steps) if v >= 0 and abs(v - gold) > 1e-9]
+        pick = rng.sample(inter, min(2, len(inter)))
+        pool = []
+        for base in [gold] + inter:
+            d = rng.choice([1, 2, 5, 10]) if base >= 20 else rng.choice([1, 2])
+            pool += [base + d if rng.random() < 0.5 else base - d, base * 2]
+            if base % 2 == 0:
+                pool.append(base / 2)
+        pool = [v for v in dict.fromkeys(pool) if v > 0 and abs(v - gold) > 1e-9 and v not in pick]
+        rng.shuffle(pool)
+        dis = (pick + pool)[:n_options - 1]
+        if len(dis) < n_options - 1:
+            continue
+        texts = [_fmt(gold)] + [_fmt(v) for v in dis]
+        if len(set(texts)) < n_options:
+            continue
+        keys = [f"o{j}" for j in range(n_options)]
+        options = dict(zip(keys, texts))
+        order = keys[:]
+        rng.shuffle(order)
+        opt_txt = "\n".join(f"{chr(65 + j)}) {options[k]}" for j, k in enumerate(order))
+        out.append({"item_id": f"gsm8k-{split}-{i}", "domain": "gsm8k", "hidden": None, "gold": "o0",
+                    "label_order": order, "gold_label": chr(65 + order.index("o0")), "depth": max(1, len(steps)),
+                    "n_rules": 0, "path": [], "predicates": [], "prompt": f"Question: {q}\nOptions:\n{opt_txt}",
+                    "options": options, "meta": {"split": split, "steps": len(steps)}})
+        if n and len(out) >= n:
+            break
+    return out
+
+
 def arc(paths: list[str], n: int | None = None, seed: int = 0) -> list[dict]:
     """ARC questions from the given parquet files in order (Challenge first), options reshuffled."""
     import pandas as pd

@@ -77,7 +77,8 @@ def permute_options(prompt: str, labels: list[str], target: list[float], gold: i
 
 def build_examples(item: dict, *, final: str, subq: str, subq_target: str, lambda_sub: float,
                    rng: random.Random, rationale_lm: bool = False, lambda_lm: float = 1.0,
-                   permute_final: float = 0.0, subq_k: int = 0, subq_weight: str = "split") -> list[Example]:
+                   permute_final: float = 0.0, subq_k: int = 0, subq_weight: str = "split",
+                   subq_frac: float = 0.0) -> list[Example]:
     """Turn one student-data record into training examples for a given arm.
 
     final: "none" | "teacher" (teacher answer distribution) | "gold" (one-hot gold)
@@ -91,7 +92,10 @@ def build_examples(item: dict, *, final: str, subq: str, subq_target: str, lambd
                    target follows the option texts), so the student cannot lean on letter positions
     subq_k: if > 0, use at most this many (randomly drawn) sub-questions per item and epoch
     subq_weight: "split" (each of the n sub-questions weighs lambda_sub / n) | "each" (each weighs lambda_sub)
+    subq_frac: if > 0, use a random ceil(frac * n) of the item's sub-questions per epoch
+    Every example's weight is multiplied by item["weight"] (default 1; e.g. per-category balancing weights).
     """
+    wi = item.get("weight", 1.0)
     ex: list[Example] = []
     labels = item["labels"]
     gold = labels.index(item["gold_label"]) if item.get("gold_label") in labels else None
@@ -109,7 +113,7 @@ def build_examples(item: dict, *, final: str, subq: str, subq_target: str, lambd
             shuffled = permute_options(prompt, labels, target, gold, rng)
             if shuffled:
                 prompt, target, fgold = shuffled
-        ex.append(Example(FINAL_TEMPLATE.format(problem=prompt), labels, target, 1.0, "final", item["item_id"], fgold))
+        ex.append(Example(FINAL_TEMPLATE.format(problem=prompt), labels, target, wi, "final", item["item_id"], fgold))
     if subq == "mix":            # same number of sub-questions as "cot": half CoT nodes, half matched controls
         cot = [dict(sq, _kind="cot") for sq in item.get("subqs", [])]
         ctl = [dict(sq, _kind="random") for sq in item.get("random_subqs", [])]
@@ -135,7 +139,9 @@ def build_examples(item: dict, *, final: str, subq: str, subq_target: str, lambd
             usable.append((sq["question"], p))
     if subq_k > 0 and len(usable) > subq_k:
         usable = rng.sample(usable, subq_k)
-    w = lambda_sub if subq_weight == "each" else lambda_sub / max(1, len(usable))
+    if subq_frac > 0 and usable:
+        usable = rng.sample(usable, max(1, math.ceil(subq_frac * len(usable))))
+    w = wi * (lambda_sub if subq_weight == "each" else lambda_sub / max(1, len(usable)))
     for q, p in usable:
         yes_first = rng.random() < 0.5
         a, b = ("Yes", "No") if yes_first else ("No", "Yes")
@@ -193,7 +199,7 @@ def build_stage_examples(item: dict, *, stage: int, n_stages: int, k: int, rng: 
         yes_first = rng.random() < 0.5
         a, b = ("Yes", "No") if yes_first else ("No", "Yes")
         ex.append(Example(SUBQ_TEMPLATE.format(problem=item["prompt"], question=sq["question"], a=a, b=b), ["A", "B"],
-                          _soft(p, yes_first), weight, "subq", item["item_id"]))
+                          _soft(p, yes_first), weight * item.get("weight", 1.0), "subq", item["item_id"]))
     return ex
 
 

@@ -43,6 +43,8 @@ def main() -> None:
     ap.add_argument("--lambda-lm", type=float, default=1.0)
     ap.add_argument("--lm-max-len", type=int, default=3072)
     ap.add_argument("--subq-k", type=int, default=0, help="at most K random sub-questions per item and epoch (0 = all)")
+    ap.add_argument("--subq-frac", type=float, default=0.0,
+                    help="use a random fraction of each item's sub-questions per epoch (0 = all)")
     ap.add_argument("--subq-weight", default="split", choices=["split", "each"],
                     help="split: lambda-sub shared by an item's sub-questions; each: every sub-question weighs lambda-sub")
     ap.add_argument("--depth-stages", type=int, default=0,
@@ -103,7 +105,7 @@ def main() -> None:
             ex += build_examples(it, final=args.final, subq=args.subq, subq_target=args.subq_target,
                                  lambda_sub=args.lambda_sub, rng=rng, rationale_lm=args.rationale_lm,
                                  lambda_lm=args.lambda_lm, permute_final=args.permute_final,
-                                 subq_k=args.subq_k, subq_weight=args.subq_weight)
+                                 subq_k=args.subq_k, subq_weight=args.subq_weight, subq_frac=args.subq_frac)
         rng.shuffle(ex)
         return ex
 

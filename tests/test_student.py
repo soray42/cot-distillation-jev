@@ -284,3 +284,29 @@ class TestDepthCurriculum(unittest.TestCase):
             self.assertIn("stage final: 6 examples per pass, 3 steps", out.stdout)
             self.assertIn("steps=9", out.stdout)
             self.assertTrue((Path(d) / "o/metrics.json").exists())
+
+
+@unittest.skipUnless(HAVE, "needs torch")
+class TestItemWeightAndFrac(unittest.TestCase):
+    ITEM = {"item_id": "x", "prompt": "P\nOptions:\nA) a\nB) b", "labels": ["A", "B"], "gold_label": "A",
+            "teacher": {"A": 0.9, "B": 0.1}, "weight": 1.5,
+            "subqs": [{"id": f"n{i}", "question": f"q{i}?", "p_cot": 0.8, "depends_on": []} for i in range(6)],
+            "random_subqs": []}
+
+    def test_item_weight_scales_final_and_subqs(self):
+        import random as _r
+        from cotdistill.student import build_examples, build_stage_examples
+        ex = build_examples(self.ITEM, final="teacher", subq="cot", subq_target="cot", lambda_sub=1.0, rng=_r.Random(0))
+        self.assertAlmostEqual(next(e for e in ex if e.kind == "final").weight, 1.5)
+        self.assertAlmostEqual(sum(e.weight for e in ex if e.kind == "subq"), 1.5)
+        st = build_stage_examples(self.ITEM, stage=0, n_stages=2, k=1, rng=_r.Random(0))
+        self.assertAlmostEqual(st[0].weight, 1.5)
+
+    def test_subq_frac(self):
+        import random as _r
+        from cotdistill.student import build_examples
+        ex = build_examples(self.ITEM, final="teacher", subq="cot", subq_target="cot", lambda_sub=1.0,
+                            rng=_r.Random(0), subq_frac=0.5)
+        sub = [e for e in ex if e.kind == "subq"]
+        self.assertEqual(len(sub), 3)
+        self.assertAlmostEqual(sum(e.weight for e in sub), 1.5)          # split weights still sum to lambda x item weight

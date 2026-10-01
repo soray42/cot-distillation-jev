@@ -10,6 +10,7 @@ analysis (hedge-option bias, prose-only states):
 from __future__ import annotations
 
 import argparse
+import collections
 import hashlib
 import json
 import random
@@ -25,6 +26,12 @@ from build_student_data import convert  # noqa: E402
 
 RUNS = ["label_kk_v1", "label_jl_v1", "label_policy_v1", "label_sharc_v1", "label_folio_v1",
         "label_sharc2_v1", "label_policy2_v1", "label_arc_v1"]
+EXTRA_RUNS = ["label_folio2_v1", "label_gsm8k_v1"]      # v3b: FOLIO top-up and GSM8K multiple choice
+
+
+def category(item_id: str) -> str:
+    c = item_id.split("-")[0]
+    return "policy" if c in ("expense", "returns", "subscription") else c
 NONE_TEXT = "None of the above"
 OPT = re.compile(r"^([A-Z])\) (.*)$")
 
@@ -85,14 +92,17 @@ def main() -> None:
     ap.add_argument("--out", default="data/student_v2")
     ap.add_argument("--val-frac", type=float, default=0.1)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--extra", action="store_true", help="also include the v3b runs (FOLIO top-up, GSM8K)")
+    ap.add_argument("--balance", action="store_true",
+                    help="per-item weight N / (C * N_c) so that each category carries the same total training weight")
     args = ap.parse_args()
     out = ROOT / args.out
     out.mkdir(parents=True, exist_ok=True)
     splits, stats = {"train": [], "val": []}, {}
-    for run in RUNS:
+    for run in RUNS + (EXTRA_RUNS if args.extra else []):
         tree_dir, solve_dir = ROOT / "teacher_cache" / f"{run}_tree", ROOT / "teacher_cache" / run
         for p in sorted(solve_dir.glob("*.json")):
-            if p.name in ("summary.json", "calls.jsonl") or not p.name[0].isalpha():
+            if p.name in ("summary.json", "calls.jsonl") or not p.name[0].isalpha() or not (tree_dir.exists() or solve_dir.exists()):
                 continue
             src = tree_dir / p.name if (tree_dir / p.name).exists() else p
             res = json.loads(src.read_text())
@@ -117,6 +127,13 @@ def main() -> None:
                 st["aug"][aug] = st["aug"].get(aug, 0) + 1
             h = int(hashlib.sha1(rec["item_id"].encode()).hexdigest(), 16) % 1000 / 1000
             splits["val" if h < args.val_frac else "train"].append(rec)
+    if args.balance:                       # weights from the training split; val records get the same per-category weight
+        n_c = collections.Counter(category(r["item_id"]) for r in splits["train"])
+        w_c = {c: len(splits["train"]) / (len(n_c) * n) for c, n in n_c.items()}
+        for recs in splits.values():
+            for r in recs:
+                r["weight"] = round(w_c[category(r["item_id"])], 4)
+        print("category weights:", {c: round(w, 3) for c, w in sorted(w_c.items())}, "items:", dict(n_c))
     for name, recs in splits.items():
         with open(out / f"{name}.jsonl", "w") as f:
             for r in recs:
