@@ -22,7 +22,7 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from cotdistill.student import (Example, brier_loss, build_examples, build_fact_examples,  # noqa: E402
+from cotdistill.student import (Example, brier_loss, build_examples, build_fact_examples, build_group,  # noqa: E402
                                 build_stage_examples, evaluate, evaluate_subq, kl_loss, label_logits, lm_loss,
                                 load_model)
 
@@ -65,6 +65,13 @@ def main() -> None:
                          "levels first, then the plain final questions for --epochs; 0 = off")
     ap.add_argument("--facts-always", action="store_true",
                     help="upper-bound diagnostic: every final question is trained with all tree nodes stated")
+    ap.add_argument("--grouped-aux", type=int, default=0,
+                    help="exposure-matched grouped training: every optimizer update holds --items-per-update problems, "
+                         "each as 1 final view + K auxiliary views (0 = off)")
+    ap.add_argument("--aux-kind", default="cot", choices=["cot", "random", "placebo"],
+                    help="grouped training: CoT nodes, matched controls, or the CoT views with zero loss (placebo)")
+    ap.add_argument("--aux-weight", type=float, default=0.5, help="grouped training: loss weight of each auxiliary view")
+    ap.add_argument("--items-per-update", type=int, default=32, help="grouped training: problems per optimizer update")
     ap.add_argument("--lambda-brier", type=float, default=0.0, help="add this x Brier score (vs the soft target)")
     ap.add_argument("--permute-final", type=float, default=0.0,
                     help="probability of reordering a final question's options each epoch (target follows the texts)")
@@ -155,7 +162,23 @@ def main() -> None:
             return ex
         return make
 
-    if args.facts_always:
+    def grouped_examples() -> list[Example]:
+        """Problems in shuffled order, each as build_group's [final] + K auxiliary views, so every update covers the same
+        problems with the same number of sequences in every arm."""
+        items = train_items[:]
+        rng.shuffle(items)
+        return [e for it in items for e in build_group(it, aux_kind=args.aux_kind, k=args.grouped_aux,
+                                                         aux_weight=args.aux_weight, rng=rng, final=args.final,
+                                                         subq_target=args.subq_target, permute_final=args.permute_final)]
+
+    if args.grouped_aux:
+        group = (1 + args.grouped_aux) * args.items_per_update
+        if group % args.micro_bs:
+            raise SystemExit(f"(1 + grouped_aux) x items_per_update = {group} must be a multiple of micro_bs")
+        args.grad_accum = group // args.micro_bs
+        per_step = group
+        stages = [("grouped", grouped_examples, args.epochs)]
+    elif args.facts_always:
         stages = [("facts", fact_stage(0, 0), args.epochs)]
     elif args.fact_stages:           # fact internalization: stated facts removed shallow-first, then plain finals
         stages = [(f"facts{s}", fact_stage(s, args.fact_stages), 1.0) for s in range(args.fact_stages)]

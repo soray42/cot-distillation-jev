@@ -429,3 +429,52 @@ class TestLoRA(unittest.TestCase):
             base = load_model(d + "/m", torch.float32)
             diff = sum((a - b).abs().sum().item() for a, b in zip(merged.parameters(), base.parameters()))
             self.assertGreater(diff, 0.0)                            # training changed the merged weights
+
+
+@unittest.skipUnless(HAVE, "needs torch")
+class TestGroupedAux(unittest.TestCase):
+    ITEM = {"item_id": "x", "prompt": "Q\nOptions:\nA) x\nB) y", "labels": ["A", "B"], "gold_label": "A",
+            "teacher": {"A": 0.8, "B": 0.2},
+            "subqs": [{"id": f"n{i}", "question": f"c{i}?", "p_cot": 0.9, "depends_on": []} for i in range(4)],
+            "random_subqs": [{"question": f"r{i}?", "p_fresh": 0.2} for i in range(4)]}
+
+    def test_group_shapes_and_weights(self):
+        import random as _r
+        from cotdistill.student import build_group
+        for kind, want_q, want_w in (("cot", "c", 0.5), ("random", "r", 0.5), ("placebo", "c", 0.0)):
+            g = build_group(self.ITEM, aux_kind=kind, k=2, aux_weight=0.5, rng=_r.Random(0))
+            self.assertEqual([e.kind for e in g], ["final", "subq", "subq"])
+            self.assertEqual(g[0].weight, 1.0)
+            for e in g[1:]:
+                self.assertAlmostEqual(e.weight, want_w)
+                self.assertIn(f"Intermediate question: {want_q}", e.text)
+        # same problems and same CoT views in placebo and cot arms (same rng seed)
+        a = build_group(self.ITEM, aux_kind="cot", k=2, aux_weight=0.5, rng=_r.Random(3))
+        b = build_group(self.ITEM, aux_kind="placebo", k=2, aux_weight=0.5, rng=_r.Random(3))
+        self.assertEqual([e.text for e in a], [e.text for e in b])
+
+    def test_fill_with_zero_weight_copies(self):
+        import random as _r
+        from cotdistill.student import build_group
+        g = build_group(dict(self.ITEM, subqs=self.ITEM["subqs"][:1]), aux_kind="cot", k=2, aux_weight=0.5, rng=_r.Random(0))
+        self.assertEqual(len(g), 3)
+        self.assertEqual((g[2].kind, g[2].weight), ("final", 0.0))
+
+    def test_grouped_training_on_cpu(self):
+        import json as _j
+        import os
+        import subprocess
+        import tempfile
+        tok, model = tiny()
+        with tempfile.TemporaryDirectory() as d:
+            model.save_pretrained(d + "/m"); tok.save_pretrained(d + "/m")
+            Path(d + "/t.jsonl").write_text("\n".join(_j.dumps(dict(self.ITEM, item_id=f"i{j}")) for j in range(6)))
+            for kind in ("cot", "random", "placebo"):
+                out = subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / "scripts/train_student.py"),
+                                      "--model", d + "/m", "--train", d + "/t.jsonl", "--eval", "v=" + d + "/t.jsonl",
+                                      "--grouped-aux", "2", "--aux-kind", kind, "--items-per-update", "2", "--epochs", "1",
+                                      "--micro-bs", "2", "--max-len", "64", "--precision", "bf16", "--no-grad-ckpt",
+                                      "--out", d + "/o"], capture_output=True, text=True, timeout=600,
+                                     env={**os.environ, "CUDA_VISIBLE_DEVICES": ""})
+                self.assertEqual(out.returncode, 0, out.stderr[-2000:])
+                self.assertIn("stage grouped: 18 examples per pass, 3 steps", out.stdout)

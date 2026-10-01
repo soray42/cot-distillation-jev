@@ -32,6 +32,8 @@
 # A10ub: upper-bound diagnostic, final questions trained with the teacher's tree nodes stated as text (eval set
 # val_facts has them too) · A10: fact internalization, FSTAGES (default 3) passes with stated nodes dropped
 # shallow-first, then plain final questions for EPOCHS (stepwise internalization, Deng et al. 2405.14838).
+# G0/G3/G4: exposure-matched grouped training (collaborator review E2): every update holds 32 problems, each as 1 final
+# view + 2 auxiliary views (placebo = CoT views with zero loss / CoT nodes at 0.5 / matched controls at 0.5).
 set -euo pipefail
 cd "$HOME/cotd"
 module load cuda/12.4 2>/dev/null || true
@@ -59,6 +61,9 @@ arm_config() {           # sets F S T RLM DS for arm $1
     A9b) F=teacher; S=cot;   T=cot; DS=${DSTAGES:-4}; DX="--final-replay 1 --level-balanced --reset-optim" ;;
     A10ub) F=teacher; S=none; T=cot; DX="--facts-always" ;;      # diagnostic: tree nodes stated in every prompt
     A10) F=teacher; S=none;  T=cot; DX="--fact-stages ${FSTAGES:-3} --reset-optim" ;;  # fact internalization
+    G0) F=teacher; S=cot;    T=cot; DX="--grouped-aux 2 --aux-kind placebo --aux-weight 0.5" ;;  # E2 placebo
+    G3) F=teacher; S=cot;    T=cot; DX="--grouped-aux 2 --aux-kind cot --aux-weight 0.5" ;;      # E2 CoT nodes
+    G4) F=teacher; S=random; T=fresh; DX="--grouped-aux 2 --aux-kind random --aux-weight 0.5" ;; # E2 matched controls
     *) echo "unknown ARM $1"; return 1 ;;
   esac
 }

@@ -7,6 +7,7 @@ distribution at the last real token, restricted to the option-letter tokens.
 """
 from __future__ import annotations
 
+import dataclasses
 import math
 import random
 import re
@@ -207,6 +208,23 @@ def build_stage_examples(item: dict, *, stage: int, n_stages: int, k: int, rng: 
         ex.append(Example(SUBQ_TEMPLATE.format(problem=item["prompt"], question=sq["question"], a=a, b=b), ["A", "B"],
                           _soft(p, yes_first), weight * item.get("weight", 1.0), "subq", item["item_id"]))
     return ex
+
+
+def build_group(item: dict, *, aux_kind: str, k: int, aux_weight: float, rng: random.Random, final: str = "teacher",
+                subq_target: str = "cot", permute_final: float = 0.0) -> list[Example]:
+    """One problem for exposure-matched grouped training: [final] + exactly k auxiliary views. aux_kind "cot" uses
+    CoT nodes, "random" the matched control questions (fresh targets), "placebo" the same CoT views with zero loss
+    weight (same forward/backward work, no auxiliary signal). Missing views are zero-weight copies of the final."""
+    sub, tgt = ("random", "fresh") if aux_kind == "random" else ("cot", subq_target)
+    views = build_examples(item, final=final, subq=sub, subq_target=tgt, lambda_sub=aux_weight, rng=rng,
+                           permute_final=permute_final, subq_k=k, subq_weight="each")
+    fin = [e for e in views if e.kind == "final"]
+    if not fin:
+        return []
+    aux = [e for e in views if e.kind == "subq"][:k]
+    if aux_kind == "placebo":
+        aux = [dataclasses.replace(e, weight=0.0) for e in aux]
+    return fin + aux + [dataclasses.replace(fin[0], weight=0.0) for _ in range(k - len(aux))]
 
 
 FACTS_HEADER = "Known intermediate results:"
