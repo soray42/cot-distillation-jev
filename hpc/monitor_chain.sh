@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Follow a relay chain: every 5 minutes, look at the newest job the relay submitted (HPC_KEY, HPC_HOST in the env)
+# Follow a relay chain: every 5 minutes, look at the relay's running job (else its newest submission; relays
+# queue the next job ahead with a dependency) (HPC_KEY, HPC_HOST in the env)
 # and exit on the first event not reported before: smoke passed or failed, an error in the job log, the first
 # training-step line of an arm (with the projected training time against the walltime), the job leaving the
 # queue, or the relay finishing. Reported events are kept in notes/chain_<relay log>.seen, so a relaunch only
@@ -17,8 +18,12 @@ event() {   # key, message: report once
 }
 for i in $(seq 1 22); do
   R=$(timeout 60 ssh.exe -o BatchMode=yes -o ConnectTimeout=20 -i "$HPC_KEY" "$HPC_HOST" "cd ~/cotd;
-      J=\$(grep -oE 'submitted [0-9]+' logs/$RLOG | tail -1 | cut -d' ' -f2); echo \"JID \${J:-none}\";
+      J=; for j in \$(grep -oE 'submitted [0-9]+' logs/$RLOG | cut -d' ' -f2); do
+        [ \"\$(squeue -h -j \$j -o %T 2>/dev/null)\" = RUNNING ] && J=\$j; done;
+      [ -n \"\$J\" ] || J=\$(grep -oE 'submitted [0-9]+' logs/$RLOG | tail -1 | cut -d' ' -f2); echo \"JID \${J:-none}\";
       grep -qE 'relay[0-9]* done' logs/$RLOG && echo RELAYDONE;
+      for j in \$(grep -oE 'submitted [0-9]+' logs/$RLOG | cut -d' ' -f2); do
+        echo \"ALL \$j \$(sacct -j \$j -X -n -o State%20 | head -1)\"; done;
       if [ -n \"\$J\" ]; then sacct -j \$J -X -n -o State%20,Elapsed | head -1 | sed 's/^/STATE /';
         L=logs/cotd-train-\$J.out;
         grep -E 'SMOKE|smoke passed|JEFF SMOKE SKIPPED|^=== |failed|Traceback|Error|all done|examples/epoch' \$L 2>/dev/null | tail -n 12;
@@ -37,6 +42,10 @@ for i in $(seq 1 22); do
     H=$(awk -v s="$STEPS" -v t="$SPS" 'BEGIN{printf "%.2f", s*t/3600}')
     event "$J:steps:$ARM" "job $J arm $ARM training: $STEPS steps x ${SPS}s = ${H}h projected (walltime 6h incl. smoke/eval)" && { echo "$R"; exit 0; }
   fi
+  while read -r _ jid jst; do                 # every relay job that has ended (also ones queued ahead)
+    case "$jst" in COMPLETED|FAILED|CANCELLED*|TIMEOUT|OUT_OF_ME*|NODE_FAIL)
+      event "$jid:end" "job $jid $jst" && { echo "$R"; exit 0; } ;; esac
+  done < <(echo "$R" | grep '^ALL ')
   case "$ST" in COMPLETED|FAILED|CANCELLED*|TIMEOUT|OUT_OF_ME*|NODE_FAIL)
     event "$J:end" "job $J $ST" && { echo "$R"; exit 0; } ;; esac
   if echo "$R" | grep -q RELAYDONE && [ -n "$ST" ] && ! echo "$ST" | grep -qE "PENDING|RUNNING"; then
