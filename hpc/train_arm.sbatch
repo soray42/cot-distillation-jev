@@ -28,6 +28,9 @@
 # the final questions for EPOCHS, with a fresh LR schedule per stage · A9b: A9 + one level-balanced tree node per item
 # and epoch kept during the final stage, level-balanced replay, AdamW state reset per stage (Yao et al. 2505.17923;
 # Deng et al. 2405.14838; Saparov et al. 2412.04703).
+# A10ub: upper-bound diagnostic, final questions trained with the teacher's tree nodes stated as text (eval set
+# val_facts has them too) · A10: fact internalization, FSTAGES (default 3) passes with stated nodes dropped
+# shallow-first, then plain final questions for EPOCHS (stepwise internalization, Deng et al. 2405.14838).
 set -euo pipefail
 cd "$HOME/cotd"
 module load cuda/12.4 2>/dev/null || true
@@ -53,6 +56,8 @@ arm_config() {           # sets F S T RLM DS for arm $1
     A8) F=teacher; S=mix;    T=cot ;;           # half CoT nodes, half matched controls (same count as A3)
     A9) F=teacher; S=cot;    T=cot; DS=${DSTAGES:-4} ;;  # depth curriculum: CoT nodes by tree depth, then finals
     A9b) F=teacher; S=cot;   T=cot; DS=${DSTAGES:-4}; DX="--final-replay 1 --level-balanced --reset-optim" ;;
+    A10ub) F=teacher; S=none; T=cot; DX="--facts-always" ;;      # diagnostic: tree nodes stated in every prompt
+    A10) F=teacher; S=none;  T=cot; DX="--fact-stages ${FSTAGES:-3} --reset-optim" ;;  # fact internalization
     *) echo "unknown ARM $1"; return 1 ;;
   esac
 }

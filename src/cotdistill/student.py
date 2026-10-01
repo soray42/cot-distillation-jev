@@ -209,6 +209,40 @@ def build_stage_examples(item: dict, *, stage: int, n_stages: int, k: int, rng: 
     return ex
 
 
+FACTS_HEADER = "Known intermediate results:"
+
+
+def fact_block(item: dict, min_depth: int = 0) -> str:
+    """The item's tree nodes as stated results ("Q: ... A: Yes/No"), shallow to deep, keeping nodes of depth >=
+    min_depth. The answer is the program truth when known, else the teacher's CoT-conditioned answer; nodes the
+    teacher was unsure about (0.3 < p < 0.7) are left out. Returns "" when nothing is kept."""
+    nodes = [sq for sq in item.get("subqs", []) if "id" in sq]
+    if not nodes:
+        return ""
+    d = node_depths(nodes)
+    lines = []
+    for sq in sorted(nodes, key=lambda x: (d[x["id"]], x["id"])):
+        if d[sq["id"]] < min_depth:
+            continue
+        p = (1.0 if sq["truth"] else 0.0) if sq.get("truth") is not None else sq.get("p_cot")
+        if p is None or 0.3 < p < 0.7:
+            continue
+        lines.append(f"Q: {sq['question']} A: {'Yes' if p >= 0.5 else 'No'}")
+    return f"\n\n{FACTS_HEADER}\n" + "\n".join(lines) if lines else ""
+
+
+def build_fact_examples(item: dict, *, stage: int, n_stages: int, final: str = "teacher") -> list[Example]:
+    """Fact-internalization curriculum: the final question with the item's tree nodes stated in the prompt. Stage s
+    of n_stages drops the nodes shallower than ceil(s (M+1) / n_stages) (shallow facts are internalized first);
+    stage n_stages (or any stage that drops everything) gives the plain final question. n_stages=0 keeps all."""
+    nodes = [sq for sq in item.get("subqs", []) if "id" in sq]
+    top = max(node_depths(nodes).values()) if nodes else 0
+    cut = 0 if n_stages == 0 else math.ceil(stage * (top + 1) / n_stages)
+    ex = build_examples(dict(item, prompt=item["prompt"] + fact_block(item, cut)), final=final, subq="none",
+                        subq_target="cot", lambda_sub=0.0, rng=random.Random(0))
+    return [e for e in ex if e.kind == "final"]
+
+
 def text_parts(model):
     """(backbone returning last_hidden_state, output embedding) for causal or multimodal wrappers."""
     head = model.get_output_embeddings()

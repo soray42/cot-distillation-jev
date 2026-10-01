@@ -22,8 +22,9 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from cotdistill.student import (Example, brier_loss, build_examples, build_stage_examples, evaluate,  # noqa: E402
-                                evaluate_subq, kl_loss, label_logits, lm_loss, load_model)
+from cotdistill.student import (Example, brier_loss, build_examples, build_fact_examples,  # noqa: E402
+                                build_stage_examples, evaluate, evaluate_subq, kl_loss, label_logits, lm_loss,
+                                load_model)
 
 
 def read_jsonl(p: str) -> list[dict]:
@@ -54,7 +55,12 @@ def main() -> None:
     ap.add_argument("--final-replay", type=int, default=0,
                     help="depth curriculum: also train this many tree nodes per item and epoch in the final stage")
     ap.add_argument("--level-balanced", action="store_true", help="depth curriculum: draw replay nodes level-uniformly")
-    ap.add_argument("--reset-optim", action="store_true", help="depth curriculum: reset the AdamW state at each stage")
+    ap.add_argument("--reset-optim", action="store_true", help="curricula: reset the AdamW state at each stage")
+    ap.add_argument("--fact-stages", type=int, default=0,
+                    help="fact internalization: N passes with the tree nodes stated in the prompt, dropping shallow "
+                         "levels first, then the plain final questions for --epochs; 0 = off")
+    ap.add_argument("--facts-always", action="store_true",
+                    help="upper-bound diagnostic: every final question is trained with all tree nodes stated")
     ap.add_argument("--lambda-brier", type=float, default=0.0, help="add this x Brier score (vs the soft target)")
     ap.add_argument("--permute-final", type=float, default=0.0,
                     help="probability of reordering a final question's options each epoch (target follows the texts)")
@@ -124,7 +130,19 @@ def main() -> None:
         return make
 
     per_step = args.micro_bs * args.grad_accum
-    if args.depth_stages:            # sub-question stages by depth, then the final questions, each with its own schedule
+    def fact_stage(stage: int, n: int):
+        def make() -> list[Example]:
+            ex = [e for it in train_items for e in build_fact_examples(it, stage=stage, n_stages=n, final=args.final)]
+            rng.shuffle(ex)
+            return ex
+        return make
+
+    if args.facts_always:
+        stages = [("facts", fact_stage(0, 0), args.epochs)]
+    elif args.fact_stages:           # fact internalization: stated facts removed shallow-first, then plain finals
+        stages = [(f"facts{s}", fact_stage(s, args.fact_stages), 1.0) for s in range(args.fact_stages)]
+        stages.append(("final", epoch_examples, args.epochs))
+    elif args.depth_stages:          # sub-question stages by depth, then the final questions, each with its own schedule
         stages = [(f"depth{s}", stage_examples(s), 1.0) for s in range(args.depth_stages)]
         def final_examples() -> list[Example]:
             ex = [e for it in train_items for e in build_examples(

@@ -349,3 +349,45 @@ class TestA9b(unittest.TestCase):
             self.assertEqual(out.returncode, 0, out.stderr[-2000:])
             self.assertIn("stage final: 12 examples per pass, 6 steps", out.stdout)
             self.assertIn("steps=12", out.stdout)
+
+
+@unittest.skipUnless(HAVE, "needs torch")
+class TestFactInternalization(unittest.TestCase):
+    ITEM = {"item_id": "x", "prompt": "Q\nOptions:\nA) x\nB) y", "labels": ["A", "B"], "gold_label": "A",
+            "teacher": {"A": 0.8, "B": 0.2}, "random_subqs": [],
+            "subqs": [{"id": "n1", "question": "a?", "p_cot": 0.9, "truth": None, "depends_on": []},
+                      {"id": "n2", "question": "b?", "p_cot": 0.5, "truth": None, "depends_on": []},       # unsure
+                      {"id": "n3", "question": "c?", "p_cot": 0.9, "truth": False, "depends_on": ["n1"]},  # truth wins
+                      {"id": "n4", "question": "d?", "p_cot": 0.1, "truth": None, "depends_on": ["n3"]}]}
+
+    def test_fact_block(self):
+        from cotdistill.student import fact_block
+        fb = fact_block(self.ITEM)
+        self.assertEqual(fb.split("\n")[3:], ["Q: a? A: Yes", "Q: c? A: No", "Q: d? A: No"])
+        self.assertEqual(fact_block(self.ITEM, min_depth=2).split("\n")[3:], ["Q: d? A: No"])
+
+    def test_stages_drop_shallow_first(self):
+        from cotdistill.student import build_fact_examples
+        texts = [build_fact_examples(self.ITEM, stage=s, n_stages=3)[0].text for s in range(3)]
+        self.assertIn("a?", texts[0]); self.assertIn("d?", texts[0])
+        self.assertNotIn("a?", texts[1]); self.assertIn("d?", texts[1])
+        self.assertNotIn("Known intermediate results", build_fact_examples(self.ITEM, stage=3, n_stages=3)[0].text)
+        self.assertTrue(texts[0].endswith("\n\nAnswer:"))
+
+    def test_train_script_fact_modes_on_cpu(self):
+        import json as _j
+        import os
+        import subprocess
+        import tempfile
+        tok, model = tiny()
+        with tempfile.TemporaryDirectory() as d:
+            model.save_pretrained(d + "/m"); tok.save_pretrained(d + "/m")
+            Path(d + "/t.jsonl").write_text("\n".join(_j.dumps(dict(self.ITEM, item_id=f"i{j}")) for j in range(6)))
+            for extra, want in ((["--facts-always"], "steps=6"), (["--fact-stages", "2"], "steps=12")):
+                out = subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / "scripts/train_student.py"),
+                                      "--model", d + "/m", "--train", d + "/t.jsonl", "--eval", "v=" + d + "/t.jsonl",
+                                      "--epochs", "2", "--micro-bs", "2", "--grad-accum", "1", "--max-len", "64",
+                                      "--precision", "bf16", "--no-grad-ckpt", "--out", d + "/o"] + extra,
+                                     capture_output=True, text=True, timeout=600, env={**os.environ, "CUDA_VISIBLE_DEVICES": ""})
+                self.assertEqual(out.returncode, 0, out.stderr[-2000:])
+                self.assertIn(want, out.stdout, out.stdout[-800:])
