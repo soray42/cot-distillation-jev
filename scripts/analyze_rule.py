@@ -172,8 +172,8 @@ def main() -> None:
         m = run_metrics(run, names, items, pairs, subq_items)
         rows.append(m)
         mm = re.match(r"^([A-Za-z0-9]+).*-s(\d+)$", run.name)
-        if mm:
-            by_arm[mm.group(1)][int(mm.group(2))] = run
+        if mm:                                   # predicates-only data makes G3 into G3P
+            by_arm[mm.group(1) + ("P" if "student_rule_p" in run.name else "")][int(mm.group(2))] = run
         es, inv, sf = m.get("edit/sens", {}), m.get("inv/all", {}), m.get("self", {})
         print(f"{run.name[:40]:40s} ho {m.get('acc_ho', {}).get('all', float('nan')):.3f} "
               f"(c2 {m.get('acc_ho', {}).get('c2', float('nan')):.3f} c3 {m.get('acc_ho', {}).get('c3', float('nan')):.3f}) "
