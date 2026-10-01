@@ -753,3 +753,15 @@ class TestCommonOrder(unittest.TestCase):
                 out.append([it["item_id"] for it in its])
             return out
         self.assertEqual(order("true"), order("matched"))
+
+
+@unittest.skipUnless(HAVE, "needs torch")
+class TestLabelSmoothing(unittest.TestCase):
+    def test_smoothed_target(self):
+        from cotdistill.student import Example, kl_loss
+        z = [torch.tensor([2.0, 0.0, -1.0])]
+        e = [Example("x", ["A", "B", "C"], [1.0, 0.0, 0.0], 1.0, "final", "i")]
+        p = torch.log_softmax(z[0], -1)
+        t = torch.tensor([1.0, 0.0, 0.0]) * 0.9 + 0.1 / 3
+        self.assertAlmostEqual(float(kl_loss(z, e, 0.1)), float(-(t * p).sum()), places=6)
+        self.assertAlmostEqual(float(kl_loss(z, e)), float(-p[0]), places=6)

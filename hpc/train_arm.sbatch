@@ -49,6 +49,7 @@ cd "$HOME/cotd"
 module load cuda/12.4 2>/dev/null || true
 SEED="${SEED:-0}"; MODEL="${MODEL:-$HOME/cotd/models/Qwen3.5-2B-Base}"; DATA="${DATA:-data/student}"
 export HF_HOME="$HOME/cotd/hf" TOKENIZERS_PARALLELISM=false
+# ORDERSEED: problem-order seed (default SEED); LSMOOTH: label smoothing of all targets (e.g. 0.1).
 # EVALAT=0.5,1,2,... (epochs) with EVALMID=val,kk,...: training-length curve, the named sets (cut to 600 items) are
 # evaluated at those points during training and stored in metrics.json "trajectory".
 # CC1D=1: use the causal-conv1d CUDA kernel built for torch 2.14.0+cu130 (installed under ~/cotd/cc1d, not in the env);
@@ -104,7 +105,8 @@ train() {                # train <arm> <train.jsonl> <evals> <out> [extra args..
     ${DUMP:+--dump-hidden "$DUMP,smoke"} ${PERM:+--permute-final "$PERM"} ${BRIER:+--lambda-brier "$BRIER"} \
     ${SUBQK:+--subq-k "$SUBQK"} ${SUBQW:+--subq-weight "$SUBQW"} ${DS:+--depth-stages "$DS" --stage-k "${STAGEK:-1}"} \
     ${SUBQF:+--subq-frac "$SUBQF"} ${LORA:+--lora-r "$LORA"} ${DUMPL:+--dump-layers "$DUMPL"} $DX \
-    ${EVALAT:+--eval-at "$EVALAT"} ${EVALMID:+--eval-mid "$EVALMID"} "$@"
+    ${EVALAT:+--eval-at "$EVALAT"} ${EVALMID:+--eval-mid "$EVALMID"} ${ORDERSEED:+--order-seed "$ORDERSEED"} \
+    ${LSMOOTH:+--label-smoothing "$LSMOOTH"} "$@"
 }
 
 ARMS="${ARMS:-${ARM:-}}"

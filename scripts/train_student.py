@@ -75,6 +75,11 @@ def main() -> None:
                     help="full-tree groups: every problem with ALL its nodes (up to --tree-cap) in one update; true = "
                          "parents' results stated, matched = as many depth-matched non-parent results, plain = no "
                          "facts, placebo = plain at zero weight, control = the control questions")
+    ap.add_argument("--label-smoothing", type=float, default=0.0,
+                    help="mix every training target with the uniform distribution over its options (0 = off)")
+    ap.add_argument("--order-seed", type=int, default=None,
+                    help="seed of the problem order (grouped and full-tree arms); default = --seed. Varying it alone "
+                         "or --seed alone (node sampling, option order) decomposes the seed variance")
     ap.add_argument("--tree-cap", type=int, default=10, help="full-tree groups: at most this many nodes per problem")
     ap.add_argument("--aux-total", type=float, default=1.0,
                     help="full-tree groups: auxiliary weight per problem, split evenly over its node views")
@@ -126,7 +131,7 @@ def main() -> None:
     # Problem order for the grouped and full-tree arms comes from its own generator, so every arm with the same seed
     # sees the same problems in the same updates in every epoch (common random numbers for paired comparisons);
     # sampling inside a group still uses rng.
-    order_rng = random.Random(f"order-{args.seed}")
+    order_rng = random.Random(f"order-{args.seed if args.order_seed is None else args.order_seed}")
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     dev = "cuda" if torch.cuda.is_available() else "cpu"
@@ -302,7 +307,7 @@ def main() -> None:
                 mb = upd[i:i + args.micro_bs]
                 with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
                     z = label_logits(model, tok, mb, args.max_len, cache)
-                    loss = kl_loss(z, mb) * len(mb) / norm
+                    loss = kl_loss(z, mb, args.label_smoothing) * len(mb) / norm
                 loss.backward()
                 upd_loss += loss.item()
                 seen_tok += sum(min(args.max_len, len(e.text) // 3) for e in mb)
@@ -330,7 +335,7 @@ def main() -> None:
                 total = 0.0
                 if cls:
                     z = label_logits(model, tok, cls, args.max_len, cache)
-                    total = kl_loss(z, cls) * len(cls)
+                    total = kl_loss(z, cls, args.label_smoothing) * len(cls)
                     if args.lambda_brier:
                         total = total + args.lambda_brier * brier_loss(z, cls) * len(cls)
                 if lms:

@@ -593,11 +593,15 @@ def lm_loss(model, tokenizer, batch: list[Example], max_len: int, chunk: int = 5
     return total
 
 
-def kl_loss(logits: list[torch.Tensor], batch: list[Example]) -> torch.Tensor:
-    """Weighted soft cross-entropy (= KL(target || p) + const)."""
+def kl_loss(logits: list[torch.Tensor], batch: list[Example], smoothing: float = 0.0) -> torch.Tensor:
+    """Weighted soft cross-entropy (= KL(target || p) + const). smoothing mixes each target with the uniform
+    distribution over its options: t' = (1 - smoothing) t + smoothing / K (label smoothing; the teacher's
+    targets are near one-hot)."""
     tot = 0.0
     for z, e in zip(logits, batch):
         t = torch.tensor(e.target, device=z.device)
+        if smoothing:
+            t = (1 - smoothing) * t + smoothing / t.numel()
         tot = tot + e.weight * -(t * F.log_softmax(z, -1)).sum()
     return tot / len(batch)
 
