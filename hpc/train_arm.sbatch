@@ -3,7 +3,7 @@
 #SBATCH --partition=stud
 #SBATCH --qos=stud
 #SBATCH --gres=gpu:4g.40gb:1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=4
 #SBATCH --mem=48G
 #SBATCH --time=06:00:00
 #SBATCH --output=logs/%x-%j.out
