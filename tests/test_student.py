@@ -605,3 +605,20 @@ class TestEvalAt(unittest.TestCase):
             self.assertEqual([r["epoch"] for r in traj], [0.5, 1.0, 4.0])
             self.assertEqual(set(traj[0]) - {"step", "epoch", "s_elapsed"}, {"v"})
             self.assertEqual(traj[0]["v"].keys() >= {"acc", "nll", "ece"}, True)
+
+
+@unittest.skipUnless(HAVE, "needs torch")
+class TestAuxSources(unittest.TestCase):
+    def test_inactive_items_get_zero_weight_views(self):
+        import random as _r
+        from cotdistill.student import build_group
+        item = {"item_id": "x", "source": "sharc", "prompt": "P\nOptions:\nA) x\nB) y", "labels": ["A", "B"],
+                "gold_label": "A", "teacher": {"A": 0.7, "B": 0.3},
+                "subqs": [{"id": f"n{i}", "question": f"q{i}?", "p_cot": 0.9, "depends_on": []} for i in range(3)],
+                "random_subqs": []}
+        on = build_group(item, aux_kind="cot", k=2, aux_weight=0.5, rng=_r.Random(0))
+        off = build_group(item, aux_kind="cot", k=2, aux_weight=0.5, rng=_r.Random(0), aux_active=False)
+        self.assertEqual([e.text for e in on], [e.text for e in off])          # same views, same work
+        self.assertEqual([e.weight for e in on][1:], [0.5, 0.5])
+        self.assertEqual([e.weight for e in off][1:], [0.0, 0.0])
+        self.assertEqual(on[0].weight, off[0].weight)

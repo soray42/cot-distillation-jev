@@ -267,19 +267,21 @@ def build_transition_views(item: dict, *, k: int, rng: random.Random, shuffled: 
 
 
 def build_group(item: dict, *, aux_kind: str, k: int, aux_weight: float, rng: random.Random, final: str = "teacher",
-                subq_target: str = "cot", permute_final: float = 0.0, keep_prob: float = 1.0) -> list[Example]:
+                subq_target: str = "cot", permute_final: float = 0.0, keep_prob: float = 1.0,
+                aux_active: bool = True) -> list[Example]:
     """One problem for exposure-matched grouped training: [final] + exactly k auxiliary views. aux_kind "cot" uses
     CoT nodes, "random" the matched control questions (fresh targets), "placebo" the same CoT views with zero loss
     weight (same forward/backward work, no auxiliary signal), "tree" CoT nodes asked with their parents' results
     stated, "tree_shuf" the same with unrelated nodes' results stated (edge-rewiring control). Missing views are
-    zero-weight copies of the final."""
+    zero-weight copies of the final. aux_active=False keeps the views but gives them zero weight (placebo for this
+    item), so per-family auxiliary supervision stays exposure-matched."""
     if aux_kind in ("tree", "tree_shuf"):
         fin = [e for e in build_examples(item, final=final, subq="none", subq_target=subq_target, lambda_sub=0.0,
                                          rng=rng, permute_final=permute_final) if e.kind == "final"]
         if not fin:
             return []
         aux = build_transition_views(item, k=k, rng=rng, shuffled=aux_kind == "tree_shuf", keep_prob=keep_prob,
-                                     weight=aux_weight, subq_target=subq_target)
+                                     weight=aux_weight if aux_active else 0.0, subq_target=subq_target)
         return fin + aux + [dataclasses.replace(fin[0], weight=0.0) for _ in range(k - len(aux))]
     sub, tgt = ("random", "fresh") if aux_kind == "random" else ("cot", subq_target)
     views = build_examples(item, final=final, subq=sub, subq_target=tgt, lambda_sub=aux_weight, rng=rng,
@@ -288,7 +290,7 @@ def build_group(item: dict, *, aux_kind: str, k: int, aux_weight: float, rng: ra
     if not fin:
         return []
     aux = [e for e in views if e.kind == "subq"][:k]
-    if aux_kind == "placebo":
+    if aux_kind == "placebo" or not aux_active:
         aux = [dataclasses.replace(e, weight=0.0) for e in aux]
     return fin + aux + [dataclasses.replace(fin[0], weight=0.0) for _ in range(k - len(aux))]
 

@@ -71,6 +71,8 @@ def main() -> None:
     ap.add_argument("--aux-kind", default="cot", choices=["cot", "random", "placebo", "tree", "tree_shuf"],
                     help="grouped training: CoT nodes, matched controls, the CoT views with zero loss (placebo), CoT "
                          "nodes with their parents' results stated (tree), or with unrelated nodes' results (tree_shuf)")
+    ap.add_argument("--aux-sources", default="", help="grouped training: comma list of item sources whose auxiliary "
+                    "views keep their weight; items of other sources get the same views at zero weight (placebo)")
     ap.add_argument("--fact-withdraw", type=float, default=0.0,
                     help="tree aux views: the stated results are kept with probability 1 - progress / F over the first "
                          "fraction F of training and dropped entirely afterwards (0 = always kept)")
@@ -175,6 +177,7 @@ def main() -> None:
         return make
 
     passes = {"n": 0}
+    aux_sources = {x for x in args.aux_sources.split(",") if x}
 
     def grouped_examples() -> list[Example]:
         """Problems in shuffled order, each as build_group's [final] + K auxiliary views, so every update covers the same
@@ -188,7 +191,7 @@ def main() -> None:
             keep = 1.0 if not args.fact_withdraw else max(0.0, 1.0 - progress / args.fact_withdraw)
             ex += build_group(it, aux_kind=args.aux_kind, k=args.grouped_aux, aux_weight=args.aux_weight, rng=rng,
                               final=args.final, subq_target=args.subq_target, permute_final=args.permute_final,
-                              keep_prob=keep)
+                              keep_prob=keep, aux_active=not aux_sources or it.get("source") in aux_sources)
         passes["n"] += 1
         return ex
 
