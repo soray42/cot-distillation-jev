@@ -78,8 +78,9 @@ for seed in $SEEDS; do
     out="runs/$arm-a100-Qwen3.5-2B-Base-student_v3-s$seed"
     if [ -f "$out/metrics.json" ]; then echo "skip $out (done)"; continue; fi
     echo "=== $arm seed $seed -> $out $(date +%T)"
+    ep=2; case $arm in TF|TFM|GF|GF0) ep=1 ;; esac      # full-tree arms: one pass with every node
     run_with_fallback "logs/$arm-s$seed.log" "$arm" "$seed" "$DATA/train.jsonl" "$EVALS" "$out" \
-      --epochs 2 --dump-hidden val,kk,kkdeep,diag ${DUMP_LAYERS:+--dump-layers "$DUMP_LAYERS"} ${SAVE:+--save} \
+      --epochs $ep --dump-hidden val,kk,kkdeep,diag ${DUMP_LAYERS:+--dump-layers "$DUMP_LAYERS"} ${SAVE:+--save} \
       || echo "arm $arm seed $seed failed (see logs/$arm-s$seed.log)"
     grep -E '"step": (20|100|451),' "logs/$arm-s$seed.log" | tail -2 | cut -c1-120
     echo "done $out $(date +%T)"
