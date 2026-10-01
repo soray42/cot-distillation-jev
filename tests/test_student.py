@@ -699,3 +699,39 @@ class TestFullTree(unittest.TestCase):
                 self.assertEqual(out.returncode, 0, out.stderr[-2000:])
                 self.assertIn("steps=6", out.stdout)                          # ceil(5/2) = 3 updates per pass
                 self.assertIn('"seqs": 16', out.stdout)                         # 2 problems x (final + 7 nodes)
+
+
+@unittest.skipUnless(HAVE, "needs torch")
+class TestMCViews(unittest.TestCase):
+    NODES = [{"id": f"n{i}", "question": f"q{i}?", "p_cot": p, "depends_on": []}
+             for i, p in enumerate([0.95, 0.9, 0.05, 0.1, 0.02, 0.2, 0.5, 0.08])]
+    ITEM = {"item_id": "x", "prompt": "P\nOptions:\nA) a\nB) b\nC) c", "labels": ["A", "B", "C"], "gold_label": "A",
+            "teacher": {"A": 0.7, "B": 0.2, "C": 0.1}, "subqs": NODES,
+            "random_subqs": [{"question": f"c{i}?", "p_fresh": p} for i, p in enumerate([0.9, 0.1, 0.1, 0.2])]}
+
+    def test_views(self):
+        import random as _r
+        from cotdistill.student import build_group, build_mc_views
+        p = {n["question"]: n["p_cot"] for n in self.NODES}
+        for seed in range(40):
+            views = build_mc_views(self.ITEM, k=2, rng=_r.Random(seed))
+            self.assertEqual(len(views), 2)                                      # 2 Yes + 5 No confident nodes
+            used = []
+            for v in views:
+                opts = v.text.split("Options:\n")[-1].split("\nAnswer:")[0].split("\n")
+                self.assertEqual(len(opts), 4)
+                self.assertTrue(opts[-1].endswith("None of them"))
+                qs = [o[3:] for o in opts[:-1]]
+                used += qs
+                self.assertNotIn("q6?", qs)                                      # p = .5 is never used
+                self.assertLessEqual(sum(p[q] >= 0.7 for q in qs), 1)
+                self.assertAlmostEqual(sum(v.target), 1.0, places=5)
+                best = max(range(4), key=v.target.__getitem__)
+                gold = [i for i, q in enumerate(qs) if p[q] >= 0.7]
+                self.assertEqual(best, gold[0] if gold else 3)
+            self.assertEqual(len(used), len(set(used)))                          # disjoint questions
+        ctl = build_mc_views(self.ITEM, k=2, rng=_r.Random(0), kind="random")
+        self.assertEqual(len(ctl), 1)                                            # 4 control questions: one view
+        for kind in ("cot_mc", "random_mc"):                                   # both arms: min of the capacities
+            g = build_group(self.ITEM, aux_kind=kind, k=2, aux_weight=0.5, rng=_r.Random(0))
+            self.assertEqual([e.weight for e in g][1:], [0.5, 0.0])              # padded with a zero-weight filler

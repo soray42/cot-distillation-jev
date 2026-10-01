@@ -68,7 +68,7 @@ def main() -> None:
     ap.add_argument("--grouped-aux", type=int, default=0,
                     help="exposure-matched grouped training: every optimizer update holds --items-per-update problems, "
                          "each as 1 final view + K auxiliary views (0 = off)")
-    ap.add_argument("--aux-kind", default="cot", choices=["cot", "random", "placebo", "tree", "tree_shuf"],
+    ap.add_argument("--aux-kind", default="cot", choices=["cot", "random", "placebo", "tree", "tree_shuf", "cot_mc", "random_mc"],
                     help="grouped training: CoT nodes, matched controls, the CoT views with zero loss (placebo), CoT "
                          "nodes with their parents' results stated (tree), or with unrelated nodes' results (tree_shuf)")
     ap.add_argument("--tree-full", default="", choices=["", "true", "matched", "plain", "placebo", "control"],

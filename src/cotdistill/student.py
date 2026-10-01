@@ -358,6 +358,76 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
     return out
 
 
+SUBQ_MC_TEMPLATE = "{problem}\n\nIntermediate question: Which of these questions has the answer Yes?\nOptions:\n{opts}\nAnswer:"
+MC_NONE = "None of them"
+
+
+def _mc_capacity(n_yes: int, n_no: int, m: int, k: int) -> int:
+    """How many disjoint m-question views (at most one Yes each) the confident questions allow, up to k."""
+    c = 0
+    while c < k:
+        if n_yes >= 1 and n_no >= m - 1:
+            n_yes, n_no = n_yes - 1, n_no - (m - 1)
+        elif n_no >= m:
+            n_no -= m
+        else:
+            break
+        c += 1
+    return c
+
+
+def mc_pool(item: dict, kind: str) -> tuple[list[dict], list[dict], str]:
+    pool = item.get("subqs", []) if kind == "cot" else item.get("random_subqs", [])
+    key = "p_cot" if kind == "cot" else "p_fresh"
+    return ([sq for sq in pool if sq.get(key) is not None and sq[key] >= 0.7],
+            [sq for sq in pool if sq.get(key) is not None and sq[key] <= 0.3], key)
+
+
+def mc_limit(item: dict, k: int, m: int = 3) -> int:
+    """Views per item for the matched multiple-choice arms: the smaller of the two pools' capacities, so the CoT and
+    the control arm give every item the same number of weighted views."""
+    caps = []
+    for kind in ("cot", "random"):
+        y, n, _ = mc_pool(item, kind)
+        caps.append(_mc_capacity(len(y), len(n), m, k))
+    return min(caps)
+
+
+def build_mc_views(item: dict, *, k: int, rng: random.Random, kind: str = "cot", m: int = 3, weight: float = 0.5,
+                   p_one: float = 0.75) -> list[Example]:
+    """Multiple-choice auxiliary views: up to k views, each packing m of the item's yes/no questions (CoT nodes, or
+    the control questions with their fresh targets) as "Which of these questions has the answer Yes?" with the
+    questions as options plus a final "None of them". Only confident questions are used (p <= 0.3 or >= 0.7), at most
+    one confident Yes per view: with probability p_one a view gets one Yes and m-1 No questions, otherwise m No
+    questions (answer "None of them"). Views use disjoint questions. The soft target puts P(i) proportional to
+    p_i * prod_{j != i} (1 - p_j) and P(none) to prod_j (1 - p_j), renormalised over these m + 1 events."""
+    yes, no, key = mc_pool(item, kind)
+    k = min(k, _mc_capacity(len(yes), len(no), m, k))
+    rng.shuffle(yes)
+    rng.shuffle(no)
+    out = []
+    for made in range(k):
+        n_yes = 1 if (yes and rng.random() < p_one) else 0
+        left = k - made - 1                          # keep the remaining views feasible
+        if n_yes == 0 and (len(no) < m or _mc_capacity(len(yes), len(no) - m, m, left) < left):
+            n_yes = 1
+        if n_yes == 1 and (not yes or len(no) < m - 1 or _mc_capacity(len(yes) - 1, len(no) - m + 1, m, left) < left):
+            n_yes = 0
+        if len(no) < m - n_yes:
+            break
+        chosen = [yes.pop() for _ in range(n_yes)] + [no.pop() for _ in range(m - n_yes)]
+        rng.shuffle(chosen)
+        ps = [min(max(sq[key], 1e-4), 1 - 1e-4) for sq in chosen]
+        none = math.prod(1 - p for p in ps)
+        scores = [p * none / (1 - p) for p in ps] + [none]
+        z = sum(scores)
+        letters = [chr(65 + i) for i in range(m + 1)]
+        opts = "\n".join(f"{L}) {t}" for L, t in zip(letters, [sq["question"] for sq in chosen] + [MC_NONE]))
+        out.append(Example(SUBQ_MC_TEMPLATE.format(problem=item["prompt"], opts=opts), letters, [x / z for x in scores],
+                           weight * item.get("weight", 1.0), "subq", item["item_id"]))
+    return out
+
+
 def build_group(item: dict, *, aux_kind: str, k: int, aux_weight: float, rng: random.Random, final: str = "teacher",
                 subq_target: str = "cot", permute_final: float = 0.0, keep_prob: float = 1.0,
                 aux_active: bool = True) -> list[Example]:
@@ -367,6 +437,14 @@ def build_group(item: dict, *, aux_kind: str, k: int, aux_weight: float, rng: ra
     stated, "tree_shuf" the same with unrelated nodes' results stated (edge-rewiring control). Missing views are
     zero-weight copies of the final. aux_active=False keeps the views but gives them zero weight (placebo for this
     item), so per-family auxiliary supervision stays exposure-matched."""
+    if aux_kind in ("cot_mc", "random_mc"):
+        fin = [e for e in build_examples(item, final=final, subq="none", subq_target=subq_target, lambda_sub=0.0,
+                                         rng=rng, permute_final=permute_final) if e.kind == "final"]
+        if not fin:
+            return []
+        aux = build_mc_views(item, k=mc_limit(item, k), rng=rng, kind="cot" if aux_kind == "cot_mc" else "random",
+                             weight=aux_weight if aux_active else 0.0)
+        return fin + aux + [dataclasses.replace(fin[0], weight=0.0) for _ in range(k - len(aux))]
     if aux_kind in ("tree", "tree_shuf"):
         fin = [e for e in build_examples(item, final=final, subq="none", subq_target=subq_target, lambda_sub=0.0,
                                          rng=rng, permute_final=permute_final) if e.kind == "final"]

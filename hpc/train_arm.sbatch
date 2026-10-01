@@ -34,6 +34,8 @@
 # shallow-first, then plain final questions for EPOCHS (stepwise internalization, Deng et al. 2405.14838).
 # G0/G3/G4: exposure-matched grouped training (collaborator review E2): every update holds 32 problems, each as 1 final
 # view + 2 auxiliary views (placebo = CoT views with zero loss / CoT nodes at 0.5 / matched controls at 0.5).
+# G3MC/G4MC: G3/G4 with multiple-choice auxiliary views ("Which of these questions has the answer Yes?", 3 questions +
+# "None of them"), the same number of views per item in both; no 2-option question is left in training.
 # TF/TFM/GF/GF0: full-tree groups, every problem with ALL its nodes (up to 10) in one update (run with EPOCHS=1, about
 # the grouped arms' compute): parents' results stated / as many depth-matched non-parent results (eligible nodes only,
 # the same nodes and counts in both) / no stated results / plain views at zero weight.
@@ -77,6 +79,8 @@ arm_config() {           # sets F S T RLM DS for arm $1
     G0) F=teacher; S=cot;    T=cot; DX="--grouped-aux 2 --aux-kind placebo --aux-weight 0.5" ;;  # E2 placebo
     G3) F=teacher; S=cot;    T=cot; DX="--grouped-aux 2 --aux-kind cot --aux-weight 0.5" ;;      # E2 CoT nodes
     G4) F=teacher; S=random; T=fresh; DX="--grouped-aux 2 --aux-kind random --aux-weight 0.5" ;; # E2 matched controls
+    G3MC) F=teacher; S=cot;  T=cot; DX="--grouped-aux 2 --aux-kind cot_mc --aux-weight 0.5" ;;     # MC node views
+    G4MC) F=teacher; S=random; T=fresh; DX="--grouped-aux 2 --aux-kind random_mc --aux-weight 0.5" ;; # MC controls
     TF) F=teacher; S=cot;    T=cot; DX="--tree-full true" ;;      # full tree: every node, parents' results stated
     TFM) F=teacher; S=cot;   T=cot; DX="--tree-full matched" ;;   # full tree: as many depth-matched non-parent results
     GF) F=teacher; S=cot;    T=cot; DX="--tree-full plain" ;;     # full tree: every node, no stated results

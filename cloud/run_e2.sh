@@ -26,6 +26,8 @@ arm_args() {                                    # same subq/target/aux settings 
     G0) echo "--subq cot --subq-target cot --aux-kind placebo" ;;
     G3) echo "--subq cot --subq-target cot --aux-kind cot" ;;
     G4) echo "--subq random --subq-target fresh --aux-kind random" ;;
+    G3MC) echo "--subq cot --subq-target cot --aux-kind cot_mc" ;;
+    G4MC) echo "--subq random --subq-target fresh --aux-kind random_mc" ;;
     TF) echo "--subq cot --subq-target cot --tree-full true" ;;
     TFM) echo "--subq cot --subq-target cot --tree-full matched" ;;
     GF) echo "--subq cot --subq-target cot --tree-full plain" ;;
