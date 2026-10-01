@@ -26,6 +26,8 @@ arm_args() {                                    # same subq/target/aux settings 
     G0) echo "--subq cot --subq-target cot --aux-kind placebo" ;;
     G3) echo "--subq cot --subq-target cot --aux-kind cot" ;;
     G4) echo "--subq random --subq-target fresh --aux-kind random" ;;
+    G3L) echo "--subq cot --subq-target cot --aux-kind cot --aux-sources knights_knaves,justlogic,folio" ;;
+    G3D) echo "--subq cot --subq-target cot --aux-kind cot --aux-sources sharc,returns,expense,subscription" ;;
     T1) echo "--subq cot --subq-target cot --aux-kind tree" ;;
     T1S) echo "--subq cot --subq-target cot --aux-kind tree_shuf" ;;
     T2) echo "--subq cot --subq-target cot --aux-kind tree --fact-withdraw 0.75" ;;
