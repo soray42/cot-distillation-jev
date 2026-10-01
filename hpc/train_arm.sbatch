@@ -93,7 +93,7 @@ train() {                # train <arm> <train.jsonl> <evals> <out> [extra args..
 }
 
 ARMS="${ARMS:-${ARM:-}}"
-[ -n "$ARMS" ] || { echo "set ARMS"; exit 1; }
+[ -n "$ARMS${JEFF:-}${EVAL_BASE:-}${BASE_SUBQ:-}" ] || { echo "set ARMS (or JEFF/EVAL_BASE/BASE_SUBQ for an eval-only job)"; exit 1; }
 
 echo "=== smoke stage $(date +%T)"
 SM=$(mktemp -d)
