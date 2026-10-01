@@ -391,3 +391,41 @@ class TestFactInternalization(unittest.TestCase):
                                      capture_output=True, text=True, timeout=600, env={**os.environ, "CUDA_VISIBLE_DEVICES": ""})
                 self.assertEqual(out.returncode, 0, out.stderr[-2000:])
                 self.assertIn(want, out.stdout, out.stdout[-800:])
+
+
+try:
+    import peft  # noqa: F401
+    HAVE_PEFT = True
+except ImportError:
+    HAVE_PEFT = False
+
+
+@unittest.skipUnless(HAVE and HAVE_PEFT, "needs torch and peft")
+class TestLoRA(unittest.TestCase):
+    def test_lora_trains_adapters_and_saves_merged(self):
+        import json as _j
+        import os
+        import subprocess
+        import tempfile
+        from cotdistill.student import load_model
+        tok, model = tiny()
+        with tempfile.TemporaryDirectory() as d:
+            model.save_pretrained(d + "/m"); tok.save_pretrained(d + "/m")
+            recs = [{"item_id": f"i{j}", "prompt": "Q\nOptions:\nA) x\nB) y", "labels": ["A", "B"], "gold_label": "A",
+                     "teacher": {"A": 0.9, "B": 0.1}, "subqs": [], "random_subqs": []} for j in range(8)]
+            Path(d + "/t.jsonl").write_text("\n".join(_j.dumps(r) for r in recs))
+            out = subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / "scripts/train_student.py"),
+                                  "--model", d + "/m", "--train", d + "/t.jsonl", "--eval", "v=" + d + "/t.jsonl",
+                                  "--lora-r", "4", "--lr", "1e-2", "--epochs", "3", "--micro-bs", "2", "--grad-accum", "1",
+                                  "--max-len", "64", "--precision", "bf16", "--out", d + "/o", "--save"],
+                                 capture_output=True, text=True, timeout=600,
+                                 env={**os.environ, "CUDA_VISIBLE_DEVICES": ""})
+            self.assertEqual(out.returncode, 0, out.stderr[-2000:])
+            self.assertIn("lora r=4", out.stdout)
+            n_trainable = float(out.stdout.split("params=")[1].split("B")[0])
+            self.assertLess(n_trainable, 0.001)                     # adapters only
+            self.assertTrue((Path(d) / "o/adapter/adapter_config.json").exists())
+            merged = load_model(d + "/o/model", torch.float32)       # the merged checkpoint loads as a plain model
+            base = load_model(d + "/m", torch.float32)
+            diff = sum((a - b).abs().sum().item() for a, b in zip(merged.parameters(), base.parameters()))
+            self.assertGreater(diff, 0.0)                            # training changed the merged weights

@@ -13,7 +13,8 @@
 # the val sub-questions. Every arm is scored on the sub-questions of $DATA/val.jsonl (--eval-subq). DUMP=val,kk,...
 # saves the readout hidden states of those eval sets (probing); PERM / BRIER / SUBQK / SUBQW set --permute-final /
 # --lambda-brier / --subq-k / --subq-weight.
-# MODEL picks the
+# LORA=r trains rank-r LoRA adapters on a frozen backbone (set PREC=bf16 and e.g. LR=1e-4); --save then writes the
+# adapter and the merged weights. MODEL picks the
 # student backbone (default Qwen3.5-2B-Base; e.g. MODEL=$HOME/cotd/models/Qwen3.5-2B for the post-trained release).
 # Before submitting, dry-run the shell logic on the login node (Python is only echoed):
 #   DRY_RUN=1 ARMS="A2 A3" DATA=data/student_tree EVAL_BASE=1 bash repo/hpc/train_arm.sbatch
@@ -71,7 +72,7 @@ train() {                # train <arm> <train.jsonl> <evals> <out> [extra args..
     --seed "$SEED" --out "$out" --eval-subq "$DATA/val.jsonl" ${RLM:+--rationale-lm --lm-max-len 3072} \
     ${DUMP:+--dump-hidden "$DUMP,smoke"} ${PERM:+--permute-final "$PERM"} ${BRIER:+--lambda-brier "$BRIER"} \
     ${SUBQK:+--subq-k "$SUBQK"} ${SUBQW:+--subq-weight "$SUBQW"} ${DS:+--depth-stages "$DS" --stage-k "${STAGEK:-1}"} \
-    ${SUBQF:+--subq-frac "$SUBQF"} $DX "$@"
+    ${SUBQF:+--subq-frac "$SUBQF"} ${LORA:+--lora-r "$LORA"} $DX "$@"
 }
 
 ARMS="${ARMS:-${ARM:-}}"

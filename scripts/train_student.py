@@ -27,6 +27,10 @@ from cotdistill.student import (Example, brier_loss, build_examples, build_fact_
                                 load_model)
 
 
+LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj",
+                "in_proj_qkv", "in_proj_z", "in_proj_a", "in_proj_b", "out_proj"]
+
+
 def read_jsonl(p: str) -> list[dict]:
     return [json.loads(l) for l in open(p) if l.strip()]
 
@@ -76,6 +80,11 @@ def main() -> None:
     ap.add_argument("--eval-bs", type=int, default=8)
     ap.add_argument("--eval-max-len", type=int, default=6144, help="long eval states (JevBench hard) need more room")
     ap.add_argument("--save", action="store_true", help="save the final weights (bf16) to <out>/model")
+    ap.add_argument("--lora-r", type=int, default=0, help="LoRA rank (0 = full fine-tuning)")
+    ap.add_argument("--lora-alpha", type=float, default=0.0, help="LoRA alpha (default 2 x rank)")
+    ap.add_argument("--lora-dropout", type=float, default=0.05)
+    ap.add_argument("--lora-targets", default=",".join(LORA_TARGETS),
+                    help="module names to adapt (names absent from the model are skipped)")
     ap.add_argument("--dump-hidden", default="", help="comma list of eval-set names whose readout hidden states "
                     "to save as hidden_<name>.pt (float16, preds order)")
     ap.add_argument("--eval-subq", default=None, help="student data file (e.g. val.jsonl) whose sub-questions to score")
@@ -99,6 +108,15 @@ def main() -> None:
     model.config.use_cache = False
     if not args.no_grad_ckpt and hasattr(model, "gradient_checkpointing_enable"):
         model.gradient_checkpointing_enable()
+    if args.lora_r:                  # frozen backbone + LoRA on attention, MLP and Gated-DeltaNet projections
+        from peft import LoraConfig, get_peft_model
+        names = {n.rsplit(".", 1)[-1] for n, _ in model.named_modules()}
+        targets = [t for t in args.lora_targets.split(",") if t in names]
+        model = get_peft_model(model, LoraConfig(r=args.lora_r, lora_alpha=args.lora_alpha or 2 * args.lora_r,
+                                                 lora_dropout=args.lora_dropout, target_modules=targets, bias="none"))
+        if not args.no_grad_ckpt:
+            model.enable_input_require_grads()
+        print(f"lora r={args.lora_r} targets={targets}", flush=True)
     params = [p for p in model.parameters() if p.requires_grad]
     if args.optim == "adamw8bit":
         import bitsandbytes as bnb
@@ -232,6 +250,9 @@ def main() -> None:
         print("subq", json.dumps({k: round(v["acc"], 3) for k, v in sm.items()}), flush=True)
     (out / "metrics.json").write_text(json.dumps(results, indent=1))
     if args.save:
+        if args.lora_r:                  # adapter for reuse, merged weights so <out>/model loads like a full checkpoint
+            model.save_pretrained(out / "adapter")
+            model = model.merge_and_unload()
         model.to(torch.bfloat16).save_pretrained(out / "model", safe_serialization=True)
         tok.save_pretrained(out / "model")
 
