@@ -11,6 +11,7 @@ evaluation sets, and program-exact counterfactual pairs.
   data/eval/rule_{id,ho}_src.jsonl       third-outcome sources for every base case (same policy; interchange
                                          targets in the pair file)
   data/rule/pairs_{id,ho}.jsonl          pair metadata linking base and counterfactual/source items
+  data/rule/{id,ho}_subq.jsonl           the pair bases with their tree nodes and controls (for --eval-subq)
   data/rule/summary.json                 counts by domain, firing-rule size, pair type and variable
 
   python scripts/build_rulegen.py
@@ -99,6 +100,8 @@ def main() -> None:
         write(ROOT / f"data/eval/rule_{tag}_cf.jsonl", cf)
         write(ROOT / f"data/eval/rule_{tag}_src.jsonl", src)
         write(ROOT / f"data/rule/pairs_{tag}.jsonl", pairs)
+        sub_rng = random.Random(f"{seed}-subq")              # the pair bases' tree nodes and controls (--eval-subq)
+        write(ROOT / f"data/rule/{tag}_subq.jsonl", [rg.train_record(c, sub_rng) for c in cases[:args.cf_bases]])
         c = collections.Counter()
         for p in pairs:
             sub = p["sub"] if p["type"] != "rule" else f"{p['sub']}/{'change' if p['gold_change'] else 'same'}"

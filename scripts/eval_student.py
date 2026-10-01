@@ -17,7 +17,7 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from cotdistill.student import evaluate, evaluate_subq, load_model  # noqa: E402
+from cotdistill.student import evaluate, evaluate_subq, load_model, subq_sets  # noqa: E402
 
 
 def main() -> None:
@@ -31,7 +31,8 @@ def main() -> None:
                     "with --dump-hidden (shape [n, layers + 1, hidden]; the last entry is the final readout state)")
     ap.add_argument("--dump-hidden", default="", help="comma list of eval-set names whose readout hidden states "
                     "to save as hidden_<name>.pt (float16, preds order)")
-    ap.add_argument("--eval-subq", default=None, help="student data file whose sub-questions to score")
+    ap.add_argument("--eval-subq", default=None, help="student data file whose sub-questions to score, or "
+                    "comma-separated name=path entries (predictions in preds_subq[_name].jsonl)")
     args = ap.parse_args()
 
     import transformers
@@ -56,14 +57,14 @@ def main() -> None:
             for p in preds:
                 f.write(json.dumps(p) + "\n")
         print(name, json.dumps(m), flush=True)
-    if args.eval_subq:
-        items = [json.loads(l) for l in open(args.eval_subq) if l.strip()]
+    for sname, spath in subq_sets(args.eval_subq or ""):
+        items = [json.loads(l) for l in open(spath) if l.strip()]
         sm, spreds = evaluate_subq(model, tok, items, args.max_len, args.bs, cache)
-        results["eval"]["subq"] = sm
-        with open(out / "preds_subq.jsonl", "w") as f:
+        results["eval"][sname] = sm
+        with open(out / f"preds_{sname}.jsonl", "w") as f:
             for p in spreds:
                 f.write(json.dumps(p) + "\n")
-        print("subq", json.dumps({k: round(v["acc"], 3) for k, v in sm.items()}), flush=True)
+        print(sname, json.dumps({k: round(v["acc"], 3) for k, v in sm.items()}), flush=True)
     (out / "metrics.json").write_text(json.dumps(results, indent=1))
 
 

@@ -24,7 +24,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from cotdistill.student import (Example, brier_loss, build_examples, build_fact_examples, build_full_tree, build_group,  # noqa: E402
                                 build_stage_examples, evaluate, evaluate_subq, kl_loss, label_logits, lm_loss,
-                                load_model)
+                                load_model, subq_sets)
 
 
 LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj",
@@ -120,7 +120,8 @@ def main() -> None:
                     "with --dump-hidden (shape [n, layers + 1, hidden]; the last entry is the final readout state)")
     ap.add_argument("--dump-hidden", default="", help="comma list of eval-set names whose readout hidden states "
                     "to save as hidden_<name>.pt (float16, preds order)")
-    ap.add_argument("--eval-subq", default=None, help="student data file (e.g. val.jsonl) whose sub-questions to score")
+    ap.add_argument("--eval-subq", default=None, help="student data file (e.g. val.jsonl) whose sub-questions to "
+                    "score, or comma-separated name=path entries (predictions in preds_subq[_name].jsonl)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", required=True)
     ap.add_argument("--log-every", type=int, default=20)
@@ -373,13 +374,13 @@ def main() -> None:
             for p in preds:
                 f.write(json.dumps(p) + "\n")
         print(name, json.dumps(m), flush=True)
-    if args.eval_subq:
-        sm, spreds = evaluate_subq(model, tok, read_jsonl(args.eval_subq), args.max_len, args.eval_bs, cache, seed=args.seed)
-        results["eval"]["subq"] = sm
-        with open(out / "preds_subq.jsonl", "w") as f:
+    for sname, spath in subq_sets(args.eval_subq or ""):
+        sm, spreds = evaluate_subq(model, tok, read_jsonl(spath), args.max_len, args.eval_bs, cache, seed=args.seed)
+        results["eval"][sname] = sm
+        with open(out / f"preds_{sname}.jsonl", "w") as f:
             for p in spreds:
                 f.write(json.dumps(p) + "\n")
-        print("subq", json.dumps({k: round(v["acc"], 3) for k, v in sm.items()}), flush=True)
+        print(sname, json.dumps({k: round(v["acc"], 3) for k, v in sm.items()}), flush=True)
     (out / "metrics.json").write_text(json.dumps(results, indent=1))
     if args.save:
         if args.lora_r:                  # adapter for reuse, merged weights so <out>/model loads like a full checkpoint

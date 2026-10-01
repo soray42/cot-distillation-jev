@@ -665,6 +665,17 @@ def evaluate(model, tok, items: list[dict], max_len: int, bs: int, cache: dict,
     return (calibration(probs, gold) if gold else {"n": 0}), preds
 
 
+def subq_sets(spec: str) -> list[tuple[str, str]]:
+    """--eval-subq value -> [(result name, path)]: a bare path is scored as "subq"; "name=path" entries (comma
+    separated) as "subq_<name>"."""
+    out = []
+    for part in (x.strip() for x in spec.split(",")):
+        if part:
+            name, _, path = part.rpartition("=")
+            out.append((f"subq_{name}" if name else "subq", path))
+    return out
+
+
 @torch.no_grad()
 def evaluate_subq(model, tok, items: list[dict], max_len: int, bs: int, cache: dict,
                   seed: int = 0) -> tuple[dict, list[dict]]:
@@ -690,7 +701,8 @@ def evaluate_subq(model, tok, items: list[dict], max_len: int, bs: int, cache: d
                                    ["A", "B"], [0.5, 0.5], 1.0, "subq", it["item_id"]))
                 meta.append({"item_id": it["item_id"], "source": it.get("source"), "kind": kind,
                              "type": sq.get("type") or kind, "truth_known": sq.get("truth") is not None,
-                             "target": bool(tgt), "yes_first": yes_first, "question": sq["question"]})
+                             "target": bool(tgt), "yes_first": yes_first, "question": sq["question"],
+                             "var": sq.get("var")})
     was_training = model.training
     model.eval()
     dev = next(model.parameters()).device

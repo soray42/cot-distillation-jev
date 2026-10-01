@@ -101,7 +101,7 @@ train() {                # train <arm> <train.jsonl> <evals> <out> [extra args..
   $PY repo/scripts/train_student.py --model "$MODEL" --train "$tr" --eval $ev \
     --final "$F" --subq "$S" --subq-target "$T" --lambda-sub "${LAMBDA:-1.0}" \
     --lr "${LR:-1e-5}" --max-len 1536 --precision "${PREC:-fp32master}" --optim "${OPTIM:-adamw}" \
-    --seed "$SEED" --out "$out" --eval-subq "$DATA/val.jsonl" ${RLM:+--rationale-lm --lm-max-len 3072} \
+    --seed "$SEED" --out "$out" --eval-subq "$DATA/val.jsonl${SUBQ_EXTRA:+,$SUBQ_EXTRA}" ${RLM:+--rationale-lm --lm-max-len 3072} \
     ${DUMP:+--dump-hidden "$DUMP,smoke"} ${PERM:+--permute-final "$PERM"} ${BRIER:+--lambda-brier "$BRIER"} \
     ${SUBQK:+--subq-k "$SUBQK"} ${SUBQW:+--subq-weight "$SUBQW"} ${DS:+--depth-stages "$DS" --stage-k "${STAGEK:-1}"} \
     ${SUBQF:+--subq-frac "$SUBQF"} ${LORA:+--lora-r "$LORA"} ${DUMPL:+--dump-layers "$DUMPL"} $DX \
