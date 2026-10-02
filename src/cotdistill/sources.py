@@ -161,11 +161,144 @@ def _people_in(rec: dict) -> list[str]:
     return [p["question"][3:-10] for p in rec.get("predicates", [])]
 
 
-def kk_node_truth(question: str, rec: dict) -> bool | None:
-    """Program truth for K&K tree nodes: single roles (kk_subq_truth), same/opposite roles, a statement's
-    truth under a hypothetical assignment, and whether a hypothesis makes the statements contradictory.
+# Rule nodes ("Is X a knight exactly when S?") restate what X's statement says; their truth is a property of the
+# puzzle text, not of its solution: yes when S is equivalent to X's statement (for "knave": to its negation). S is
+# parsed from the many ways the teacher rewrites a statement; anything ambiguous or unrecognised gives None.
+_KK_RULE = re.compile(r"^(?:is|was) (\w+) (?:a|actually a|really a) (knight|knave),? (?:exactly when|precisely when|"
+                      r"just when|if and only if|iff),? (.+?)\??$", re.I)
+_KK_ROLE = r"an? (knight|knave)"
+
+
+def _kk_atom(s: str, people: set[str]) -> tuple | None:
+    m = re.match(rf"^(\w+) (?:is|being|is being|were|was) (not )?{_KK_ROLE}$", s, re.I)
+    if m and m.group(1) in people:
+        return ("is", m.group(1), (m.group(3).lower() == "knight") != bool(m.group(2)))
+    m = re.match(r"^(\w+) (?:is telling the truth|tells the truth|is truthful|is lying|lies)$", s, re.I)
+    if m and m.group(1) in people:
+        return ("is", m.group(1), "lie" not in s.lower() and "lying" not in s.lower())
+    return None
+
+
+def _kk_formula(s: str, people: set[str]) -> tuple | None:
+    """A role sentence as is/not/and/or/if/iff over role atoms; None when it is not unambiguously one."""
+    s = " ".join(s.strip().rstrip("?.").split())
+    s = re.sub(r"^(?:it is true that|it holds that|the claim that) ", "", s, flags=re.I)
+    s = re.sub(r"\b(\w+)'s being\b", r"\1 being", s)
+    m = re.match(r"^the (?:statement|claim)(?: that)? ['\"]?(.+?)['\"]? is (true|false)$", s, re.I)
+    if m:
+        a = _kk_formula(m.group(1), people)
+        return (a if m.group(2).lower() == "true" else ("not", a)) if a else None
+    m = re.match(r"^it is not (?:the case|true) that (.+)$", s, re.I)
+    if m:
+        a = _kk_formula(m.group(1), people)
+        return ("not", a) if a else None
+    m = re.match(r"^(?:(\w+) and (\w+) are not both|not both (\w+) and (\w+) are) (knights|knaves)$", s, re.I)
+    if m:
+        a, b = (m.group(1), m.group(2)) if m.group(1) else (m.group(3), m.group(4))
+        k = m.group(5).lower() == "knights"
+        return ("not", ("and", ("is", a, k), ("is", b, k))) if {a, b} <= people else None
+    m = re.match(r"^(?:exactly one of (\w+) and (\w+) is a knight|one of (\w+) and (\w+) is a knight and the other "
+                 r"is a knave|(\w+) and (\w+) do not have the same roles?|(\w+) has the opposite role (?:of|from|to) (\w+))$",
+                 s, re.I)
+    if m:
+        a, b = [x for x in m.groups() if x]
+        return ("iff", ("is", a, True), ("is", b, False)) if {a, b} <= people else None
+    m = re.match(r"^(\w+) has the same role as (\w+)$|^(\w+) and (\w+) are either both knights or both knaves$", s, re.I)
+    if m:
+        a, b = [x for x in m.groups() if x]
+        return ("iff", ("is", a, True), ("is", b, True)) if {a, b} <= people else None
+    m = re.match(rf"^neither (\w+) nor (\w+) is {_KK_ROLE}$", s, re.I)
+    if m and {m.group(1), m.group(2)} <= people:
+        k = m.group(3).lower() == "knight"
+        return ("and", ("is", m.group(1), not k), ("is", m.group(2), not k))
+    m = re.match(r"^(\w+) and (\w+) (?:have|share|are of|are) (?:the )?same (?:roles?|types?)$|"
+                 r"^(\w+) and (\w+) are (?:both knights or both knaves|both knaves or both knights)$", s, re.I)
+    if m:
+        a, b = (m.group(1), m.group(2)) if m.group(1) else (m.group(3), m.group(4))
+        return ("iff", ("is", a, True), ("is", b, True)) if {a, b} <= people else None
+    m = re.match(r"^(\w+) and (\w+) (?:have|are of|are) (?:the )?(?:opposite|different) (?:roles?|types?)$", s, re.I)
+    if m:
+        a, b = m.group(1), m.group(2)
+        return ("iff", ("is", a, True), ("is", b, False)) if {a, b} <= people else None
+    m = re.match(r"^(?:both )?(\w+) and (\w+) are (?:both )?(knights|knaves)$", s, re.I)
+    if m and {m.group(1), m.group(2)} <= people:
+        k = m.group(3).lower() == "knights"
+        return ("and", ("is", m.group(1), k), ("is", m.group(2), k))
+    m = re.match(rf"^(?:either )?(\w+) or (\w+) is {_KK_ROLE}$", s, re.I)
+    if m and {m.group(1), m.group(2)} <= people:
+        k = m.group(3).lower() == "knight"
+        return ("or", ("is", m.group(1), k), ("is", m.group(2), k))
+    for pat, op in ((r"^if (.+?),? then (.+)$", "if"), (r"^if (.+?), (.+)$", "if"),
+                    (r"^(.+?) (?:implies|implying)(?: that)? (.+)$", "if"),
+                    (r"^(.+?) (?:if and only if|iff|exactly when|precisely when|is equivalent to|matches) (.+)$", "iff"),
+                    (r"^(.+?) (?<!and )only if (.+)$", "if"),
+                    (r"^(.+?) and (.+?) (?:have the same truth value|are equivalent)$", "iff"),
+                    (r"^(.+?) and (.+?) differ in truth value$", "xor"),
+                    (r"^either (.+?) or (.+)$", "or")):
+        m = re.match(pat, s, re.I)
+        if m:
+            a, b = _kk_formula(m.group(1), people), _kk_formula(m.group(2), people)
+            if not (a and b):
+                return None
+            return ("not", ("iff", a, b)) if op == "xor" else (op, a, b)
+    has_and, has_or = s.count(" and "), s.count(" or ")
+    if has_and + has_or == 1:                                # one connective: no precedence to guess
+        a, _, b = s.partition(" and " if has_and else " or ")
+        a, b = _kk_formula(a, people), _kk_formula(b, people)
+        return ("and" if has_and else "or", a, b) if a and b else None
+    if has_and + has_or == 0:
+        return _kk_atom(s, people)
+    return None
+
+
+def _kk_val(t: tuple, roles: dict[str, bool]) -> bool:
+    if t[0] == "not":
+        return not _kk_val(t[1], roles)
+    if t[0] == "is":
+        return roles[t[1]] == t[2]
+    a, b = _kk_val(t[1], roles), _kk_val(t[2], roles)
+    return {"and": a and b, "or": a or b, "if": (not a) or b, "iff": a == b}[t[0]]
+
+
+def _kk_names(t: tuple) -> set[str]:
+    return {t[1]} if t[0] == "is" else set().union(*(_kk_names(x) for x in t[1:]))
+
+
+def _kk_tuple(st) -> tuple:
+    return ("is", st[1], bool(st[2])) if st[0] == "is" else (st[0], _kk_tuple(st[1]), _kk_tuple(st[2]))
+
+
+def kk_rule_truth(question: str, rec: dict) -> bool | None:
+    """Truth of "Is X a knight/knave exactly when S?" under the puzzle's rules: True/False when S is equivalent to
+    X's statement or to its negation; None when S does not parse or is equivalent to neither (for example the
+    statement of another person: such a node is a transcription error, not a fact to be decided from the solution)."""
+    m = _KK_RULE.match(" ".join(question.strip().split()))
+    meta = rec.get("meta") or {}
+    stmts, people = meta.get("statements") or {}, set(meta.get("people") or _people_in(rec))
+    if not m or m.group(1) not in stmts:
+        return None
+    s = _kk_formula(m.group(3), people)
+    if s is None:
+        return None
+    st = _kk_tuple(stmts[m.group(1)])
+    names = sorted(_kk_names(s) | _kk_names(st))
+    rows = [dict(zip(names, bits)) for bits in itertools.product([True, False], repeat=len(names))]
+    knight = m.group(2).lower() == "knight"
+    if all(_kk_val(s, r) == _kk_val(st, r) for r in rows):
+        return knight
+    if all(_kk_val(s, r) != _kk_val(st, r) for r in rows):
+        return not knight
+    return None
+
+
+def kk_node_truth(question: str, rec: dict, rule: bool = True) -> bool | None:
+    """Program truth for K&K tree nodes: single roles (kk_subq_truth), rule nodes (kk_rule_truth; rule=False
+    reproduces the data built before it existed), same/opposite roles, a statement's truth under a hypothetical
+    assignment, and whether a hypothesis makes the statements contradictory.
     None whenever the question is not in one of these forms or leaves a needed role unassigned."""
     t = kk_subq_truth(question, rec)
+    if t is None and rule:
+        t = kk_rule_truth(question, rec)
     if t is not None:
         return t
     meta = rec.get("meta") or {}

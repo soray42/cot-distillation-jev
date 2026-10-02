@@ -6,6 +6,8 @@ analysis (hedge-option bias, prose-only states):
 - policy-generator items: half render the case facts as a JSON object.
 
   python3 scripts/build_v2.py --out data/student_v2
+  python3 scripts/build_v2.py --out data/student_v3f                  # v3 trees after the tree audit fixes
+  python3 scripts/build_v2.py --out data/student_v3 --no-tree-fix     # the original v3
 """
 from __future__ import annotations
 
@@ -93,6 +95,8 @@ def main() -> None:
     ap.add_argument("--val-frac", type=float, default=0.1)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--extra", action="store_true", help="also include the v3b runs (FOLIO top-up, GSM8K)")
+    ap.add_argument("--no-tree-fix", action="store_true",
+                    help="convert trees as before the tree audit (reproduces student_v3: md5 188e2e95...)")
     ap.add_argument("--balance", action="store_true",
                     help="per-item weight N / (C * N_c) so that each category carries the same total training weight")
     args = ap.parse_args()
@@ -110,7 +114,7 @@ def main() -> None:
                 continue
             if src == p:                                   # no tree yet: final question only (shared by all arms)
                 res = dict(res, subquestions=[], random_subquestions=[])
-            rec = convert(res)
+            rec = convert(res, tree_fix=not args.no_tree_fix)
             rng = random.Random(f"{args.seed}-{rec['item_id']}")
             dom = res["item"].get("domain", "")
             aug = None

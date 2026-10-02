@@ -18,6 +18,8 @@ import torch.nn.functional as F
 import torch.utils.checkpoint
 
 from .metrics import calibration  # noqa: F401  (re-exported for scripts)
+from .treeplan import (_descendants, _fact_line, _node_p, answer_component, full_tree_plan,  # noqa: F401
+                       node_depths)
 
 SUBQ_TEMPLATE = "{problem}\n\nIntermediate question: {question}\nOptions:\nA) {a}\nB) {b}\nAnswer:"
 FINAL_TEMPLATE = "{problem}\n\nAnswer:"
@@ -155,23 +157,6 @@ def build_examples(item: dict, *, final: str, subq: str, subq_target: str, lambd
     return ex
 
 
-def node_depths(nodes: list[dict]) -> dict[str, int]:
-    """Depth of each tree node: 0 for nodes that depend on no other node (facts read off the problem), else one
-    more than the deepest node it depends on. Unknown ids and cycles count as depth 0."""
-    by = {n["id"]: n for n in nodes if "id" in n}
-    memo: dict[str, int] = {}
-
-    def depth(i: str, seen: frozenset) -> int:
-        if i in memo:
-            return memo[i]
-        if i in seen or i not in by:
-            return 0
-        deps = [x for x in (by[i].get("depends_on") or []) if x in by]
-        memo[i] = 1 + max(depth(x, seen | {i}) for x in deps) if deps else 0
-        return memo[i]
-    return {i: depth(i, frozenset()) for i in by}
-
-
 def build_stage_examples(item: dict, *, stage: int, n_stages: int, k: int, rng: random.Random,
                          subq_target: str = "cot", p_new: float = 0.5, weight: float = 1.0,
                          level_balanced: bool = False) -> list[Example]:
@@ -208,20 +193,6 @@ def build_stage_examples(item: dict, *, stage: int, n_stages: int, k: int, rng: 
         ex.append(Example(SUBQ_TEMPLATE.format(problem=item["prompt"], question=sq["question"], a=a, b=b), ["A", "B"],
                           _soft(p, yes_first), weight * item.get("weight", 1.0), "subq", item["item_id"]))
     return ex
-
-
-def _node_p(sq: dict, subq_target: str = "cot") -> float | None:
-    if subq_target == "truth" and sq.get("truth") is not None:
-        return 1.0 if sq["truth"] else 0.0
-    p = sq.get("p_cot") if subq_target != "fresh" else sq.get("p_fresh")
-    return sq.get("p_fresh") if p is None else p
-
-
-def _fact_line(sq: dict) -> str | None:
-    p = (1.0 if sq["truth"] else 0.0) if sq.get("truth") is not None else sq.get("p_cot")
-    if p is None or 0.3 < p < 0.7:
-        return None
-    return f"Q: {sq['question']} A: {'Yes' if p >= 0.5 else 'No'}"
 
 
 def build_transition_views(item: dict, *, k: int, rng: random.Random, shuffled: bool = False, keep_prob: float = 1.0,
@@ -264,61 +235,6 @@ def build_transition_views(item: dict, *, k: int, rng: random.Random, shuffled: 
                           _soft(_node_p(sq, subq_target), yes_first), weight * item.get("weight", 1.0), "subq",
                           item["item_id"]))
     return ex
-
-
-def _descendants(nodes: list[dict]) -> dict[str, set]:
-    by = {sq["id"] for sq in nodes}
-    children = {i: [sq["id"] for sq in nodes if i in (sq.get("depends_on") or [])] for i in by}
-    out = {}
-    for i in by:
-        seen, todo = set(), list(children[i])
-        while todo:
-            j = todo.pop()
-            if j not in seen:
-                seen.add(j)
-                todo += children[j]
-        out[i] = seen
-    return out
-
-
-def full_tree_plan(item: dict, *, cap: int, rng: random.Random, subq_target: str = "cot") -> list[dict]:
-    """The nodes of a full-tree group (at most `cap`, sampled if the tree is larger) with both fact sets:
-    "parents" (true parent results) and "matched" (as many results from other nodes of the same item, depth-matched
-    where possible, excluding the node, its parents, its descendants and the near-answer nodes: sinks at the maximum
-    depth). A node gets facts in both modes only if it is eligible: it has parents, every parent has a confident
-    answer, and enough matched replacements exist. Otherwise it is asked plainly in every mode, so the two tree
-    modes differ only in which results are stated, never in how many."""
-    nodes = [sq for sq in item.get("subqs", []) if "id" in sq]
-    asked = [sq for sq in nodes if _node_p(sq, subq_target) is not None]
-    if len(asked) > cap:
-        asked = rng.sample(asked, cap)
-    if not nodes:
-        return []
-    by = {sq["id"]: sq for sq in nodes}
-    depth = node_depths(nodes)
-    desc = _descendants(nodes)
-    maxd = max(depth.values())
-    sinks = {i for i in by if not any(i in (sq.get("depends_on") or []) for sq in nodes)}
-    confident = {i for i in by if _fact_line(by[i])}
-    plan = []
-    for sq in asked:
-        i = sq["id"]
-        par = [x for x in (sq.get("depends_on") or []) if x in by]
-        entry = {"node": sq, "parents": [], "matched": []}
-        if par and all(x in confident for x in par):
-            pool = [j for j in by if j in confident and j != i and j not in par and j not in desc[i]
-                    and not (j in sinks and depth[j] == maxd)]
-            if len(pool) >= len(par):
-                rest, matched = pool[:], []
-                for x in par:
-                    same = [j for j in rest if depth[j] == depth[x]]
-                    cand = same or sorted(rest, key=lambda j: abs(depth[j] - depth[x]))[:max(1, len(rest))]
-                    j = rng.choice(same) if same else cand[0]
-                    matched.append(j)
-                    rest.remove(j)
-                entry = {"node": sq, "parents": par, "matched": matched}
-        plan.append(entry)
-    return plan
 
 
 def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10, aux_total: float = 1.0,

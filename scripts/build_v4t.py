@@ -15,9 +15,11 @@
 
   python scripts/build_v4t.py      # -> data/student_v4t/{train,val}.jsonl, data/student_v4t/summary.json,
                                    #    data/eval/claims_ho.jsonl (held-out-domain claim twins, evaluation only)
+  python scripts/build_v4t.py --out data/student_v4tf --v3 data/student_v3f    # trees after the tree audit fixes
 """
 from __future__ import annotations
 
+import argparse
 import collections
 import json
 import random
@@ -104,25 +106,44 @@ def rule_twins(n: int, seed: int, rng: random.Random, domains: tuple = rg.TRAIN_
 
 
 def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out", default="data/student_v4t")
+    ap.add_argument("--v3", default=None, help="rebuilt v3 data (e.g. data/student_v3f): its trees replace those of the "
+                                               "v3 family items, which student_v4 carries as built before the audit")
+    ap.add_argument("--no-tree-fix", action="store_true", help="convert trees as before the tree audit")
+    args = ap.parse_args()
     rng = random.Random(0)
     trees = {}
     for d in sorted((ROOT / "teacher_cache").glob("label_v4_c*_tree")):
         for p in sorted(d.glob("*.json")):
             res = json.loads(p.read_text())
             if "item" in res:
-                rec = convert(res)
+                rec = convert(res, tree_fix=not args.no_tree_fix)
                 trees[rec["item_id"].removeprefix("v4-")] = rec
-    summary: dict = {"trees_loaded": len(trees)}
-    out_dir = ROOT / "data/student_v4t"
+    v3 = {}
+    if args.v3:
+        for split in ("train", "val"):
+            for l in open(ROOT / args.v3 / f"{split}.jsonl"):
+                r = json.loads(l)
+                v3[r["item_id"]] = r
+    summary: dict = {"trees_loaded": len(trees), "v3_trees_from": args.v3, "tree_fix": not args.no_tree_fix}
+    out_dir = ROOT / args.out
     out_dir.mkdir(parents=True, exist_ok=True)
     for split in ("train", "val"):
         rows = [json.loads(l) for l in open(ROOT / f"data/student_v4/{split}.jsonl")]
-        hit = 0
+        hit = v3_hit = 0
         for r in rows:
             t = trees.get(r["item_id"])
             if t and t["subqs"]:
                 r["subqs"], r["random_subqs"], r["has_tree"] = t["subqs"], t["random_subqs"], True
                 hit += 1
+            if t and "tree_fix" in t:
+                r["tree_fix"] = t["tree_fix"]
+            if r["item_id"] in v3:
+                for k in ("subqs", "random_subqs", "tree_fix", "n_leak_dropped"):
+                    if k in v3[r["item_id"]]:
+                        r[k] = v3[r["item_id"]][k]
+                v3_hit += 1
         extra = []
         if split == "train":
             extra = ts_twins(rows, rng) + rule_twins(1200, seed=21, rng=rng)
@@ -135,12 +156,16 @@ def main() -> None:
         for r in extra:
             names = [o[3:] for o in r["prompt"].rpartition("\nOptions:\n")[2].splitlines()]
             gold_yes[(r["source"].split("/")[0], names[ord(r["gold_label"]) - 65])] += 1
-        summary[split] = {"items": len(rows), "v4_items_given_trees": hit,
+        summary[split] = {"items": len(rows), "v4_items_given_trees": hit, "v3_items_retreed": v3_hit,
                           "items_with_nodes": sum(bool(r.get("subqs")) for r in rows),
                           "nodes": sum(len(r.get("subqs") or []) for r in rows), "claim_twins": len(extra),
                           "claim_gold": {f"{a}/{b}": v for (a, b), v in sorted(gold_yes.items())}}
     # held-out claim set (rule-decision held-out domains, never trained): fits the yes/no bias in the claim format and
     # measures negation consistency (each claim's negation follows it in the file, ids <case>-x / <case>-xn)
+    if args.out != "data/student_v4t":            # the held-out claim set is written once, with the original build
+        (out_dir / "summary.json").write_text(json.dumps(summary, indent=1))
+        print(json.dumps(summary, indent=1))
+        return
     ho = rule_twins(400, seed=41, rng=random.Random(41), domains=rg.HELDOUT_DOMAINS, prefix="clmho")
     for r in ho:
         r["type"], r["label_names"] = "noul", {L: ("true" if n == "Yes" else "false") for L, n in zip(

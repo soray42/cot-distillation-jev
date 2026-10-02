@@ -215,7 +215,7 @@ def parse_tree(raw: str) -> list[dict]:
         if not opp or opp == q or _META.search(opp) or _AWKWARD.search(opp) or _SYMBOLIC.search(opp):
             opp = None
         seen.add(nid)
-        out.append({"id": nid, "type": typ, "depends_on": [d for d in n.get("depends_on") or [] if d in seen],
+        out.append({"id": nid, "type": typ, "depends_on": [d for d in n.get("depends_on") or [] if d in seen and d != nid],
                     "question": q, "stated": ans, "status": status, "opposite": opp,
                     "initial": init if status == "corrected" and init in ("yes", "no") else None,
                     "quote": str(n.get("quote", "")).strip()})
@@ -256,12 +256,34 @@ def _content(text: str) -> set[str]:
     return {w for w in re.findall(r"[a-z0-9]+", text.lower()) if len(w) > 3}
 
 
+_KK_ROLE_WORD = re.compile(r"\bkni(?:ght|ghts)\b|\bknaves?\b", re.I)
+_KK_CHECK = re.compile(r"\b(?:the|all|their)\s+(?:\w+\s+)?statements\b|\b(?:every|each)\s+statement\b|"
+                       r"\b(consistent|consistency|contradict\w*|inconsistent|match\w*|correct|valid|holds?|"
+                       r"solution|works?|satisf\w*)\b", re.I)
+
+
+def _kk_leak(question: str, rec: dict) -> bool:
+    """K&K: a node naming an option, an assignment or the solution, or checking a full assignment (every inhabitant
+    given a role) for consistency. A hypothesis about some inhabitants checked against the statements is a branch,
+    not a leak (the older rule, any "consistent with", also dropped those)."""
+    q = " ".join(question.split())
+    if re.search(r"\b(options?|assignments?|solutions?)\b", q, re.I):
+        return True
+    people = set((rec.get("meta") or {}).get("people") or [])
+    named = set(re.findall(r"\b[A-Z][a-z]+\b", q)) & people
+    if re.match(r"^(?:is|was) \w+ (?:a|actually a|really a) (?:knight|knave),? (?:exactly when|precisely when|"
+                r"just when|if and only if|iff)\b", q, re.I):
+        return False                                 # a rule node restates one statement
+    full = len(people) > 2 and named >= people or bool(re.search(
+        r"\ball (?:the )?(?:\w+ )?(?:inhabitants|people|islanders|persons|of them)\b", q, re.I))
+    return full and bool(_KK_ROLE_WORD.search(q)) and bool(_KK_CHECK.search(q))
+
+
 def leaks_final(question: str, rec: dict) -> bool:
-    """Whether a node question is the final question in disguise: for K&K a check of an assignment against
-    all statements; for JustLogic the truth of the statement to judge."""
+    """Whether a node question is the final question in disguise: for K&K a check of a full assignment or an option
+    (_kk_leak); for JustLogic the truth of the statement to judge."""
     if rec.get("domain") == "knights_knaves":
-        # a hypothetical full assignment checked against ONE statement is a branch, not a leak
-        return bool(_ALL_STATEMENTS.search(question))
+        return _kk_leak(question, rec)
     m = _STATEMENT.search(rec.get("prompt", ""))
     if m and _TRUTH_WORDS.search(question):
         # a leak asks about the statement to judge and little else; a premise that merely contains it, or
@@ -273,6 +295,55 @@ def leaks_final(question: str, rec: dict) -> bool:
         if re.search(r"\bthe statement\b(?!\s*['\"‘“])", question, re.I) and len(extra) <= 3:
             return True
     return False
+
+
+# Family-general forms of the final question in a node (tree audit F5): asking for the correct/best answer, label,
+# option or outcome; matching an option letter to the answer; "Should the agent <an option>?"; restating the question
+# line. Checking what an option says ("Does option A say the dog is wet?") is not one of them.
+_ANSWER_ASK = re.compile(
+    r"\b(correct|right|best|final|appropriate|intended|expected|proper)\s+(answer|label|option|choice|response|"
+    r"classification|category|output|outcome|decision|action)\b"
+    r"|\b(?:is|was|be) the (?:final |correct )?(?:answer|label|outcome|classification|decision)\b(?!\s+of\b)"
+    r"|\bmatch(?:es)?\s+(?:the\s+)?option\s+\(?[A-H]\b|\boption\s+\(?[A-H]\b[^?]*\b(?:correct|right|best|the answer)\b",
+    re.I)
+
+
+def _norm(s: str) -> str:
+    return " ".join(re.sub(r"[^a-z0-9$ ]", " ", s.lower()).split())
+
+
+def _option_texts(prompt: str) -> list[str]:
+    tail = prompt.rpartition("\nOptions:\n")[2]
+    return [m.group(1).strip() for m in (re.match(r"^\(?[A-Z]\) (.+)$", l) for l in tail.splitlines()) if m]
+
+
+def _agent_option(question: str, opts: list[str]) -> bool:
+    m = re.match(r"^(?:should|would|must|will) the (?:agent|assistant|support agent|representative)\s+(?:not\s+)?(.+?)\??$",
+                 question.strip(), re.I)
+    if not m:
+        return False
+    act = _norm(m.group(1))
+    return any(_norm(o) == act or (len(_norm(o)) > 6 and _norm(o) in act) for o in opts)
+
+
+def _restates_question(question: str, prompt: str) -> bool:
+    head = prompt.rpartition("\nOptions:\n")[0]
+    lines = [l for l in head.splitlines() if l.startswith("Question:")]
+    if not lines:
+        return False
+    asked = re.split(r"(?<=[.!?])\s+", lines[-1][len("Question:"):].strip())[-1]   # the question sentence, not premises
+    target = _content(asked)
+    words = _content(question)
+    return len(target) >= 3 and len(target & words) >= 0.8 * len(target) and len(words - target - _FRAME) <= 2
+
+
+def leaks_answer(question: str, rec: dict) -> bool:
+    """Whether a node asks the final question in any family (leaks_final plus the general forms above)."""
+    if leaks_final(question, rec):
+        return True
+    prompt = rec.get("prompt", "")
+    return (bool(_ANSWER_ASK.search(question)) or _agent_option(question, _option_texts(prompt))
+            or _restates_question(question, prompt))
 
 
 def extract_tree(client: DeepSeek, rec: dict, trace: dict, thinking: bool = False) -> list[dict]:
