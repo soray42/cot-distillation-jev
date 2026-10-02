@@ -7,7 +7,8 @@ layers; the last index is already final-normed). Then, per exit layer L:
   tuned   tuned lens (Belrose et al. 2023): an affine map from the normed layer-L state to the final state, fitted by
           ridge regression on the fit sets' states alone (no labels), then the model's own LM head
 For both: accuracy, agreement of the answer with the full model, ECE. Latency: a forward hook stops the pass after
-layer L (batch size 1, median over --timing-items prompts), next to the full pass.
+layer L (batch size 1, median over --timing-items prompts), next to the full pass. The fitted maps are saved to
+<out>/tuned_lens.pt (float16) so that an early-exit release can ship them.
 
   python scripts/early_exit_eval.py --model runs/TF-v4t-.../model --out runs/early-exit-TF-v4t \\
       --fit val=data/student_v4t/val.jsonl v4heldout=data/eval/v4_heldout.jsonl --eval bbh=data/eval/bbh.jsonl ...
@@ -90,15 +91,19 @@ def scores(probs: list[list[float]], items: list[dict], ref: list[int] | None) -
     return out
 
 
-def tuned_map(X: torch.Tensor, Y: torch.Tensor, rel_lambda: float = 0.1):
-    """Affine ridge map X -> Y in the dual form (n < d), fitted in float32 on the GPU."""
+def tuned_map(X: torch.Tensor, Y: torch.Tensor, rel_lambda: float = 0.1) -> dict:
+    """Affine ridge map X -> Y in the dual form (n < d), fitted in float32 on the GPU: {"mx", "W", "my"}, applied as
+    (Z - mx) @ W + my (apply_map)."""
     mx, my = X.mean(0), Y.mean(0)
     Xc, Yc = X - mx, Y - my
     K = Xc @ Xc.T
     lam = rel_lambda * K.diagonal().mean()
     A = torch.linalg.solve(K + lam * torch.eye(len(X), device=X.device), Yc)
-    W = Xc.T @ A
-    return lambda Z: (Z - mx) @ W + my
+    return {"mx": mx, "W": Xc.T @ A, "my": my}
+
+
+def apply_map(m: dict, Z: torch.Tensor) -> torch.Tensor:
+    return (Z - m["mx"]) @ m["W"] + m["my"]
 
 
 @torch.no_grad()
@@ -173,6 +178,10 @@ def main() -> None:
         maps = {L: tuned_map(normed(body, Hfit[:, L].to(dev).float(), L, n_layers, last_is_normed), Yfit)
                 for L in layers if L < n_layers}
     del Hfit, Ffit
+    # the fitted maps ship with the model for early exit: the layer-L state, final-normed, mapped, then the LM head
+    torch.save({"layers": {L: {k: v.to(torch.float16).cpu() for k, v in m.items()} for L, m in maps.items()},
+                "last_is_normed": last_is_normed, "n_layers": n_layers, "fit": args.fit},
+               out / "tuned_lens.pt")
     report = {"args": vars(args), "n_layers": n_layers, "sets": {}, "latency_s": {}}
     for spec in args.eval:
         name, path = spec.split("=", 1)
@@ -186,7 +195,7 @@ def main() -> None:
                 hL = normed(body, H[:, L].to(dev).float(), L, n_layers, last_is_normed)
                 row = {"lens": scores(letter_probs(head, tok, hL, items, cache), items, ref)}
                 if L in maps:
-                    row["tuned"] = scores(letter_probs(head, tok, maps[L](hL), items, cache), items, ref)
+                    row["tuned"] = scores(letter_probs(head, tok, apply_map(maps[L], hL), items, cache), items, ref)
                 rows[L] = row
         report["sets"][name] = {"n": len(items), "layers": rows}
         print(name, " ".join(f"L{L}: lens {r['lens']['acc']:.3f}" + (f" tuned {r['tuned']['acc']:.3f}/agree {r['tuned']['agree_full']:.2f}"
