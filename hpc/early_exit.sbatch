@@ -18,8 +18,8 @@ PY=envs/cotd/bin/python
 [ -n "${DRY_RUN:-}" ] && PY="echo [dry-run] python"
 M=${EXIT_MODEL:?set EXIT_MODEL}
 OUT=${EXIT_OUT:-runs/early-exit-$(basename $(dirname $M))}
-FIT="val=data/student_v4t/val.jsonl v4heldout=data/eval/v4_heldout.jsonl"
-SETS="jevbench=data/eval/jevbench_public.jsonl bbh=data/eval/bbh.jsonl musr=data/eval/musr.jsonl td=data/eval/typed_decisions_test.jsonl diag=data/eval/diag_kk.jsonl kk=data/eval/kk_heldout.jsonl policy=data/eval/policy_heldout.jsonl folio=data/eval/folio_val.jsonl claims_ho=data/eval/claims_ho.jsonl"
+FIT="val=data/student_v4t/val.jsonl"     # the tuned lens is fitted on val only; v4heldout (a selection set) picks the exit layer
+SETS="jevbench=data/eval/jevbench_public.jsonl v4heldout=data/eval/v4_heldout.jsonl bbh=data/eval/bbh.jsonl musr=data/eval/musr.jsonl td=data/eval/typed_decisions_test.jsonl diag=data/eval/diag_kk.jsonl kk=data/eval/kk_heldout.jsonl policy=data/eval/policy_heldout.jsonl folio=data/eval/folio_val.jsonl claims_ho=data/eval/claims_ho.jsonl"
 for f in $FIT $SETS; do [ -f "${f#*=}" ] || { echo "missing ${f#*=}"; exit 1; }; done
 [ -n "${DRY_RUN:-}" ] || [ -f "$M/config.json" ] || { echo "no model at $M"; exit 1; }
 nvidia-smi -L 2>/dev/null || echo "no nvidia-smi here"
