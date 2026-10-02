@@ -198,7 +198,7 @@ def main() -> None:
         rule95 = next((L for L in sorted(layers, key=int) if sel["layers"][L]["tuned"]["agree_full"] >= 0.95), None)
         lstar, cert = ltt_layer(sel, layers)
         print(f"\n== early exit (v4heldout, n={sel.get('n')}): L* = {lstar} by Learn-then-Test (alpha .05, delta .1, "
-              f"fixed sequence from the deepest layer; prereg_release addendum 2026-10-02 21:40 UTC); the earlier "
+              f"fixed sequence from the deepest layer; prereg_release addendum 2026-10-02 21:34 UTC); the earlier "
               f">= .95 agreement rule gives {rule95}")
         for L, k, pv in cert:
             print(f"  layer {L:>2s}: {k} disagreements, p = {pv:.4f}{'  certified' if pv <= 0.1 else '  stop'}")
