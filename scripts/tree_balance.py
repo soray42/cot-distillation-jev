@@ -24,6 +24,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from cotdistill import treeplan as S  # noqa: E402
 
+if (Path.cwd() / "data").exists() and not (ROOT / "data").exists():   # HPC: data next to the repo clone
+    ROOT = Path.cwd()
+
 
 def family(src: str | None) -> str:
     s = (src or "").removeprefix("v4/").split("/")[0]
