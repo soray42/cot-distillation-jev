@@ -11,8 +11,12 @@
   exit       the early-exit layer L*: the smallest layer whose tuned-lens agreement with the full model is >= 95% on
              v4heldout; then the accuracy change on each test set at L* and the latency ratio
 
-  python scripts/release_readout.py --ours runs/TF-v4t-...-s0 --rlcd runs/A2-rlcd-model-student_rlcd-s0 \\
-      --others A2-v4=runs/A2-v4-... TF-ep2=runs/TF-ep2-... --peers decider=runs/peer-decider strands=runs/peer-strands \\
+  claim      per reasoning set: ahead of every comparator that ran (prereg_release addendum 2026-10-02 21:05 UTC)
+
+  python scripts/release_readout.py --ours runs/TF-v4t-...-s0,runs/reason-sev2b \\
+      --rlcd runs/A2-rlcd-model-student_rlcd-s0,runs/reason-rlcd --others A2-v4=runs/A2-v4-... TF-ep2=runs/TF-ep2-... \\
+      --peers decider=runs/peer-decider,runs/reason-peer-decider strands=runs/peer-strands,runs/reason-peer-strands \\
+      jeff=runs/jeff-native,runs/reason-jeff qwen2b=runs/reason-qwen2b-nothink \\
       --exit runs/early-exit-TF-v4t-.../early_exit.json
 """
 from __future__ import annotations
@@ -26,13 +30,24 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 if (Path.cwd() / "data/eval").exists() and not (ROOT / "data/eval").exists():
     ROOT = Path.cwd()
-SETS = ["jevbench", "bbh", "musr", "td", "diag", "kk", "policy", "folio", "claims_ho", "tdq", "tdn", "v4heldout"]
+SETS = ["jevbench", "bbh", "musr", "td", "diag", "kk", "policy", "folio", "claims_ho", "tdq", "tdn", "v4heldout",
+        "bbeh", "xkk", "proverqa", "zebra", "zebra_all", "logiqa2", "lsat_lr", "lsat_ar"]
+REASONING = ["bbh", "musr", "diag", "bbeh", "xkk", "proverqa", "zebra", "logiqa2", "lsat_lr", "lsat_ar"]
+MERGED = {"zebra_all": ["zebra", "zebra_ovl"]}      # registered sensitivity set: zebra plus its overlap-dropped items
 EVAL_FILES = {"td": "data/eval/typed_decisions_test.jsonl", "claims_ho": "data/eval/claims_ho.jsonl"}
 
 
-def preds(run: Path, name: str) -> dict[str, dict]:
-    f = run / f"preds_{name}.jsonl"
-    return {json.loads(l)["item_id"]: json.loads(l) for l in open(f)} if f.exists() else {}
+def preds(dirs: list[Path], name: str) -> dict[str, dict]:
+    """A model's predictions on one set: from the first of its directories that has them (a run directory, then e.g.
+    runs/reason-<name> for the external reasoning sets); a merged set joins its parts."""
+    if name in MERGED:
+        parts = [preds(dirs, n) for n in MERGED[name]]
+        return {k: v for p in parts for k, v in p.items()} if all(parts) else {}
+    for d in dirs:
+        f = d / f"preds_{name}.jsonl"
+        if f.exists():
+            return {json.loads(l)["item_id"]: json.loads(l) for l in open(f)}
+    return {}
 
 
 def correct(p: dict) -> bool:
@@ -70,12 +85,13 @@ def main() -> None:
     ap.add_argument("--peers", nargs="*", default=[])
     ap.add_argument("--exit", default=None)
     args = ap.parse_args()
-    runs = {"ours": Path(args.ours)}
+    dirs = lambda v: [Path(x) for x in v.split(",")]      # noqa: E731  (a model's directories, comma-separated)
+    runs = {"ours": dirs(args.ours)}
     if args.rlcd:
-        runs["rlcd"] = Path(args.rlcd)
+        runs["rlcd"] = dirs(args.rlcd)
     for spec in args.others + args.peers:
         k, v = spec.split("=", 1)
-        runs[k] = Path(v)
+        runs[k] = dirs(v)
     P = {k: {s: preds(r, s) for s in SETS} for k, r in runs.items()}
 
     print("== table (accuracy / ECE)")
@@ -102,6 +118,25 @@ def main() -> None:
                 behind = hi < 0
                 print(f"  {s:10s} n={len(ids):5d} diff {m:+.3f} [{lo:+.3f}, {hi:+.3f}]  tasks {sum(a)} vs {sum(b)}"
                       f"  {'AHEAD' if ahead else ('BEHIND' if behind else '')}")
+
+    peers = [spec.split("=", 1)[0] for spec in args.peers]
+    if peers:
+        print(f"\n== claim (prereg_release 21:05 UTC): ahead of every comparator that ran ({', '.join(peers)})")
+        for cand in [c for c in ("ours", "rlcd") if c in runs]:
+            for s in REASONING:
+                ran = [p for p in peers if P[p][s]]
+                if not P[cand][s] or not ran:
+                    continue
+                verdicts = []
+                for peer in ran:
+                    ids = [i for i in P[cand][s] if i in P[peer][s]]
+                    a = [int(correct(P[cand][s][i])) for i in ids]
+                    b = [int(correct(P[peer][s][i])) for i in ids]
+                    _, lo, _ = boot(a, b)
+                    verdicts.append(lo > 0 and (s != "jevbench" or sum(a) - sum(b) >= 4))
+                missing = [p for p in peers if p not in ran]
+                print(f"  {cand:5s} {s:9s} {'CLAIM' if all(verdicts) else 'no claim':9s} ahead of "
+                      f"{sum(verdicts)}/{len(ran)}" + (f"  (not run: {', '.join(missing)})" if missing else ""))
 
     if "rlcd" in runs:
         print("\n== RLCD criteria (stage 2 vs stage 1)")
