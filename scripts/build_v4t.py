@@ -13,7 +13,8 @@
      a case, with program-exact claims about one predicate, one rule and the decision, each with its negation.
    Option order (No/Yes or Yes/No) is random per item.
 
-  python scripts/build_v4t.py      # -> data/student_v4t/{train,val}.jsonl, data/student_v4t/summary.json
+  python scripts/build_v4t.py      # -> data/student_v4t/{train,val}.jsonl, data/student_v4t/summary.json,
+                                   #    data/eval/claims_ho.jsonl (held-out-domain claim twins, evaluation only)
 """
 from __future__ import annotations
 
@@ -80,9 +81,9 @@ def rule_state(case: rg.Case) -> str:
     return "State:\n" + json.dumps(state, indent=1) + "\n"
 
 
-def rule_twins(n: int, seed: int, rng: random.Random) -> list[dict]:
+def rule_twins(n: int, seed: int, rng: random.Random, domains: tuple = rg.TRAIN_DOMAINS, prefix: str = "clm") -> list[dict]:
     out = []
-    for case in rg.generate(n, rg.TRAIN_DOMAINS, seed=seed, prefix="clm"):
+    for case in rg.generate(n, domains, seed=seed, prefix=prefix):
         dom, res, body = case.domain, case.evaluate(), rule_state(case)
         src = f"claims/rule/{dom.name}"
         pred = rng.choice(rg._all_preds(case))
@@ -138,6 +139,16 @@ def main() -> None:
                           "items_with_nodes": sum(bool(r.get("subqs")) for r in rows),
                           "nodes": sum(len(r.get("subqs") or []) for r in rows), "claim_twins": len(extra),
                           "claim_gold": {f"{a}/{b}": v for (a, b), v in sorted(gold_yes.items())}}
+    # held-out claim set (rule-decision held-out domains, never trained): fits the yes/no bias in the claim format and
+    # measures negation consistency (each claim's negation follows it in the file, ids <case>-x / <case>-xn)
+    ho = rule_twins(400, seed=41, rng=random.Random(41), domains=rg.HELDOUT_DOMAINS, prefix="clmho")
+    for r in ho:
+        r["type"], r["label_names"] = "noul", {L: ("true" if n == "Yes" else "false") for L, n in zip(
+            r["labels"], [o[3:] for o in r["prompt"].rpartition("\nOptions:\n")[2].splitlines()])}
+    with open(ROOT / "data/eval/claims_ho.jsonl", "w") as f:
+        for r in ho:
+            f.write(json.dumps(r) + "\n")
+    summary["claims_ho"] = len(ho)
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=1))
     print(json.dumps(summary, indent=1))
 
