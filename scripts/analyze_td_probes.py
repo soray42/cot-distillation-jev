@@ -19,6 +19,8 @@ from collections import defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+if (Path.cwd() / "data/eval").exists() and not (ROOT / "data/eval").exists():   # HPC: data next to the repo clone
+    ROOT = Path.cwd()
 FORMS = {"orig": "tdo", "plain": "tdp", "qform": "tdq", "neg": "tdn", "swap": "tds"}
 
 

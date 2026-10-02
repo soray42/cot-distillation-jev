@@ -14,6 +14,8 @@ import math
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+if (Path.cwd() / "data/eval").exists() and not (ROOT / "data/eval").exists():   # HPC: data next to the repo clone
+    ROOT = Path.cwd()
 FILES = {"val": None, "v4heldout": "data/eval/v4_heldout.jsonl", "jevbench": "data/eval/jevbench_public.jsonl",
          "td": "data/eval/typed_decisions_test.jsonl", "bbh": "data/eval/bbh.jsonl", "musr": "data/eval/musr.jsonl",
          "policy": "data/eval/policy_heldout.jsonl", "folio": "data/eval/folio_val.jsonl", "sharc": "data/eval/sharc_dev.jsonl",
