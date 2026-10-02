@@ -8,8 +8,9 @@
              - claims_ho negation consistency: mean P(Yes|claim) + P(Yes|negation) over the -p/-pn and -a/-an pairs
              - drops on BBH, MuSR and K&K diag
              (JevBench ECE after post-hoc calibration comes from runs/report_calibration.txt)
-  exit       the early-exit layer L*: the smallest layer whose tuned-lens agreement with the full model is >= 95% on
-             v4heldout; then the accuracy change on each test set at L* and the latency ratio
+  exit       the early-exit layer L*: the shallowest layer certified by Learn-then-Test on v4heldout (disagreement with
+             the full model <= .05 with probability >= .9, fixed-sequence testing from the deepest layer), next to the
+             earlier >= 95%-agreement rule; then the accuracy change on each test set at L* and the latency ratio
 
   claim      per reasoning set: ahead of every comparator that ran (prereg_release addendum 2026-10-02 21:05 UTC)
 
@@ -23,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import random
 import re
 from pathlib import Path
@@ -75,6 +77,34 @@ def yes_prob(p: dict, item: dict) -> float:
     names = item.get("label_names") or {}
     yes = next(L for L, nm in names.items() if str(nm).lower() in ("true", "yes"))
     return p["probs"][p["labels"].index(yes)]
+
+
+def binom_cdf(k: int, n: int, p: float) -> float:
+    """P(Binomial(n, p) <= k), summed in log space."""
+    lp, lq = math.log(p), math.log1p(-p)
+    terms = [math.lgamma(n + 1) - math.lgamma(i + 1) - math.lgamma(n - i + 1) + i * lp + (n - i) * lq
+             for i in range(k + 1)]
+    m = max(terms)
+    return math.exp(m) * sum(math.exp(t - m) for t in terms)
+
+
+def ltt_layer(sel: dict, layers: list[str], alpha: float = 0.05, delta: float = 0.1):
+    """Learn-then-Test (Angelopoulos et al. 2021, Thm 1 with the fixed-sequence procedure, Prop 3): loss = the
+    tuned-lens answer at layer L differs from the full model's. Each layer tests H0 "disagreement rate > alpha" with
+    the exact binomial p-value P(Bin(n, alpha) <= k), from the deepest evaluated layer to the shallowest, stopping at
+    the first p > delta. With probability >= 1 - delta every certified layer disagrees with the full model on at
+    most a fraction alpha of items drawn like the selection set. Returns (shallowest certified layer or None,
+    [(layer, disagreements, p)] in testing order)."""
+    n = sel.get("n") or 0
+    out, best = [], None
+    for L in sorted(layers, key=int, reverse=True):
+        k = round((1 - sel["layers"][L]["tuned"]["agree_full"]) * n)
+        pv = binom_cdf(k, n, alpha)
+        out.append((L, k, pv))
+        if pv > delta:
+            break
+        best = L
+    return best, out
 
 
 def main() -> None:
@@ -163,10 +193,15 @@ def main() -> None:
 
     if args.exit and Path(args.exit).exists():
         ex = json.load(open(args.exit))
-        layers = [k for k in ex["sets"]["v4heldout"]["layers"] if k != "full"] if "v4heldout" in ex["sets"] else []
-        lstar = next((L for L in sorted(layers, key=int)
-                      if ex["sets"]["v4heldout"]["layers"][L].get("tuned", {}).get("agree_full", 0) >= 0.95), None)
-        print(f"\n== early exit: L* = {lstar} (first layer with tuned-lens agreement >= .95 on v4heldout)")
+        sel = ex["sets"].get("v4heldout", {})
+        layers = [k for k in sel.get("layers", {}) if k != "full" and "tuned" in sel["layers"][k]]
+        rule95 = next((L for L in sorted(layers, key=int) if sel["layers"][L]["tuned"]["agree_full"] >= 0.95), None)
+        lstar, cert = ltt_layer(sel, layers)
+        print(f"\n== early exit (v4heldout, n={sel.get('n')}): L* = {lstar} by Learn-then-Test (alpha .05, delta .1, "
+              f"fixed sequence from the deepest layer; prereg_release addendum 2026-10-02 21:40 UTC); the earlier "
+              f">= .95 agreement rule gives {rule95}")
+        for L, k, pv in cert:
+            print(f"  layer {L:>2s}: {k} disagreements, p = {pv:.4f}{'  certified' if pv <= 0.1 else '  stop'}")
         if lstar:
             drops = []
             for s, v in ex["sets"].items():
