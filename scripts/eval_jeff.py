@@ -10,6 +10,7 @@ JevBench and Typed Decisions are native Jev requests and are rebuilt from the ra
 wrapped as a choice question over the record's options. Predictions come back in our preds format (our letters).
 
   python scripts/eval_jeff.py --model models/Jeff-Qwen3.5-2B --sets jevbench td kk jl --out runs/jeff-native
+  python scripts/eval_jeff.py --model models/Jeff-Qwen3.5-2B --sets xkk=data/eval/xkk.jsonl --out runs/reason-jeff
 """
 from __future__ import annotations
 
@@ -112,7 +113,8 @@ def wrapped_rows(path: str) -> list[tuple[str, object, dict]]:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True)
-    ap.add_argument("--sets", nargs="+", default=["jevbench", "td"])
+    ap.add_argument("--sets", nargs="+", default=["jevbench", "td"],
+                    help="set names from the table in main(), or name=path for any other evaluation file")
     ap.add_argument("--out", required=True)
     ap.add_argument("--limit", type=int, default=None, help="first N items per set (smoke runs)")
     args = ap.parse_args()
@@ -145,10 +147,13 @@ def main() -> None:
              "kk": "data/eval/kk_heldout.jsonl", "jl": "data/eval/jl_heldout.jsonl", "bbeh": "data/eval/bbeh.jsonl",
              "bbh": "data/eval/bbh.jsonl", "musr": "data/eval/musr.jsonl", "policy": "data/eval/policy_heldout.jsonl",
              "sharc": "data/eval/sharc_dev.jsonl", "folio": "data/eval/folio_val.jsonl", "val": "data/student_tree/val.jsonl"}
+    for spec in args.sets:
+        if "=" in spec:
+            evals[spec.split("=", 1)[0]] = spec.split("=", 1)[1]
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     results = {"args": vars(args), "eval": {}}
-    for name in args.sets:
+    for name in (spec.split("=", 1)[0] for spec in args.sets):
         ours = {r["item_id"]: r for r in (json.loads(l) for l in open(data_path(evals[name])) if l.strip())}
         rows = native_rows(name) if name in ("jevbench", "td") else wrapped_rows(evals[name])
         rows = rows[:args.limit] if args.limit else rows
