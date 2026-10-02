@@ -23,6 +23,8 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+if (Path.cwd() / "data/eval").exists() and not (ROOT / "data/eval").exists():   # HPC: data next to the repo clone
+    ROOT = Path.cwd()
 sys.path.insert(0, str(ROOT / "src"))
 import torch  # noqa: E402
 
