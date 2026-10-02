@@ -134,17 +134,37 @@ def main() -> None:
                     for dv in sorted(set(depth.tolist())):
                         row[f"kkdeep_decision_d{dv}"] = round(float(d[depth == dv].mean()), 4)
             rows[str(L)] = row
+        if (run / "hidden_val.pt").exists():          # all v3 families: 5-fold cross-validated decision probe on val
+            Hv = torch.load(run / "hidden_val.pt", map_location="cpu").float().numpy()
+            vitems = [json.loads(l) for l in open(ROOT / "data/student_v3/val.jsonl")]
+            vi = [{"gold": it["labels"].index(it["gold_label"]), "n_opts": len(it["labels"]),
+                   "fam": it.get("source")} for it in vitems]
+            folds = np.arange(len(vi)) % 5
+            for li, L in enumerate(layers):
+                ok = np.zeros(len(vi), dtype=bool)
+                for f in range(5):
+                    tr, te = np.where(folds != f)[0], np.where(folds == f)[0]
+                    Xa, Xb = standardise(Hv[tr, li], Hv[te, li])
+                    ok[te] = decision_probe(Xa, [vi[i] for i in tr], [Xb], [[vi[i] for i in te]])[0]
+                rows[str(L)]["val_decision_cv"] = round(float(ok.mean()), 4)
+                for fam in sorted({x["fam"] for x in vi}):
+                    m = np.array([x["fam"] == fam for x in vi])
+                    rows[str(L)][f"val_{fam}"] = round(float(ok[m].mean()), 3)
         report[run.name] = rows
         print(f"\n{run.name}")
         keys = list(next(iter(rows.values())).keys())
-        main_keys = [k for k in keys if not k.startswith("kkdeep_decision_d")]
+        main_keys = [k for k in keys if not k.startswith("kkdeep_decision_d") and not (k.startswith("val_") and k != "val_decision_cv")]
         print(f"{'layer':>6s} " + " ".join(f"{k:>16s}" for k in main_keys))
         for L, row in rows.items():
             print(f"{L:>6s} " + " ".join(f"{row[k]:16.3f}" for k in main_keys))
         dk = [k for k in keys if k.startswith("kkdeep_decision_d")]
         if dk:
             print("kkdeep decision by puzzle size: " + "  ".join(
-                f"{k[18:]}: " + "/".join(f"{rows[str(L)][k]:.2f}" for L in layers) for k in dk))
+                f"d{k[len('kkdeep_decision_d'):]}: " + "/".join(f"{rows[str(L)][k]:.2f}" for L in layers) for k in dk))
+        fams = [k for k in keys if k.startswith("val_") and k != "val_decision_cv"]
+        if fams:
+            print("val decision by family (layers " + "/".join(str(x) for x in layers) + "): " + "  ".join(
+                f"{k[4:]}: " + "/".join(f"{rows[str(L)][k]:.2f}" for L in layers) for k in fams))
     if args.out:
         Path(args.out).write_text(json.dumps(report, indent=1))
 
