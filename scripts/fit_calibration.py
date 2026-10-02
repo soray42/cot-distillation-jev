@@ -16,7 +16,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 FILES = {"val": None, "v4heldout": "data/eval/v4_heldout.jsonl", "jevbench": "data/eval/jevbench_public.jsonl",
          "td": "data/eval/typed_decisions_test.jsonl", "bbh": "data/eval/bbh.jsonl", "musr": "data/eval/musr.jsonl",
-         "policy": "data/eval/policy_heldout.jsonl", "folio": "data/eval/folio_val.jsonl", "sharc": "data/eval/sharc_dev.jsonl"}
+         "policy": "data/eval/policy_heldout.jsonl", "folio": "data/eval/folio_val.jsonl", "sharc": "data/eval/sharc_dev.jsonl",
+         "claims_ho": "data/eval/claims_ho.jsonl", "tdq": "data/eval/td_noul_qform.jsonl", "tdn": "data/eval/td_noul_neg.jsonl"}
 
 
 def item_types(name: str) -> dict[str, tuple[str, int | None]]:
@@ -90,7 +91,7 @@ def fit(rows: list[dict], with_bias: bool) -> tuple[float, float]:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("runs", nargs="+")
-    ap.add_argument("--fit", default="val,v4heldout")
+    ap.add_argument("--fit", default="val,v4heldout,claims_ho")
     ap.add_argument("--apply", default="jevbench,td,bbh,musr")
     args = ap.parse_args()
     for r in args.runs:

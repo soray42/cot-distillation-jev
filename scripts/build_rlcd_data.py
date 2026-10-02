@@ -21,6 +21,8 @@ import random
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+if (Path.cwd() / "data/student_v4t").exists():      # on HPC the data live next to the repo clone (~/cotd), not in it
+    ROOT = Path.cwd()
 CORE = {"knights_knaves", "justlogic", "sharc", "returns", "expense", "subscription"}
 
 
