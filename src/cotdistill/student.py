@@ -237,13 +237,39 @@ def build_transition_views(item: dict, *, k: int, rng: random.Random, shuffled: 
     return ex
 
 
+def _mc_node_view(item: dict, sq: dict, lines: list[str], tgt: str, rng: random.Random, weight: float,
+                  m: int = 3) -> Example | None:
+    """A tree node asked in multiple-choice form, with the same stated results as its yes/no view: the node and m-1
+    other confident No nodes of the item as options, plus "None of them" ("Which of these questions has the answer
+    Yes?"). The soft target is the build_mc_views one, P(i) proportional to p_i * prod_{j != i} (1 - p_j) and P(none)
+    to prod_j (1 - p_j). None when the node has no target or the item has too few confident No nodes."""
+    p = _node_p(sq, tgt)
+    others = [x for x in item.get("subqs", []) if x is not sq and x.get("question") != sq.get("question")
+              and _node_p(x, tgt) is not None and _node_p(x, tgt) <= 0.3]
+    if p is None or len(others) < m - 1:
+        return None
+    chosen = [sq] + rng.sample(others, m - 1)
+    rng.shuffle(chosen)
+    ps = [min(max(_node_p(x, tgt), 1e-4), 1 - 1e-4) for x in chosen]
+    none = math.prod(1 - q for q in ps)
+    scores = [q * none / (1 - q) for q in ps] + [none]
+    z = sum(scores)
+    letters = [chr(65 + i) for i in range(m + 1)]
+    opts = "\n".join(f"{L}) {t}" for L, t in zip(letters, [x["question"] for x in chosen] + [MC_NONE]))
+    problem = item["prompt"] + (f"\n\n{FACTS_HEADER}\n" + "\n".join(lines) if lines else "")
+    return Example(SUBQ_MC_TEMPLATE.format(problem=problem, opts=opts), letters, [x / z for x in scores], weight,
+                   "subq", item["item_id"])
+
+
 def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10, aux_total: float = 1.0,
-                    final: str = "teacher", subq_target: str = "cot", permute_final: float = 0.0) -> list[Example]:
+                    final: str = "teacher", subq_target: str = "cot", permute_final: float = 0.0,
+                    node_format: str = "yesno") -> list[Example]:
     """One problem with ALL its tree nodes (up to `cap`) instead of k sampled ones: [final] + one view per node.
     mode "true": eligible nodes are asked with their parents' results stated; "matched": with the same number of
     depth-matched non-parent results (see full_tree_plan); "plain": every node asked without facts; "placebo": the
     plain views at zero weight; "control": the item's control questions (fresh targets), plainly. The auxiliary
-    weight is normalised per problem (aux_total / number of views), so larger trees do not weigh more."""
+    weight is normalised per problem (aux_total / number of views), so larger trees do not weigh more.
+    node_format "mc" asks each node in multiple-choice form (_mc_node_view) where the item allows it."""
     fin = [e for e in build_examples(item, final=final, subq="none", subq_target=subq_target, lambda_sub=0.0, rng=rng,
                                      permute_final=permute_final) if e.kind == "final"]
     if not fin:
@@ -266,6 +292,11 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
     for sq, facts, tgt in views:
         lines = [_fact_line(x) for x in facts]
         rng.shuffle(lines)
+        if node_format == "mc" and mode != "control":      # multiple-choice node view, same stated results
+            ex = _mc_node_view(item, sq, lines, tgt, rng, w * wi)
+            if ex is not None:
+                out.append(ex)
+                continue
         problem = item["prompt"] + (f"\n\n{FACTS_HEADER}\n" + "\n".join(lines) if lines else "")
         yes_first = rng.random() < 0.5
         a, b = ("Yes", "No") if yes_first else ("No", "Yes")

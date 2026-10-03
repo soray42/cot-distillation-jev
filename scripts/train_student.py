@@ -81,6 +81,9 @@ def main() -> None:
                     help="seed of the problem order (grouped and full-tree arms); default = --seed. Varying it alone "
                          "or --seed alone (node sampling, option order) decomposes the seed variance")
     ap.add_argument("--tree-cap", type=int, default=10, help="full-tree groups: at most this many nodes per problem")
+    ap.add_argument("--node-format", default="yesno", choices=["yesno", "mc"],
+                    help="full-tree groups: ask nodes as yes/no questions, or in multiple-choice form with other "
+                         "confident No nodes of the item and 'None of them' as options (same stated results)")
     ap.add_argument("--aux-total", type=float, default=1.0,
                     help="full-tree groups: auxiliary weight per problem, split evenly over its node views")
     ap.add_argument("--aux-sources", default="", help="grouped training: comma list of item sources whose auxiliary "
@@ -218,7 +221,8 @@ def main() -> None:
         items = train_items[:]
         order_rng.shuffle(items)
         groups = [g for g in (build_full_tree(it, mode=args.tree_full, rng=rng, cap=args.tree_cap,
-                                              aux_total=args.aux_total, final=args.final,
+                                              aux_total=args.aux_total, node_format=args.node_format,
+                                              final=args.final,
                                               subq_target=args.subq_target, permute_final=args.permute_final)
                               for it in items) if g]
         b = args.items_per_update
