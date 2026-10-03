@@ -8,7 +8,8 @@
 #SBATCH --time=03:00:00
 #SBATCH --output=logs/%x-%j.out
 # Weight interpolation between the base and a fine-tuned student (scripts/wise_ft_eval.py), evaluation only, no
-# weights saved: FT=<model dir> ALPHAS=0.5,0.7,0.85 -> runs/wise-<name of FT's run>/a<alpha>/. Smoke first (4 items).
+# weights saved: FT=<model dir> ALPHAS=0.5,0.7,0.85 [WISE_SETS="name=path ..."] [WISE_TAG=sel]
+# -> runs/wise-<name of FT's run>[-<tag>]/a<alpha>/. Smoke first (4 items).
 #   DRY_RUN=1 FT=runs/TF-v4t-Qwen3.5-2B-Base-student_v4t-s0/model bash repo/hpc/wise_ft.sbatch
 set -euo pipefail
 cd "$HOME/cotd"
@@ -19,8 +20,8 @@ PY=envs/cotd/bin/python
 nvidia-smi -L 2>/dev/null || echo "no nvidia-smi here"
 BASE=models/Qwen3.5-2B-Base
 [ -f "$FT/config.json" ] || { echo "missing model $FT"; exit 1; }
-OUT=runs/wise-$(basename "$(dirname "$FT")")
-SETS="jevbench=data/eval/jevbench_public.jsonl bbh=data/eval/bbh.jsonl musr=data/eval/musr.jsonl gsm8k=data/eval/gsm8k_mc.jsonl td=data/eval/typed_decisions_test.jsonl diag=data/eval/diag_kk.jsonl kk=data/eval/kk_heldout.jsonl policy=data/eval/policy_heldout.jsonl proverqa=data/eval/proverqa.jsonl xkk=data/eval/xkk.jsonl logiqa2=data/eval/logiqa2.jsonl lsat_lr=data/eval/lsat_lr.jsonl zebra=data/eval/zebra.jsonl"
+OUT=runs/wise-$(basename "$(dirname "$FT")")${WISE_TAG:+-$WISE_TAG}
+SETS=${WISE_SETS:-"jevbench=data/eval/jevbench_public.jsonl bbh=data/eval/bbh.jsonl musr=data/eval/musr.jsonl gsm8k=data/eval/gsm8k_mc.jsonl td=data/eval/typed_decisions_test.jsonl diag=data/eval/diag_kk.jsonl kk=data/eval/kk_heldout.jsonl policy=data/eval/policy_heldout.jsonl proverqa=data/eval/proverqa.jsonl xkk=data/eval/xkk.jsonl logiqa2=data/eval/logiqa2.jsonl lsat_lr=data/eval/lsat_lr.jsonl zebra=data/eval/zebra.jsonl"}
 for f in $SETS; do [ -f "${f#*=}" ] || { echo "missing eval file ${f#*=}"; exit 1; }; done
 mkdir -p runs/wise-smoke-data
 head -n 4 data/eval/gsm8k_mc.jsonl > runs/wise-smoke-data/gsm8k.jsonl
