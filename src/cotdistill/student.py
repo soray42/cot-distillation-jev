@@ -239,16 +239,24 @@ def build_transition_views(item: dict, *, k: int, rng: random.Random, shuffled: 
 
 def _mc_node_view(item: dict, sq: dict, lines: list[str], tgt: str, rng: random.Random, weight: float,
                   m: int = 3) -> Example | None:
-    """A tree node asked in multiple-choice form, with the same stated results as its yes/no view: the node and m-1
-    other confident No nodes of the item as options, plus "None of them" ("Which of these questions has the answer
-    Yes?"). The soft target is the build_mc_views one, P(i) proportional to p_i * prod_{j != i} (1 - p_j) and P(none)
-    to prod_j (1 - p_j). None when the node has no target or the item has too few confident No nodes."""
+    """A tree node asked in multiple-choice form, with the same stated results as its yes/no view: the node, other
+    confident nodes of the item and "None of them" as options ("Which of these questions has the answer Yes?"). A Yes
+    node goes with m-1 confident No nodes; a No node with one confident Yes node (when the item has one) and m-2 No
+    nodes. The soft target is the build_mc_views one, P(i) proportional to p_i * prod_{j != i} (1 - p_j) and P(none)
+    to prod_j (1 - p_j). None when the node has no target or the item has too few confident nodes."""
     p = _node_p(sq, tgt)
-    others = [x for x in item.get("subqs", []) if x is not sq and x.get("question") != sq.get("question")
-              and _node_p(x, tgt) is not None and _node_p(x, tgt) <= 0.3]
-    if p is None or len(others) < m - 1:
+    rest = [x for x in item.get("subqs", []) if x is not sq and x.get("question") != sq.get("question")
+            and _node_p(x, tgt) is not None]
+    no = [x for x in rest if _node_p(x, tgt) <= 0.3]
+    yes = [x for x in rest if _node_p(x, tgt) >= 0.7]
+    if p is None:
         return None
-    chosen = [sq] + rng.sample(others, m - 1)
+    # a No node is asked next to a confident Yes node of the item when there is one, so "None of them" is not the
+    # answer half of the time (a hedge-option prior); the node itself is still an option to judge
+    extra = [rng.choice(yes)] if p < 0.5 and yes else []
+    if len(no) < m - 1 - len(extra):
+        return None
+    chosen = [sq] + extra + rng.sample(no, m - 1 - len(extra))
     rng.shuffle(chosen)
     ps = [min(max(_node_p(x, tgt), 1e-4), 1 - 1e-4) for x in chosen]
     none = math.prod(1 - q for q in ps)
