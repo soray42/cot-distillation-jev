@@ -41,8 +41,8 @@ def split_item(it: dict) -> tuple[str, str, list[str]]:
         m = re.match(r"^\(?([A-Z])\) (.*)$", ln)            # "A) text" (ours) or "(A) text" (BBH)
         if m:
             opts.append(m.group(2))
-    if len(opts) != len(it["labels"]):
-        raise ValueError(f"{it['item_id']}: parsed {len(opts)} options, item has {len(it['labels'])} labels")
+    if len(opts) != len(it["labels"]):                 # options inside the text (BBEH letter tasks): keep it whole
+        return it["prompt"].strip(), "Which option is correct?", [f"option ({L})" for L in it["labels"]]
     lines = head.rstrip().split("\n")
     qi = max((i for i, ln in enumerate(lines) if ln.startswith("Question:")), default=None)
     if qi is None:
@@ -201,7 +201,11 @@ def main() -> None:
         if args.limit:
             items = items[:args.limit]
         t = time.time()
-        probs = peer.score(items, args.bs)
+        try:
+            probs = peer.score(items, args.bs)
+        except Exception as e:                          # one bad set must not cost the others
+            print(f"{name} FAILED: {type(e).__name__}: {e}", flush=True)
+            continue
         gold = [it["labels"].index(it["gold_label"]) for it in items]
         m = calibration(probs, gold)
         m["seconds"] = round(time.time() - t, 1)

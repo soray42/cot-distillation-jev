@@ -103,10 +103,15 @@ def wrapped_rows(path: str) -> list[tuple[str, object, dict]]:
         m = re.search(r"\n\nQuestion:\s*(.+)$", head, re.S)
         if m:
             head, qtext = head[:m.start()], m.group(1).strip()
-        # option texts as the choice keys (Jeff lists "code: key" for keys without a description)
+        # option texts as the choice keys (Jeff lists "code: key" for keys without a description); repeated texts
+        # get a suffix, else two options would collapse into one key
+        keys, seen = {}, {}
+        for L in r["labels"]:
+            seen[opts[L]] = seen.get(opts[L], 0) + 1
+            keys[L] = opts[L] if seen[opts[L]] == 1 else f"{opts[L]} ({seen[opts[L]]})"
         rows.append((r["item_id"], head, {"type": "choice", "instructions": qtext or None,
-                                         "criteria": {opts[L]: None for L in r["labels"]},
-                                         "_letter": {opts[L]: L for L in r["labels"]}}))
+                                         "criteria": {keys[L]: None for L in r["labels"]},
+                                         "_letter": {keys[L]: L for L in r["labels"]}}))
     return rows
 
 
