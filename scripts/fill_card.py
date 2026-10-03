@@ -71,6 +71,7 @@ def main() -> None:
     ap.add_argument("--repo", default=None)
     ap.add_argument("--author", default=None)
     ap.add_argument("--licence", default=None, help="e.g. cc-by-nc-4.0 (sets the front matter and both licence lines)")
+    ap.add_argument("--name", default="Sev-2B", help="model name used in the claim sentence")
     ap.add_argument("--infer-check", default=None, help="sentence on the sev_infer.py reproduction check")
     args = ap.parse_args()
     s = Path(args.card).read_text()
@@ -119,7 +120,7 @@ def main() -> None:
         return xs[0] if len(xs) == 1 else ", ".join(xs[:-1]) + " and " + xs[-1]
     ran = join([PEER_NAMES[k] for k in comps])
     if named:
-        claim = (f"**Claim.** On {join([label_of[n] for n in named])}, Sev-2b is ahead of {ran} (paired bootstrap, "
+        claim = (f"**Claim.** On {join([label_of[n] for n in named])}, {args.name} is ahead of {ran} (paired bootstrap, "
                  "95% interval above 0 against each" + ("; on JevBench public also by at least 4 tasks" if "jevbench"
                                                           in named else "") + ").")
         notes = [t for n, t in (("diag", "K&K diag is in-family"), ("xkk", "xkk is near-distribution"),
@@ -127,7 +128,7 @@ def main() -> None:
         if notes:
             claim += " " + "; ".join(notes) + "."
     else:
-        claim = f"**Claim.** Sev-2b is not ahead of every comparator ({ran}) on any registered set."
+        claim = f"**Claim.** {args.name} is not ahead of every comparator ({ran}) on any registered set."
     claim += " Single training seed; the intervals cover item sampling only."
     s = s.replace("CLAIM_SENTENCE", claim)
 

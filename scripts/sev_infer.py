@@ -23,16 +23,26 @@ of the question type; for a TD-style yes/no question, a bias is then added to th
   python scripts/sev_infer.py --model <repo-or-dir> --problem-file p.txt --temperature <T>
   python scripts/sev_infer.py --model <repo-or-dir> --problem-file p.txt --temperature <T> --yes-letter B --yes-bias <b>
 
+Fast mode (early exit): the pass stops after decoder layer 16 of 24; the layer-16 state at the last prompt token gets
+the model's final norm, then an affine map to the final state (a tuned lens fitted without labels on held-out states,
+shipped as tuned_lens_L16.safetensors), then the LM head. About 1.5 times faster at batch size 1; its answers agree
+with the full model on about 96% of held-out decisions (see the model card).
+
+  python scripts/sev_infer.py --model <repo-or-dir> --fast
+
 From Python:
 
-  from sev_infer import decide, load
+  from sev_infer import decide, load, load_exit_map
   model, tok = load("<repo-or-dir>")
   probs = decide(model, tok, problem)            # {"A": p_A, "B": p_B, ...}
+  exit_map = load_exit_map("<repo-or-dir>", model)
+  fast = decide(model, tok, problem, exit_map=exit_map)
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 
 import torch
@@ -90,11 +100,32 @@ def load(path: str, device: str | None = None):
     return model.to(device).eval(), tok
 
 
+def load_exit_map(path: str, model, layer: int = 16) -> dict:
+    """The early-exit map of a release: {"layer", "mx", "W", "my"} from tuned_lens_L<layer>.safetensors in a local
+    directory or a Hugging Face repo, as float32 on the model's device."""
+    from safetensors.torch import load_file
+    name = f"tuned_lens_L{layer}.safetensors"
+    f = os.path.join(path, name)
+    if not os.path.exists(f):
+        from huggingface_hub import hf_hub_download
+        f = hf_hub_download(path, name)
+    dev = next(model.parameters()).device
+    m = {k: v.to(dev, torch.float32) for k, v in load_file(f).items()}
+    m["layer"] = layer
+    return m
+
+
+class _Stop(Exception):
+    pass
+
+
 @torch.no_grad()
 def decide(model, tok, problem: str, *, letters: list[str] | None = None, temperature: float = 1.0,
-           yes_letter: str | None = None, yes_bias: float = 0.0, max_len: int = 6144) -> dict[str, float]:
+           yes_letter: str | None = None, yes_bias: float = 0.0, max_len: int = 6144,
+           exit_map: dict | None = None) -> dict[str, float]:
     """{letter: probability} for one decision. `letters` defaults to the problem's option letters; `temperature` and,
-    for TD-style yes/no decisions only, `yes_letter` with `yes_bias` apply the post-hoc calibration of the model card."""
+    for TD-style yes/no decisions only, `yes_letter` with `yes_bias` apply the post-hoc calibration of the model card.
+    With `exit_map` (load_exit_map), the pass stops after that map's layer (fast mode)."""
     letters = [L.strip() for L in letters] if letters else option_letters(problem)
     yes_letter = yes_letter.strip() if yes_letter else None
     if temperature <= 0:
@@ -107,7 +138,23 @@ def decide(model, tok, problem: str, *, letters: list[str] | None = None, temper
     x = torch.tensor([ids], device=dev)
     rows = torch.tensor(letter_token_ids(tok, letters), device=dev)
     with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev.type == "cuda"):    # as in evaluation
-        h = body(input_ids=x, attention_mask=torch.ones_like(x)).last_hidden_state[0, -1]
+        if exit_map is None:
+            h = body(input_ids=x, attention_mask=torch.ones_like(x)).last_hidden_state[0, -1]
+        else:
+            seen = {}
+
+            def stop(_m, _a, out):
+                seen["h"] = out[0] if isinstance(out, tuple) else out
+                raise _Stop
+            hook = body.layers[exit_map["layer"] - 1].register_forward_hook(stop)
+            try:
+                body(input_ids=x, attention_mask=torch.ones_like(x))
+            except _Stop:
+                pass
+            finally:
+                hook.remove()
+            u = body.norm(seen["h"][0, -1]).float()
+            h = (u - exit_map["mx"]) @ exit_map["W"] + exit_map["my"]
         w = head.weight[rows]
         z = h.to(w.dtype) @ w.T
         if getattr(head, "bias", None) is not None:
@@ -129,13 +176,14 @@ def main() -> None:
     ap.add_argument("--yes-bias", type=float, default=0.0, help="yes/no bias from the model card, added after --temperature")
     ap.add_argument("--max-len", type=int, default=6144, help="longer prompts keep their last tokens (evaluation default)")
     ap.add_argument("--device", help="cuda or cpu (default: cuda if available)")
+    ap.add_argument("--fast", action="store_true", help="early exit after layer 16 with the shipped tuned-lens map")
     args = ap.parse_args()
 
     problem = open(args.problem_file).read().rstrip("\n") if args.problem_file else DEMO   # only the final newlines go
     model, tok = load(args.model, args.device)
     probs = decide(model, tok, problem, letters=args.letters.split(",") if args.letters else None,
                    temperature=args.temperature, yes_letter=args.yes_letter, yes_bias=args.yes_bias,
-                   max_len=args.max_len)
+                   max_len=args.max_len, exit_map=load_exit_map(args.model, model) if args.fast else None)
     if not args.problem_file:
         print(problem + "\n")
     print(json.dumps({"answer": max(probs, key=probs.get), "probs": {k: round(v, 4) for k, v in probs.items()}}))
