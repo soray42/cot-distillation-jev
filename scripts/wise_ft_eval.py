@@ -2,8 +2,10 @@
 theta(alpha) = theta_base + alpha * (theta_ft - theta_base), evaluated at each alpha on the final questions.
 
 Answers whether abilities the fine-tune lost (GSM8K, BBH, reading-style reasoning sets that fall below the base) come
-back while the trained gains (K&K, ProverQA, policy) stay. Nothing is trained and no weights are saved. Each alpha
-writes <out>/a<alpha>/preds_<set>.jsonl and metrics.json in the format of scripts/eval_student.py.
+back while the trained gains (K&K, ProverQA, policy) stay. Nothing is trained. Each alpha writes
+<out>/a<alpha>/preds_<set>.jsonl and metrics.json in the format of scripts/eval_student.py. With --save and a single
+alpha, the interpolated weights (bf16, computed exactly as evaluated) and the tokenizer are saved there as a model
+directory: this is how a release checkpoint is made.
 
   python scripts/wise_ft_eval.py --base models/Qwen3.5-2B-Base --ft runs/TF-v4t-.../model --alphas 0.5,0.7,0.85 \\
       --eval gsm8k=data/eval/gsm8k_mc.jsonl bbh=data/eval/bbh.jsonl --out runs/wise-TF-v4t
@@ -27,11 +29,14 @@ def main() -> None:
     ap.add_argument("--base", required=True)
     ap.add_argument("--ft", required=True)
     ap.add_argument("--alphas", default="0.5,0.7,0.85")
-    ap.add_argument("--eval", nargs="+", required=True, help="name=path.jsonl")
+    ap.add_argument("--eval", nargs="*", default=[], help="name=path.jsonl")
+    ap.add_argument("--save", default=None, help="save the interpolated model here (needs exactly one alpha)")
     ap.add_argument("--max-len", type=int, default=6144)
     ap.add_argument("--bs", type=int, default=8)
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
+    if args.save and len(args.alphas.split(",")) != 1:
+        raise SystemExit("--save needs exactly one alpha")
     import transformers
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = torch.bfloat16 if dev == "cuda" else torch.float32
@@ -62,6 +67,10 @@ def main() -> None:
                     f.write(json.dumps(p) + "\n")
             print(f"alpha {a:g} {name} acc {m.get('acc', float('nan')):.4f}", flush=True)
         (out / "metrics.json").write_text(json.dumps(results, indent=1))
+        if args.save:
+            model.save_pretrained(args.save, safe_serialization=True)
+            tok.save_pretrained(args.save)
+            print(f"alpha {a:g} weights saved to {args.save}", flush=True)
 
 
 if __name__ == "__main__":
