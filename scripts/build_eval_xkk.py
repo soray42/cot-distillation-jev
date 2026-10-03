@@ -26,7 +26,7 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-RAW = Path("/home/soray/.claude/jobs/3b5d797f/tmp/bench/raw/xkk")
+RAW = Path(__file__).resolve().parents[1] / "data/raw/bench/xkk"
 PEOPLE = range(2, 9)
 N_OPTIONS = 6
 TAIL = " So who is a knight and who is a knave?"

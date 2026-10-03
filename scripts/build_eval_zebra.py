@@ -24,7 +24,7 @@ from pathlib import Path
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
-RAW = Path("/home/soray/.claude/jobs/3b5d797f/tmp/bench/raw/zebra")
+RAW = Path(__file__).resolve().parents[1] / "data/raw/bench/zebra"
 SIZE = re.compile(r"-(\d+)x(\d+)-")
 
 

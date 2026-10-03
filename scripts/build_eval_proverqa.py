@@ -24,7 +24,7 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-RAW = Path("/home/soray/.claude/jobs/3b5d797f/tmp/bench/raw/proverqa")
+RAW = Path(__file__).resolve().parents[1] / "data/raw/bench/proverqa"
 LEVELS = ["easy", "medium", "hard"]
 ANSWERS = ["True", "False", "Uncertain"]
 QPREFIX = "Based on the above information, is the following statement true, false, or uncertain?"

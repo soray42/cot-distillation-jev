@@ -82,7 +82,7 @@ EXTRA_PATTERNS = [  # our evaluation sets and CommonsenseQA derivatives (not all
     "logiqa", "reclor", "lsat", "agieval", "folio", "proverqa", "prover_qa", "zebra", "knights", "knave", "bbeh",
     "jevbench", "cos_e", "cos-e", "ecqa", "x_csr", "xcsr", "x-csqa", "csqa", "commonsense_qa", "commonsenseqa",
     "measuring_massive_multitask", "mmmlu"]
-CLASSIFY_PATHS = [ROOT / "data/license/classify.py", Path("/home/soray/.claude/jobs/3b5d797f/tmp/license/classify.py")]
+CLASSIFY_PATHS = [ROOT / "data/license/classify.py"]
 RANK = {"PERM": 0, "ATTR": 1, "NC": 2, "SA": 3, "UNK": 4}
 
 

@@ -39,7 +39,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from eval_overlap import grams  # noqa: E402
 
-RAW = Path("/home/soray/.claude/jobs/3b5d797f/tmp/bench/raw/logic")
+RAW = Path(__file__).resolve().parents[1] / "data/raw/bench/logic"
 SETS = {"logiqa2": "logiqa2_test.txt", "lsat_lr": "lsat-lr.jsonl", "lsat_ar": "lsat-ar.jsonl"}
 TRAIN = [ROOT / "data/student_v4t/train.jsonl", ROOT / "data/student_v4tf/train.jsonl",
          ROOT / "data/student_v3f/train.jsonl"]
