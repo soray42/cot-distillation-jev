@@ -2,16 +2,22 @@
 
 Every eligible tree node of held-out items (full_tree_plan: the node has parents, every parent has a confident result,
 and depth-matched non-parent replacements exist) is asked in five yes/no views that differ only in the stated results:
-  true    the parents' results            flip_true    the parents' results with each answer negated
-  matched as many matched non-parents     flip_matched the matched results with each answer negated
+  true    the parents' results            flip_true    the same, with ONE random parent's answer negated
+  matched as many matched non-parents     flip_matched the same, with ONE random matched result negated
   plain   no stated results
 The yes/no order is drawn once per node and shared by its views, so the views differ in the stated block only.
 Target: program truth when known, else the teacher's CoT-conditioned answer (confident nodes only, as the stated
-results are). Unit of analysis: items (node log-odds averaged within an item; bootstrap over items).
-  use      = LO(true) - LO(matched)   target log-odds gained from the right results over as many other results
-  S_par    = |logit p_yes(true) - logit p_yes(flip_true)|        sensitivity to the parents' stated answers
-  S_np     = |logit p_yes(matched) - logit p_yes(flip_matched)|  the same for non-parents (control)
-  specific = S_par - S_np
+results are). LO(c) = log-odds toward the target in view c. Unit of analysis: items (node values averaged within an
+item; 95% bootstrap over items).
+  use       = LO(true) - LO(matched)          what the right results add over as many other results
+  drop_par  = LO(true) - LO(flip_true)        how far one negated parent pulls the answer away from the target
+  drop_np   = LO(matched) - LO(flip_matched)  the same for one negated non-parent (control)
+  specific  = drop_par - drop_np;  S_par, S_np = the unsigned shifts
+Negating a parent does not always change the node's truth (a conjunction that is already false stays false), so
+drop_par is also reported by stratum: rule items, where the counterfactual truth is computed from item["rules"]
+(cf_changes: the negation flips the node's truth, a model that uses its parents should show drop_par > 0;
+cf_invariant: it does not, drop_par should stay near 0), and single-parent nodes (npar1). The plan uses the
+post-audit matching for every set (tree_fix: no ancestors among the matched results), also for the older v4t data.
 A model trained with true parents stated (TF) should show use > 0 and specific > 0; final-only training (A2) and the
 base give the reference levels. Exploratory: not part of the registered prereg_T / prereg_M endpoints.
 
@@ -41,25 +47,49 @@ def _flip(line: str) -> str:
     return line[:-3] + "No" if line.endswith("A: Yes") else line[:-2] + "Yes"
 
 
+def _cf_rule(item: dict, sq: dict, by: dict, flipped: str) -> bool | None:
+    """Rule items: the node's truth when parent `flipped` is negated (node "a:k" = every condition of rule k holds,
+    parents "p:<predicate>"), else None."""
+    var = sq.get("var") or ""
+    if not var.startswith("a:") or "rules" not in item:
+        return None
+    try:
+        conds = dict(item["rules"][int(var[2:]) - 1]["conds"])
+    except (ValueError, IndexError, KeyError, TypeError):
+        return None
+    vals = {}
+    for j in sq.get("depends_on") or []:
+        pv = by[j].get("var") or ""
+        if not pv.startswith("p:") or by[j].get("truth") is None:
+            return None
+        vals[pv[2:]] = bool(by[j]["truth"]) != (j == flipped)
+    if set(vals) != set(conds):
+        return None
+    return all(vals[v] == conds[v] for v in conds)
+
+
 def build_views(items: list[dict], *, cap: int, seed: int, limit: int = 0) -> tuple[list[Example], list[dict]]:
-    """Five views per eligible confident node; meta rows carry the item, node, condition and target."""
+    """Five views per eligible confident node; meta rows carry the item, node, condition, target and strata."""
     rng = random.Random(seed)
     exs, meta = [], []
     for it in items[:limit or None]:
         by = {sq["id"]: sq for sq in it.get("subqs", []) if "id" in sq}
-        for e in full_tree_plan(it, cap=cap, rng=rng, subq_target="cot"):
+        for e in full_tree_plan(dict(it, tree_fix=True), cap=cap, rng=rng, subq_target="cot"):
             if not e["parents"] or not e["matched"]:
                 continue
             sq = e["node"]
             p = _node_p(sq, "truth")
             if p is None or 0.3 < p < 0.7:
                 continue
-            par = [_fact_line(by[j]) for j in e["parents"]]
-            mat = [_fact_line(by[j]) for j in e["matched"]]
+            fp, fm = rng.randrange(len(e["parents"])), rng.randrange(len(e["matched"]))
+            par = [(_fact_line(by[j]), k == fp) for k, j in enumerate(e["parents"])]
+            mat = [(_fact_line(by[j]), k == fm) for k, j in enumerate(e["matched"])]
             rng.shuffle(par)
             rng.shuffle(mat)
-            facts = {"true": par, "flip_true": [_flip(x) for x in par], "matched": mat,
-                     "flip_matched": [_flip(x) for x in mat], "plain": []}
+            facts = {"true": [x for x, _ in par], "flip_true": [_flip(x) if f else x for x, f in par],
+                     "matched": [x for x, _ in mat], "flip_matched": [_flip(x) if f else x for x, f in mat],
+                     "plain": []}
+            cf = _cf_rule(it, sq, by, e["parents"][fp])
             yes_first = rng.random() < 0.5
             a, b = ("Yes", "No") if yes_first else ("No", "Yes")
             for c in CONDS:
@@ -69,6 +99,7 @@ def build_views(items: list[dict], *, cap: int, seed: int, limit: int = 0) -> tu
                                    ["A", "B"], [0.5, 0.5], 1.0, "subq", it["item_id"]))
                 meta.append({"item_id": it["item_id"], "source": it.get("source"), "node": sq["id"], "cond": c,
                              "target": p >= 0.5, "truth_known": sq.get("truth") is not None,
+                             "n_par": len(e["parents"]), "cf_changes": None if cf is None else cf != (p >= 0.5),
                              "n_facts": len(lines), "yes_first": yes_first})
     return exs, meta
 
@@ -79,12 +110,14 @@ def _logit(p: float, eps: float = 1e-6) -> float:
 
 
 def summarize(preds: list[dict], n_boot: int = 1000, seed: int = 0) -> dict:
-    """Item-level means of the per-node contrasts, with 95% bootstrap intervals over items."""
+    """Item-level means of the per-node contrasts, with 95% bootstrap intervals over items; overall, by source and by
+    stratum (npar1, cf_changes, cf_invariant)."""
     nodes: dict[tuple, dict] = {}
     for r in preds:
-        nodes.setdefault((r["item_id"], r["node"]), {"item": r["item_id"], "src": r["source"],
-                                                    "t": r["target"]})[r["cond"]] = _logit(r["p_yes"])
-    rows = {}
+        n = nodes.setdefault((r["item_id"], r["node"]), {"item": r["item_id"], "src": r["source"], "t": r["target"],
+                                                         "npar": r.get("n_par"), "cf": r.get("cf_changes")})
+        n[r["cond"]] = _logit(r["p_yes"])
+    rows: dict[str, list[dict]] = {}
     for n in nodes.values():
         sgn = 1.0 if n["t"] else -1.0
         lo = {c: sgn * n[c] for c in CONDS}               # log-odds toward the target
@@ -92,37 +125,38 @@ def summarize(preds: list[dict], n_boot: int = 1000, seed: int = 0) -> dict:
         d.update({f"acc_{c}": float(lo[c] > 0) for c in ("true", "matched", "plain")})
         d["use"] = lo["true"] - lo["matched"]
         d["true_vs_plain"] = lo["true"] - lo["plain"]
+        d["drop_par"] = lo["true"] - lo["flip_true"]
+        d["drop_np"] = lo["matched"] - lo["flip_matched"]
+        d["specific"] = d["drop_par"] - d["drop_np"]
         d["S_par"] = abs(n["true"] - n["flip_true"])
         d["S_np"] = abs(n["matched"] - n["flip_matched"])
-        d["specific"] = d["S_par"] - d["S_np"]
-        rows.setdefault(n["item"], {"src": n["src"], "nodes": []})["nodes"].append(d)
-    keys = list(next(iter(rows.values()))["nodes"][0]) if rows else []
+        rows.setdefault(n["item"], []).append(dict(d, _src=n["src"], _npar=n["npar"], _cf=n["cf"]))
+    keys = [k for k in next(iter(rows.values()))[0] if not k.startswith("_")] if rows else []
 
-    def item_means(ids):
-        out = {k: [] for k in keys}
-        for i in ids:
-            ns = rows[i]["nodes"]
-            for k in keys:
-                out[k].append(sum(x[k] for x in ns) / len(ns))
-        return {k: sum(v) / len(v) for k, v in out.items()}
-
-    def block(ids):
+    def block(sel):
+        per = {i: [x for x in ns if sel(x)] for i, ns in rows.items()}
+        per = {i: ns for i, ns in per.items() if ns}
+        ids = sorted(per)
         if not ids:
             return {}
-        est = item_means(ids)
+        means = {i: {k: sum(x[k] for x in per[i]) / len(per[i]) for k in keys} for i in ids}
+
+        def avg(sample):
+            return {k: sum(means[i][k] for i in sample) / len(sample) for k in keys}
+        est = avg(ids)
         rng = random.Random(seed)
-        boots = [item_means([rng.choice(ids) for _ in ids]) for _ in range(n_boot)]
-        res = {"n_items": len(ids), "n_nodes": sum(len(rows[i]["nodes"]) for i in ids)}
+        boots = [avg([rng.choice(ids) for _ in ids]) for _ in range(n_boot)]
+        res = {"n_items": len(ids), "n_nodes": sum(len(per[i]) for i in ids)}
         for k in keys:
             bs = sorted(b[k] for b in boots)
             res[k] = [round(est[k], 4), round(bs[int(0.025 * n_boot)], 4), round(bs[int(0.975 * n_boot) - 1], 4)]
         return res
 
-    ids = sorted(rows)
-    out = {"all": block(ids)}
-    for s in sorted({rows[i]["src"] for i in ids}, key=str):
-        out[f"src/{s}"] = block([i for i in ids if rows[i]["src"] == s])
-    return out
+    out = {"all": block(lambda x: True), "npar1": block(lambda x: x["_npar"] == 1),
+           "cf_changes": block(lambda x: x["_cf"] is True), "cf_invariant": block(lambda x: x["_cf"] is False)}
+    for s in sorted({x["_src"] for ns in rows.values() for x in ns}, key=str):
+        out[f"src/{s}"] = block(lambda x, s=s: x["_src"] == s)
+    return {k: v for k, v in out.items() if v}
 
 
 def main() -> None:
@@ -181,7 +215,7 @@ def main() -> None:
         results["eval"][name] = summarize(preds, seed=args.seed) if preds else {}
         a = results["eval"][name].get("all", {})
         print(f"ps_{name}", json.dumps({k: a.get(k) for k in ("n_items", "n_nodes", "acc_true", "acc_matched",
-                                                               "acc_plain", "use", "S_par", "S_np", "specific")}),
+                                                               "acc_plain", "use", "drop_par", "drop_np", "specific")}),
               flush=True)
     (out / "ps_metrics.json").write_text(json.dumps(results, indent=1))
 
