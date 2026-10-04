@@ -75,6 +75,9 @@ def main() -> None:
                     help="full-tree groups: every problem with ALL its nodes (up to --tree-cap) in one update; true = "
                          "parents' results stated, matched = as many depth-matched non-parent results, plain = no "
                          "facts, placebo = plain at zero weight, control = the control questions")
+    ap.add_argument("--tree-eligible-only", action="store_true",
+                    help="full-tree groups: keep only the eligible node views (TFE/TFME/GFE); items without one train "
+                         "their final question only; the per-problem auxiliary weight is split over the kept views")
     ap.add_argument("--label-smoothing", type=float, default=0.0,
                     help="mix every training target with the uniform distribution over its options (0 = off)")
     ap.add_argument("--order-seed", type=int, default=None,
@@ -126,9 +129,12 @@ def main() -> None:
     ap.add_argument("--eval-subq", default=None, help="student data file (e.g. val.jsonl) whose sub-questions to "
                     "score, or comma-separated name=path entries (predictions in preds_subq[_name].jsonl)")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--code-commit", default="", help="commit of the code checkout (recorded in metrics.json args only)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--log-every", type=int, default=20)
     args = ap.parse_args()
+    if args.tree_eligible_only and args.tree_full not in ("true", "matched", "plain", "placebo"):
+        raise SystemExit("--tree-eligible-only needs --tree-full true/matched/plain/placebo")
 
     torch.manual_seed(args.seed)
     rng = random.Random(args.seed)
@@ -222,7 +228,7 @@ def main() -> None:
         order_rng.shuffle(items)
         groups = [g for g in (build_full_tree(it, mode=args.tree_full, rng=rng, cap=args.tree_cap,
                                               aux_total=args.aux_total, node_format=args.node_format,
-                                              final=args.final,
+                                              final=args.final, eligible_only=args.tree_eligible_only,
                                               subq_target=args.subq_target, permute_final=args.permute_final)
                               for it in items) if g]
         b = args.items_per_update

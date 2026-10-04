@@ -18,6 +18,7 @@
 # student backbone (default Qwen3.5-2B-Base; e.g. MODEL=$HOME/cotd/models/Qwen3.5-2B for the post-trained release).
 # Before submitting, dry-run the shell logic on the login node (Python is only echoed):
 #   DRY_RUN=1 ARMS="A2 A3" DATA=data/student_tree EVAL_BASE=1 bash repo/hpc/train_arm.sbatch
+# SMOKE_ONLY=1 stops after the smoke stage (checks a new account or environment in a few minutes).
 # The job starts with a smoke stage (every arm on 16 items for about 2 steps, plus a 20-item eval) and exits
 # at once if any of it fails. Defaults from check job 677208: fp32 master weights + AdamW, micro-batch 2 x
 # grad-accum 16 (peak 32 GiB on the 4g.40gb slice). EVAL_BASE=1 also evaluates the untrained $MODEL (models are
@@ -44,6 +45,11 @@
 # T1/T1S/T2: tree transitions in the same grouped setting: each auxiliary node is asked with its parents' results
 # stated (T1), with as many unrelated nodes' results stated (T1S, edge-rewiring control), or with the parents' results
 # withdrawn over the first 75% of training (T2, internalization).
+# TFE/TFME/GFE: TF/TFM/GF restricted to the eligible node views (--tree-eligible-only; ablation rung R3, every asked view
+# differs between TFE and TFME); GFC: full tree with the control questions (--tree-full control, with G4's --subq random
+# --subq-target fresh; GF + XARGS="--tree-full control" trains the same views but records --subq cot --subq-target cot).
+# REPO: code checkout the job runs (default repo; ablation jobs use a frozen checkout, e.g. REPO=$HOME/cotd/repo-abl);
+# its commit (with -dirty if tracked files differ) goes into the job log and metrics.json args (code_commit).
 set -euo pipefail
 cd "$HOME/cotd"
 module load cuda/12.4 2>/dev/null || true
@@ -57,6 +63,11 @@ export HF_HOME="$HOME/cotd/hf" TOKENIZERS_PARALLELISM=false
 [ -n "${CC1D:-}" ] && export PYTHONPATH="$HOME/cotd/cc1d${PYTHONPATH:+:$PYTHONPATH}"
 PY=envs/cotd/bin/python
 [ -n "${DRY_RUN:-}" ] && PY="echo [dry-run] python"
+REPO="${REPO:-repo}"
+[ -f "$REPO/scripts/train_student.py" ] || { echo "missing $REPO/scripts/train_student.py"; exit 1; }
+COMMIT=$(git -C "$REPO" rev-parse HEAD 2>/dev/null || echo unknown)
+[ "$COMMIT" = unknown ] || [ -z "$(git -C "$REPO" status --porcelain --untracked-files=no 2>/dev/null)" ] || COMMIT="$COMMIT-dirty"
+echo "code: $REPO @ $COMMIT"
 nvidia-smi -L 2>/dev/null || echo "no nvidia-smi here"
 [ -f "$DATA/train.jsonl" ] || { echo "missing $DATA/train.jsonl"; exit 1; }
 EVALS="val=$DATA/val.jsonl kk=data/eval/kk_heldout.jsonl jl=data/eval/jl_heldout.jsonl jevbench=data/eval/jevbench_public.jsonl td=data/eval/typed_decisions_test.jsonl bbeh=data/eval/bbeh.jsonl ${EXTRA_EVALS:-}"
@@ -83,6 +94,10 @@ arm_config() {           # sets F S T RLM DS for arm $1
     G3MC) F=teacher; S=cot;  T=cot; DX="--grouped-aux 2 --aux-kind cot_mc --aux-weight 0.5" ;;     # MC node views
     G4MC) F=teacher; S=random; T=fresh; DX="--grouped-aux 2 --aux-kind random_mc --aux-weight 0.5" ;; # MC controls
     TF) F=teacher; S=cot;    T=cot; DX="--tree-full true" ;;      # full tree: every node, parents' results stated
+    TFE) F=teacher; S=cot;   T=cot; DX="--tree-full true --tree-eligible-only" ;;     # eligible nodes, parents stated
+    TFME) F=teacher; S=cot;  T=cot; DX="--tree-full matched --tree-eligible-only" ;;  # eligible nodes, matched results
+    GFE) F=teacher; S=cot;   T=cot; DX="--tree-full plain --tree-eligible-only" ;;    # eligible nodes, no results
+    GFC) F=teacher; S=random; T=fresh; DX="--tree-full control" ;;  # full tree of control questions (fresh targets)
     TFM) F=teacher; S=cot;   T=cot; DX="--tree-full matched" ;;   # full tree: as many depth-matched non-parent results
     GF) F=teacher; S=cot;    T=cot; DX="--tree-full plain" ;;     # full tree: every node, no stated results
     GF0) F=teacher; S=cot;   T=cot; DX="--tree-full placebo" ;;   # full tree: plain views at zero weight
@@ -98,7 +113,7 @@ arm_config() {           # sets F S T RLM DS for arm $1
 train() {                # train <arm> <train.jsonl> <evals> <out> [extra args...]
   local arm=$1 tr=$2 ev=$3 out=$4; shift 4
   arm_config "$arm"
-  $PY repo/scripts/train_student.py --model "$MODEL" --train "$tr" --eval $ev \
+  $PY $REPO/scripts/train_student.py --model "$MODEL" --train "$tr" --eval $ev \
     --final "$F" --subq "$S" --subq-target "$T" --lambda-sub "${LAMBDA:-1.0}" \
     --lr "${LR:-1e-5}" --max-len 1536 --precision "${PREC:-fp32master}" --optim "${OPTIM:-adamw}" \
     --seed "$SEED" --out "$out" --eval-subq "$DATA/val.jsonl${SUBQ_EXTRA:+,$SUBQ_EXTRA}" ${RLM:+--rationale-lm --lm-max-len 3072} \
@@ -106,7 +121,7 @@ train() {                # train <arm> <train.jsonl> <evals> <out> [extra args..
     ${SUBQK:+--subq-k "$SUBQK"} ${SUBQW:+--subq-weight "$SUBQW"} ${DS:+--depth-stages "$DS" --stage-k "${STAGEK:-1}"} \
     ${SUBQF:+--subq-frac "$SUBQF"} ${LORA:+--lora-r "$LORA"} ${DUMPL:+--dump-layers "$DUMPL"} $DX ${XARGS:-} \
     ${EVALAT:+--eval-at "$EVALAT"} ${EVALMID:+--eval-mid "$EVALMID"} ${ORDERSEED:+--order-seed "$ORDERSEED"} \
-    ${LSMOOTH:+--label-smoothing "$LSMOOTH"} "$@"
+    ${LSMOOTH:+--label-smoothing "$LSMOOTH"} --code-commit "$COMMIT" "$@"
 }
 
 ARMS="${ARMS:-${ARM:-}}"
@@ -124,33 +139,34 @@ for ARM in $ARMS; do
 done
 head -n 3 "$DATA/val.jsonl" > "$SM/val3.jsonl"
 if [ -n "${EVAL_BASE:-}${BASE_SUBQ:-}" ]; then
-  $PY repo/scripts/eval_student.py --model "$MODEL" --eval "smoke=$SM/eval.jsonl" --eval-subq "$SM/val3.jsonl" \
+  $PY $REPO/scripts/eval_student.py --model "$MODEL" --eval "smoke=$SM/eval.jsonl" --eval-subq "$SM/val3.jsonl" \
     --out "$SM/base" > "$SM/base.log" 2>&1 || { echo "SMOKE FAILED base eval"; tail -n 30 "$SM/base.log"; exit 1; }
   echo "smoke ok base eval"
 fi
 if [ -n "${JEFF:-}" ]; then
-  $PY repo/scripts/eval_jeff.py --model models/Jeff-Qwen3.5-2B --sets jevbench td kk bbh musr --limit 20 --out "$SM/jeff" \
+  $PY $REPO/scripts/eval_jeff.py --model models/Jeff-Qwen3.5-2B --sets jevbench td kk bbh musr --limit 20 --out "$SM/jeff" \
     > "$SM/jeff.log" 2>&1 || { echo "JEFF SMOKE SKIPPED: the Jeff eval is dropped, the job goes on"; tail -n 30 "$SM/jeff.log"; JEFF=; }
   [ -z "${JEFF:-}" ] || echo "smoke ok jeff eval"
 fi
 rm -rf "$SM"
 echo "=== smoke passed $(date +%T)"
+[ -z "${SMOKE_ONLY:-}" ] || { echo "SMOKE_ONLY: stopping after the smoke stage"; exit 0; }   # new account/env checks
 
 if [ -n "${JEFF:-}" ]; then               # Jeff with its own prompt, readout matrix and temperature
   echo "=== jeff eval  $(date +%T)"
-  $PY repo/scripts/eval_jeff.py --model models/Jeff-Qwen3.5-2B --sets jevbench td kk jl bbeh bbh musr policy sharc folio \
+  $PY $REPO/scripts/eval_jeff.py --model models/Jeff-Qwen3.5-2B --sets jevbench td kk jl bbeh bbh musr policy sharc folio \
     --out runs/jeff-native \
     || echo "jeff eval failed"
 fi
 if [ -n "${BASE_SUBQ:-}" ]; then         # sub-question accuracy of the untrained base (reference for the arms)
   echo "=== base sub-question eval  $(date +%T)"
-  $PY repo/scripts/eval_student.py --model "$MODEL" --eval "kk=data/eval/kk_heldout.jsonl" \
+  $PY $REPO/scripts/eval_student.py --model "$MODEL" --eval "kk=data/eval/kk_heldout.jsonl" \
     --eval-subq "$DATA/val.jsonl" --out "runs/base-subq-$(basename "$MODEL")" || echo "base eval failed for subq"
 fi
 if [ -n "${EVAL_BASE:-}" ]; then          # untrained backbone control (Jeff needs its own readout: JEFF=1)
   M=$(basename "$MODEL")
   echo "=== base eval $M  $(date +%T)"
-  $PY repo/scripts/eval_student.py --model "$MODEL" --eval $EVALS --out "runs/base-$M" ${DUMP:+--dump-hidden "$DUMP"} \
+  $PY $REPO/scripts/eval_student.py --model "$MODEL" --eval $EVALS --out "runs/base-$M" ${DUMP:+--dump-hidden "$DUMP"} \
     || echo "base eval failed for $M"
 fi
 for ARM in $ARMS; do

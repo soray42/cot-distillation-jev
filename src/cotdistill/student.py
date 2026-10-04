@@ -272,35 +272,45 @@ def _mc_node_view(item: dict, sq: dict, lines: list[str], tgt: str, rng: random.
 
 def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10, aux_total: float = 1.0,
                     final: str = "teacher", subq_target: str = "cot", permute_final: float = 0.0,
-                    node_format: str = "yesno") -> list[Example]:
+                    node_format: str = "yesno", eligible_only: bool = False) -> list[Example]:
     """One problem with ALL its tree nodes (up to `cap`) instead of k sampled ones: [final] + one view per node.
     mode "true": eligible nodes are asked with their parents' results stated; "matched": with the same number of
     depth-matched non-parent results (see full_tree_plan); "plain": every node asked without facts; "placebo": the
     plain views at zero weight; "control": the item's control questions (fresh targets), plainly. The auxiliary
     weight is normalised per problem (aux_total / number of views), so larger trees do not weigh more.
-    node_format "mc" asks each node in multiple-choice form (_mc_node_view) where the item allows it."""
+    node_format "mc" asks each node in multiple-choice form (_mc_node_view) where the item allows it.
+    eligible_only keeps only the eligible views of the plan (TFE/TFME/GFE: every asked view differs between true and
+    matched); the plan, cap included, is drawn first as before, so the asked nodes are the same in every mode. An item
+    with no eligible view trains its final question only. With eligible_only, plain views draw from rng as if they
+    stated the parents' results, so GFE stays in lockstep with TFE/TFME (same node subsample, same option order)."""
     fin = [e for e in build_examples(item, final=final, subq="none", subq_target=subq_target, lambda_sub=0.0, rng=rng,
                                      permute_final=permute_final) if e.kind == "final"]
     if not fin:
         return []
     wi = item.get("weight", 1.0)
     views = []
+    if eligible_only and mode == "control":
+        raise ValueError("eligible_only needs tree nodes: control questions have no parents")
     if mode == "control":
         pool = [sq for sq in item.get("random_subqs", []) if sq.get("p_fresh") is not None]
         if len(pool) > cap:
             pool = rng.sample(pool, cap)
-        views = [(sq, [], "fresh") for sq in pool]
+        views = [(sq, [], "fresh", 0) for sq in pool]
     else:
         plan = full_tree_plan(item, cap=cap, rng=rng, subq_target=subq_target)
+        if eligible_only:
+            plan = [e for e in plan if e["parents"]]
         by = {sq["id"]: sq for sq in item.get("subqs", []) if "id" in sq}
         for e in plan:
             facts = {"true": e["parents"], "matched": e["matched"]}.get(mode, [])
-            views.append((e["node"], [by[j] for j in facts], subq_target))
+            views.append((e["node"], [by[j] for j in facts], subq_target, len(e["parents"])))
     out = list(fin)
     w = 0.0 if mode == "placebo" else aux_total / max(1, len(views))
-    for sq, facts, tgt in views:
+    for sq, facts, tgt, k in views:
         lines = [_fact_line(x) for x in facts]
         rng.shuffle(lines)
+        if eligible_only and not lines:                     # GFE: the draws of the k stated lines of TFE/TFME
+            rng.shuffle([None] * k)
         if node_format == "mc" and mode != "control":      # multiple-choice node view, same stated results
             ex = _mc_node_view(item, sq, lines, tgt, rng, w * wi)
             if ex is not None:

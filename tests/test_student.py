@@ -680,6 +680,34 @@ class TestFullTree(unittest.TestCase):
         ctl = build_full_tree(self.ITEM, mode="control", rng=_r.Random(0))
         self.assertEqual(len(ctl), 5)
 
+    def test_eligible_only(self):
+        import random as _r
+        from cotdistill.student import build_full_tree
+        for seed in range(10):
+            t, m, g = (build_full_tree(self.ITEM, mode=mode, rng=_r.Random(seed), eligible_only=True)
+                       for mode in ("true", "matched", "plain"))
+            ft, fm, fg = ([self.facts_of(e) for e in v[1:]] for v in (t, m, g))
+            self.assertEqual(sorted(q for q, _ in ft), ["q3?", "q5?", "q6?", "q7?"])   # the nodes with parents
+            self.assertEqual(sorted(q for q, _ in ft), sorted(q for q, _ in fm))
+            self.assertEqual(sorted(q for q, _ in ft), sorted(q for q, _ in fg))
+            self.assertTrue(all(f for _, f in ft) and all(f for _, f in fm))         # every view states results
+            self.assertEqual(sorted((q, len(f)) for q, f in ft), sorted((q, len(f)) for q, f in fm))
+            self.assertTrue(all(not f for _, f in fg))                                # GFE: no stated results
+            self.assertEqual([e.target for e in t], [e.target for e in g])            # GFE draws in lockstep
+            self.assertEqual([e.target for e in t], [e.target for e in m])
+            self.assertTrue(all(set(f).isdisjoint(f2) for (_, f), (_, f2) in
+                                zip(sorted(ft), sorted(fm))))                         # TFME never states a parent
+            for v in (t, m, g):
+                self.assertAlmostEqual(sum(e.weight for e in v[1:]), 1.0)             # aux_total over eligible views
+                self.assertAlmostEqual(v[1].weight, 0.25)
+            full = build_full_tree(self.ITEM, mode="true", rng=_r.Random(seed))       # default off: unchanged
+            self.assertEqual(len(full), 8)
+        flat = dict(self.ITEM, subqs=[dict(n, depends_on=[]) for n in self.NODES])    # no eligible view: final only
+        self.assertEqual([e.kind for e in build_full_tree(flat, mode="true", rng=_r.Random(0), eligible_only=True)],
+                         ["final"])
+        with self.assertRaises(ValueError):
+            build_full_tree(self.ITEM, mode="control", rng=_r.Random(0), eligible_only=True)
+
     def test_training_on_cpu(self):
         import json as _j
         import os
@@ -699,6 +727,29 @@ class TestFullTree(unittest.TestCase):
                 self.assertEqual(out.returncode, 0, out.stderr[-2000:])
                 self.assertIn("steps=6", out.stdout)                          # ceil(5/2) = 3 updates per pass
                 self.assertIn('"seqs": 16', out.stdout)                         # 2 problems x (final + 7 nodes)
+
+    def test_eligible_only_training_on_cpu(self):
+        import json as _j
+        import os
+        import subprocess
+        import tempfile
+        tok, model = tiny()
+        script = str(Path(__file__).resolve().parents[1] / "scripts/train_student.py")
+        with tempfile.TemporaryDirectory() as d:
+            model.save_pretrained(d + "/m"); tok.save_pretrained(d + "/m")
+            Path(d + "/t.jsonl").write_text("\n".join(_j.dumps(dict(self.ITEM, item_id=f"i{j}")) for j in range(5)))
+            run = lambda mode: subprocess.run(
+                [sys.executable, script, "--model", d + "/m", "--train", d + "/t.jsonl", "--eval", "v=" + d + "/t.jsonl",
+                 "--tree-full", mode, "--tree-eligible-only", "--items-per-update", "2", "--epochs", "1",
+                 "--micro-bs", "3", "--max-len", "128", "--precision", "bf16", "--no-grad-ckpt", "--log-every", "1",
+                 "--code-commit", "abc123", "--out", d + "/o"],
+                capture_output=True, text=True, timeout=600, env={**os.environ, "CUDA_VISIBLE_DEVICES": ""})
+            out = run("matched")
+            self.assertEqual(out.returncode, 0, out.stderr[-2000:])
+            self.assertIn('"seqs": 10', out.stdout)                         # 2 problems x (final + 4 eligible nodes)
+            a = _j.loads(Path(d + "/o/metrics.json").read_text())["args"]
+            self.assertEqual((a["tree_full"], a["tree_eligible_only"], a["code_commit"]), ("matched", True, "abc123"))
+            self.assertNotEqual(run("control").returncode, 0)               # control questions have no parents
 
 
 @unittest.skipUnless(HAVE, "needs torch")
