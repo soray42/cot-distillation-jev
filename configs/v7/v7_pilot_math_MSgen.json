@@ -18,7 +18,7 @@
   "gsm_share_of_math_problems": 0.26
  },
  "out": "data/student_v7_pilot_math_MSgen",
- "description": "R1/R2 lane 3 (MS-gen): as MS with the 1700 GSM8K problems replaced by 1700 more numgen problems; zero GSM8K-derived text in train and val",
+ "description": "R1/R2 lane 3 (MS-gen): as MS with the 880 GSM8K problems replaced by 880 more numgen problems (5,880 math problems, as MS); zero GSM8K-derived text in train and val",
  "plan": "notes/next_round/data_expansion/plan.md \u00a74 R1 lane 3, C3, bet B2",
  "sources": [
   {
@@ -67,7 +67,7 @@
    "node_link": "node_of",
    "family_key": "frame",
    "select": {
-    "problems": 6700,
+    "problems": 5880,
     "rank": "hash",
     "offset": 0
    },
