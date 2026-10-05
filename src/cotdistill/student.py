@@ -396,13 +396,17 @@ def build_mc_views(item: dict, *, k: int, rng: random.Random, kind: str = "cot",
 
 def build_group(item: dict, *, aux_kind: str, k: int, aux_weight: float, rng: random.Random, final: str = "teacher",
                 subq_target: str = "cot", permute_final: float = 0.0, keep_prob: float = 1.0,
-                aux_active: bool = True) -> list[Example]:
+                aux_active: bool = True, aux_answer: str = "all") -> list[Example]:
     """One problem for exposure-matched grouped training: [final] + exactly k auxiliary views. aux_kind "cot" uses
     CoT nodes, "random" the matched control questions (fresh targets), "placebo" the same CoT views with zero loss
     weight (same forward/backward work, no auxiliary signal), "tree" CoT nodes asked with their parents' results
     stated, "tree_shuf" the same with unrelated nodes' results stated (edge-rewiring control). Missing views are
     zero-weight copies of the final. aux_active=False keeps the views but gives them zero weight (placebo for this
-    item), so per-family auxiliary supervision stays exposure-matched."""
+    item), so per-family auxiliary supervision stays exposure-matched. "cot_randlabel": the "cot" views with each
+    target redrawn uniformly (yes/no) per view and epoch (format-only control). aux_answer "exclude"/"only" keeps only
+    the CoT nodes that are not / are answer components (K&K "Is X a knight?"; treeplan.answer_component)."""
+    if aux_answer != "all":
+        item = dict(item, subqs=[sq for sq in item.get("subqs", []) if answer_component(sq, item) == (aux_answer == "only")])
     if aux_kind in ("cot_mc", "random_mc"):
         fin = [e for e in build_examples(item, final=final, subq="none", subq_target=subq_target, lambda_sub=0.0,
                                          rng=rng, permute_final=permute_final) if e.kind == "final"]
@@ -426,6 +430,8 @@ def build_group(item: dict, *, aux_kind: str, k: int, aux_weight: float, rng: ra
     if not fin:
         return []
     aux = [e for e in views if e.kind == "subq"][:k]
+    if aux_kind == "cot_randlabel":
+        aux = [dataclasses.replace(e, target=[1.0, 0.0] if rng.random() < 0.5 else [0.0, 1.0]) for e in aux]
     if aux_kind == "placebo" or not aux_active:
         aux = [dataclasses.replace(e, weight=0.0) for e in aux]
     return fin + aux + [dataclasses.replace(fin[0], weight=0.0) for _ in range(k - len(aux))]

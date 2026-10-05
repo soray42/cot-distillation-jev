@@ -68,13 +68,15 @@ def main() -> None:
     ap.add_argument("--grouped-aux", type=int, default=0,
                     help="exposure-matched grouped training: every optimizer update holds --items-per-update problems, "
                          "each as 1 final view + K auxiliary views (0 = off)")
-    ap.add_argument("--aux-kind", default="cot", choices=["cot", "random", "placebo", "tree", "tree_shuf", "cot_mc", "random_mc"],
+    ap.add_argument("--aux-kind", default="cot", choices=["cot", "random", "placebo", "tree", "tree_shuf", "cot_mc", "random_mc", "cot_randlabel"],
                     help="grouped training: CoT nodes, matched controls, the CoT views with zero loss (placebo), CoT "
                          "nodes with their parents' results stated (tree), or with unrelated nodes' results (tree_shuf)")
     ap.add_argument("--tree-full", default="", choices=["", "true", "matched", "plain", "placebo", "control"],
                     help="full-tree groups: every problem with ALL its nodes (up to --tree-cap) in one update; true = "
                          "parents' results stated, matched = as many depth-matched non-parent results, plain = no "
                          "facts, placebo = plain at zero weight, control = the control questions")
+    ap.add_argument("--aux-answer", default="all", choices=["all", "exclude", "only"],
+                    help="grouped training: auxiliary CoT nodes that are not (exclude) / are (only) answer components")
     ap.add_argument("--tree-eligible-only", action="store_true",
                     help="full-tree groups: keep only the eligible node views (TFE/TFME/GFE); items without one train "
                          "their final question only; the per-problem auxiliary weight is split over the kept views")
@@ -217,7 +219,8 @@ def main() -> None:
             keep = 1.0 if not args.fact_withdraw else max(0.0, 1.0 - progress / args.fact_withdraw)
             ex += build_group(it, aux_kind=args.aux_kind, k=args.grouped_aux, aux_weight=args.aux_weight, rng=rng,
                               final=args.final, subq_target=args.subq_target, permute_final=args.permute_final,
-                              keep_prob=keep, aux_active=not aux_sources or it.get("source") in aux_sources)
+                              keep_prob=keep, aux_active=not aux_sources or it.get("source") in aux_sources,
+                              aux_answer=args.aux_answer)
         passes["n"] += 1
         return ex
 

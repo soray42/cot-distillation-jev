@@ -181,6 +181,44 @@ Now do the same for this problem and reasoning. Return only JSON: {{"nodes": [..
 
 Reminder: do not solve the problem again. Return only the JSON tree of the reasoning above, as specified at the top: {{"nodes": [...]}}"""
 
+TREE_PROMPT_FINE = """You will turn a solver's raw reasoning into a fine-grained tree of intermediate judgements: one node per inference step. Each node is one yes/no question about the problem whose answer the reasoning settled on the way to its decision.
+
+Node types:
+- "parse": what one sentence, rule or statement of the problem means, read directly off the problem text.
+- "derive": an intermediate fact the reasoning derived from earlier nodes.
+- "case": a hypothesis the reasoning tried, asked as "If ..., would ...?", or a consequence derived inside such a hypothesis.
+- "verify": a check of a candidate against one statement or condition.
+
+Fields per node:
+- "id": "n1", "n2", ... in the order the reasoning settles them.
+- "type": one of the types above.
+- "depends_on": the ids of ALL earlier nodes whose answers this judgement uses ([] only for "parse" nodes). The node's answer must follow from the answers of its depends_on nodes alone (for "parse" nodes, from the problem text alone): if the step also uses a fact that is not yet a node, first add that fact as its own node.
+- "question": a self-contained yes/no question in the problem's own words.
+- "answer": "yes" or "no", the reasoning's FINAL belief (after any correction).
+- "opposite": the same question worded with the natural opposite (knight -> knave, true -> false, consistent -> contradictory), so that its answer is the opposite of "answer". Never use "fail to" or double negations.
+- "status": "direct" if the reasoning never believed otherwise; "corrected" if it first believed the opposite and later fixed it.
+- "initial_answer": for "corrected" nodes, the first (wrong) belief; otherwise null.
+- "quote": a verbatim span (at most 30 words) copied from the reasoning where the final value of this node is settled.
+
+Rules:
+1. One inference step per node. Do not merge steps: if the reasoning concludes C from A and B, then A, B and C are three nodes and C depends on A and B. Do not skip steps the reasoning took, however small, and do not add steps it did not take.
+2. There is no limit on the number of nodes: use as many as the reasoning has steps. Follow the reasoning to the end, including every case it tried, the contradiction it found, and every role or fact it derived afterwards.
+3. Use only names and terms from the problem. No variables, symbols or abbreviations introduced by the reasoning, and no questions about the reasoning itself ("did the solver ...").
+4. Do not ask the final question in any form, and do not ask whether an option or a full assignment is correct or consistent with all statements.
+5. Wherever the reasoning notices an error or changes its mind, add a node for the judgement that changed, with status "corrected".
+6. A "parse" node states the formal content of one statement (e.g. "Is Irene a knight exactly when Bob is a knight or Emma is a knight?"), not a paraphrase of its wording.
+
+Return only JSON: {{"nodes": [...]}}
+
+<problem>
+{problem}
+</problem>
+<reasoning>
+{cot}
+</reasoning>
+
+Reminder: do not solve the problem again; turn the reasoning above into the fine-grained tree, one node per step, every node's depends_on complete. Return only {{"nodes": [...]}}"""
+
 TREE_TYPES = {"parse", "derive", "case", "verify"}
 _META = re.compile(r"\b(the reasoning|the solver|the solution process|reasoning step|did the model)\b", re.I)
 _AWKWARD = re.compile(r"\bfail(?:s|ed)? to\b", re.I)
@@ -192,15 +230,16 @@ def node_text_ok(q: str) -> bool:
     return not (_META.search(q) or _AWKWARD.search(q) or _SYMBOLIC.search(q))
 
 
-def parse_tree(raw: str) -> list[dict]:
+def parse_tree(raw: str, cap: int | None = 15) -> list[dict]:
     """Validated nodes from the tree-extraction JSON: known types, yes/no answers, dependencies only on
-    earlier kept nodes, no meta questions about the reasoning and no "fail to" negations."""
+    earlier kept nodes, no meta questions about the reasoning and no "fail to" negations. cap: at most this many
+    nodes are read (None: all, for the fine-grained extraction)."""
     try:
         nodes = json.loads(raw).get("nodes", [])
     except (json.JSONDecodeError, AttributeError):
         nodes = _salvage_nodes(raw)            # e.g. output cut at max_tokens: keep the complete nodes
     out, seen = [], set()
-    for n in nodes[:15]:
+    for n in nodes[:cap]:
         if not isinstance(n, dict):
             continue
         q, ans, typ = str(n.get("question", "")).strip(), str(n.get("answer", "")).lower().strip(), n.get("type")

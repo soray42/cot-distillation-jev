@@ -92,6 +92,9 @@ arm_config() {           # sets F S T RLM DS for arm $1
     G3) F=teacher; S=cot;    T=cot; DX="--grouped-aux 2 --aux-kind cot --aux-weight 0.5" ;;      # E2 CoT nodes
     G4) F=teacher; S=random; T=fresh; DX="--grouped-aux 2 --aux-kind random --aux-weight 0.5" ;; # E2 matched controls
     G3MC) F=teacher; S=cot;  T=cot; DX="--grouped-aux 2 --aux-kind cot_mc --aux-weight 0.5" ;;     # MC node views
+    G3R) F=teacher; S=cot;   T=cot; DX="--grouped-aux 2 --aux-kind cot_randlabel --aux-weight 0.5" ;;  # G3, random node labels
+    G3NA) F=teacher; S=cot;  T=cot; DX="--grouped-aux 2 --aux-kind cot --aux-weight 0.5 --aux-answer exclude" ;; # no answer-component nodes
+    G3A) F=teacher; S=cot;   T=cot; DX="--grouped-aux 2 --aux-kind cot --aux-weight 0.5 --aux-answer only" ;;    # answer-component nodes only
     G4MC) F=teacher; S=random; T=fresh; DX="--grouped-aux 2 --aux-kind random_mc --aux-weight 0.5" ;; # MC controls
     TF) F=teacher; S=cot;    T=cot; DX="--tree-full true" ;;      # full tree: every node, parents' results stated
     TFE) F=teacher; S=cot;   T=cot; DX="--tree-full true --tree-eligible-only" ;;     # eligible nodes, parents stated
