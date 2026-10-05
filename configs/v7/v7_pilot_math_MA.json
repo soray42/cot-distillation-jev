@@ -15,7 +15,7 @@
   "slice_share_chars": {
    "M": 0.6
   },
-  "gsm_share_of_math_problems": 0.26
+  "gsm_share_of_math_problems": 0.151
  },
  "out": "data/student_v7_pilot_math_MA",
  "description": "R1/R2 lane 2 (MA): the MS problems as finals only (subqs and node rows dropped; the GSM8K count held equal), token-matched to MS's math prompt characters with fresh numgen problems (ranks after MS's 5000)",
@@ -97,13 +97,13 @@
   {
    "name": "gsm8k_soc",
    "slice": "M",
-   "comment": "plan \u00a71.1 M3 (owner fork O1): GSM8K-train socratic steps, gold finals, program-verified step nodes; <=15% of math problems via pool_rank < 1700 (lab)",
+   "comment": "plan \u00a71.1 M3 (owner fork O1): GSM8K-train socratic steps, gold finals, program-verified step nodes; <=15% of math problems via pool_rank < 880 (lab; owner cap <=15% of math problems: 880 / 5,880 = .150)",
    "train": "data/student_gsm8k_soc/train.jsonl",
    "problem_key": "problem_id",
    "node_link": "problem_id",
    "family_key": "group",
    "select": {
-    "problems": 1700,
+    "problems": 880,
     "rank": "pool_rank"
    },
    "nodes": "drop",

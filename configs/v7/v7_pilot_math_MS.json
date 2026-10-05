@@ -15,10 +15,10 @@
   "slice_share_chars": {
    "M": 0.6
   },
-  "gsm_share_of_math_problems": 0.26
+  "gsm_share_of_math_problems": 0.151
  },
  "out": "data/student_v7_pilot_math_MS",
- "description": "R1/R2 lane 1 (MS): G20 + math lab slice with step nodes (numgen 5000 problems + GSM8K socratic 1700 problems; subqs kept, <=2 node rows per problem at weight 1/rows)",
+ "description": "R1/R2 lane 1 (MS): G20 + math lab slice with step nodes (numgen 5000 problems + GSM8K socratic 880 problems; subqs kept, <=2 node rows per problem at weight 1/rows)",
  "plan": "notes/next_round/data_expansion/plan.md \u00a74 R1 lane 1, bet B1 (MS - MA), B2 (MS - MSgen)",
  "sources": [
   {
@@ -97,13 +97,13 @@
   {
    "name": "gsm8k_soc",
    "slice": "M",
-   "comment": "plan \u00a71.1 M3 (owner fork O1): GSM8K-train socratic steps, gold finals, program-verified step nodes; <=15% of math problems via pool_rank < 1700 (lab)",
+   "comment": "plan \u00a71.1 M3 (owner fork O1): GSM8K-train socratic steps, gold finals, program-verified step nodes; <=15% of math problems via pool_rank < 880 (lab; owner cap <=15% of math problems: 880 / 5,880 = .150)",
    "train": "data/student_gsm8k_soc/train.jsonl",
    "problem_key": "problem_id",
    "node_link": "problem_id",
    "family_key": "group",
    "select": {
-    "problems": 1700,
+    "problems": 880,
     "rank": "pool_rank"
    },
    "nodes": "keep",
