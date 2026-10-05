@@ -19,7 +19,7 @@ import torch.utils.checkpoint
 
 from .metrics import calibration  # noqa: F401  (re-exported for scripts)
 from .treeplan import (_descendants, _fact_line, _node_p, answer_component, full_tree_plan,  # noqa: F401
-                       node_depths)
+                       node_depths, subq_keep)
 
 SUBQ_TEMPLATE = "{problem}\n\nIntermediate question: {question}\nOptions:\nA) {a}\nB) {b}\nAnswer:"
 FINAL_TEMPLATE = "{problem}\n\nAnswer:"
@@ -81,7 +81,7 @@ def permute_options(prompt: str, labels: list[str], target: list[float], gold: i
 def build_examples(item: dict, *, final: str, subq: str, subq_target: str, lambda_sub: float,
                    rng: random.Random, rationale_lm: bool = False, lambda_lm: float = 1.0,
                    permute_final: float = 0.0, subq_k: int = 0, subq_weight: str = "split",
-                   subq_frac: float = 0.0) -> list[Example]:
+                   subq_frac: float = 0.0, subq_filter: str = "all") -> list[Example]:
     """Turn one student-data record into training examples for a given arm.
 
     final: "none" | "teacher" (teacher answer distribution) | "gold" (one-hot gold)
@@ -96,6 +96,8 @@ def build_examples(item: dict, *, final: str, subq: str, subq_target: str, lambd
     subq_k: if > 0, use at most this many (randomly drawn) sub-questions per item and epoch
     subq_weight: "split" (each of the n sub-questions weighs lambda_sub / n) | "each" (each weighs lambda_sub)
     subq_frac: if > 0, use a random ceil(frac * n) of the item's sub-questions per epoch
+    subq_filter: "all" | "path" | "mirror": ask only the tree nodes subq_keep admits (decision chains; the matched
+                 controls of "random" and "mix" are not filtered)
     Every example's weight is multiplied by item["weight"] (default 1; e.g. per-category balancing weights).
     """
     wi = item.get("weight", 1.0)
@@ -117,6 +119,8 @@ def build_examples(item: dict, *, final: str, subq: str, subq_target: str, lambd
             if shuffled:
                 prompt, target, fgold = shuffled
         ex.append(Example(FINAL_TEMPLATE.format(problem=prompt), labels, target, wi, "final", item["item_id"], fgold))
+    if subq_filter != "all":
+        item = dict(item, subqs=[sq for sq in item.get("subqs", []) if subq_keep(sq, subq_filter)])
     if subq == "mix":            # same number of sub-questions as "cot": half CoT nodes, half matched controls
         cot = [dict(sq, _kind="cot") for sq in item.get("subqs", [])]
         ctl = [dict(sq, _kind="random") for sq in item.get("random_subqs", [])]
@@ -196,12 +200,13 @@ def build_stage_examples(item: dict, *, stage: int, n_stages: int, k: int, rng: 
 
 
 def build_transition_views(item: dict, *, k: int, rng: random.Random, shuffled: bool = False, keep_prob: float = 1.0,
-                           weight: float = 0.5, subq_target: str = "cot") -> list[Example]:
+                           weight: float = 0.5, subq_target: str = "cot", subq_filter: str = "all") -> list[Example]:
     """Tree-transition auxiliary views: k nodes, each asked with the results of its parent nodes stated in the prompt
     (the local step parents -> child of the teacher's dependency tree). Nodes with parents are drawn first.
     shuffled=True is the edge-rewiring control: the same node, label and number of stated results, but the stated
     results come from nodes of the same item that are neither the node's parents nor its descendants. keep_prob drops
-    each stated result independently (scaffold withdrawal; 0 gives plain node questions)."""
+    each stated result independently (scaffold withdrawal; 0 gives plain node questions). subq_filter restricts the
+    asked nodes only (parents and the rewiring pool come from every node)."""
     nodes = [sq for sq in item.get("subqs", []) if "id" in sq]
     if not nodes:
         return []
@@ -218,6 +223,9 @@ def build_transition_views(item: dict, *, k: int, rng: random.Random, shuffled: 
         return out
     with_p = [sq for sq in nodes if parents[sq["id"]] and _node_p(sq, subq_target) is not None]
     without = [sq for sq in nodes if not parents[sq["id"]] and _node_p(sq, subq_target) is not None]
+    if subq_filter != "all":
+        with_p = [sq for sq in with_p if subq_keep(sq, subq_filter)]
+        without = [sq for sq in without if subq_keep(sq, subq_filter)]
     pick = rng.sample(with_p, min(k, len(with_p)))
     pick += rng.sample(without, min(k - len(pick), len(without)))
     ex = []
@@ -272,7 +280,7 @@ def _mc_node_view(item: dict, sq: dict, lines: list[str], tgt: str, rng: random.
 
 def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10, aux_total: float = 1.0,
                     final: str = "teacher", subq_target: str = "cot", permute_final: float = 0.0,
-                    node_format: str = "yesno", eligible_only: bool = False) -> list[Example]:
+                    node_format: str = "yesno", eligible_only: bool = False, subq_filter: str = "all") -> list[Example]:
     """One problem with ALL its tree nodes (up to `cap`) instead of k sampled ones: [final] + one view per node.
     mode "true": eligible nodes are asked with their parents' results stated; "matched": with the same number of
     depth-matched non-parent results (see full_tree_plan); "plain": every node asked without facts; "placebo": the
@@ -282,7 +290,8 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
     eligible_only keeps only the eligible views of the plan (TFE/TFME/GFE: every asked view differs between true and
     matched); the plan, cap included, is drawn first as before, so the asked nodes are the same in every mode. An item
     with no eligible view trains its final question only. With eligible_only, plain views draw from rng as if they
-    stated the parents' results, so GFE stays in lockstep with TFE/TFME (same node subsample, same option order)."""
+    stated the parents' results, so GFE stays in lockstep with TFE/TFME (same node subsample, same option order).
+    subq_filter restricts the asked nodes (full_tree_plan); the control mode is not filtered."""
     fin = [e for e in build_examples(item, final=final, subq="none", subq_target=subq_target, lambda_sub=0.0, rng=rng,
                                      permute_final=permute_final) if e.kind == "final"]
     if not fin:
@@ -297,7 +306,7 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
             pool = rng.sample(pool, cap)
         views = [(sq, [], "fresh", 0) for sq in pool]
     else:
-        plan = full_tree_plan(item, cap=cap, rng=rng, subq_target=subq_target)
+        plan = full_tree_plan(item, cap=cap, rng=rng, subq_target=subq_target, subq_filter=subq_filter)
         if eligible_only:
             plan = [e for e in plan if e["parents"]]
         by = {sq["id"]: sq for sq in item.get("subqs", []) if "id" in sq}
@@ -396,7 +405,7 @@ def build_mc_views(item: dict, *, k: int, rng: random.Random, kind: str = "cot",
 
 def build_group(item: dict, *, aux_kind: str, k: int, aux_weight: float, rng: random.Random, final: str = "teacher",
                 subq_target: str = "cot", permute_final: float = 0.0, keep_prob: float = 1.0,
-                aux_active: bool = True, aux_answer: str = "all") -> list[Example]:
+                aux_active: bool = True, aux_answer: str = "all", subq_filter: str = "all") -> list[Example]:
     """One problem for exposure-matched grouped training: [final] + exactly k auxiliary views. aux_kind "cot" uses
     CoT nodes, "random" the matched control questions (fresh targets), "placebo" the same CoT views with zero loss
     weight (same forward/backward work, no auxiliary signal), "tree" CoT nodes asked with their parents' results
@@ -404,9 +413,13 @@ def build_group(item: dict, *, aux_kind: str, k: int, aux_weight: float, rng: ra
     zero-weight copies of the final. aux_active=False keeps the views but gives them zero weight (placebo for this
     item), so per-family auxiliary supervision stays exposure-matched. "cot_randlabel": the "cot" views with each
     target redrawn uniformly (yes/no) per view and epoch (format-only control). aux_answer "exclude"/"only" keeps only
-    the CoT nodes that are not / are answer components (K&K "Is X a knight?"; treeplan.answer_component)."""
+    the CoT nodes that are not / are answer components (K&K "Is X a knight?"; treeplan.answer_component). subq_filter
+    "path"/"mirror" asks only that chain's nodes (decision chains; for tree/tree_shuf the stated results may still
+    come from any node)."""
     if aux_answer != "all":
         item = dict(item, subqs=[sq for sq in item.get("subqs", []) if answer_component(sq, item) == (aux_answer == "only")])
+    if subq_filter != "all" and aux_kind == "cot_mc":
+        item = dict(item, subqs=[sq for sq in item.get("subqs", []) if subq_keep(sq, subq_filter)])
     if aux_kind in ("cot_mc", "random_mc"):
         fin = [e for e in build_examples(item, final=final, subq="none", subq_target=subq_target, lambda_sub=0.0,
                                          rng=rng, permute_final=permute_final) if e.kind == "final"]
@@ -421,11 +434,12 @@ def build_group(item: dict, *, aux_kind: str, k: int, aux_weight: float, rng: ra
         if not fin:
             return []
         aux = build_transition_views(item, k=k, rng=rng, shuffled=aux_kind == "tree_shuf", keep_prob=keep_prob,
-                                     weight=aux_weight if aux_active else 0.0, subq_target=subq_target)
+                                     weight=aux_weight if aux_active else 0.0, subq_target=subq_target,
+                                     subq_filter=subq_filter)
         return fin + aux + [dataclasses.replace(fin[0], weight=0.0) for _ in range(k - len(aux))]
     sub, tgt = ("random", "fresh") if aux_kind == "random" else ("cot", subq_target)
     views = build_examples(item, final=final, subq=sub, subq_target=tgt, lambda_sub=aux_weight, rng=rng,
-                           permute_final=permute_final, subq_k=k, subq_weight="each")
+                           permute_final=permute_final, subq_k=k, subq_weight="each", subq_filter=subq_filter)
     fin = [e for e in views if e.kind == "final"]
     if not fin:
         return []
@@ -675,6 +689,12 @@ def evaluate_subq(model, tok, items: list[dict], max_len: int, bs: int, cache: d
                              "type": sq.get("type") or kind, "truth_known": sq.get("truth") is not None,
                              "target": bool(tgt), "yes_first": yes_first, "question": sq["question"],
                              "var": sq.get("var")})
+                if kind == "cot" and "on_path" in sq and "node_depth" in sq:      # decision chains: chain x level,
+                    tag = "path" if sq["on_path"] else "mirror"                  # chain x levels below the top,
+                    meta[-1]["chain"] = f"{tag}/d{sq['node_depth']}"             # path nodes x item depth
+                    if "depth" in it:
+                        meta[-1]["chain_top"] = f"{tag}/top-{it['depth'] - sq['node_depth']}"
+                        meta[-1]["chain_item"] = f"{tag}/item_d{it['depth']}"
     was_training = model.training
     model.eval()
     dev = next(model.parameters()).device
@@ -698,5 +718,8 @@ def evaluate_subq(model, tok, items: list[dict], max_len: int, bs: int, cache: d
             groups.setdefault(g, []).append(ok)
         if m["kind"] == "cot" and m["truth_known"]:
             groups.setdefault("cot/program_truth", []).append(ok)
+        for g in ("chain", "chain_top", "chain_item"):
+            if g in m:
+                groups.setdefault(f"cot/{m[g]}", []).append(ok)
     metrics = {g: {"n": len(v), "acc": sum(v) / len(v)} for g, v in sorted(groups.items())}
     return metrics, preds

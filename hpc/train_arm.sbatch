@@ -48,6 +48,13 @@
 # TFE/TFME/GFE: TF/TFM/GF restricted to the eligible node views (--tree-eligible-only; ablation rung R3, every asked view
 # differs between TFE and TFME); GFC: full tree with the control questions (--tree-full control, with G4's --subq random
 # --subq-target fresh; GF + XARGS="--tree-full control" trains the same views but records --subq cot --subq-target cot).
+# Decision chains (TB-C, DATA=data/student_chain; notes/next_round/tbc_readme.md): G3P2 = G3 asking only the checks of
+# the chain the final reads (--subq-filter path; the "G3 (path)" arm of the notes), G3M2 = the same on the mirror chain
+# the final never reads (the "G4 (mirror)" content control), G3P2X/G3M2X = the same without the chain's top check
+# (--aux-answer exclude; the path top is the final's decision bit). Plain G3 there asks both chains; chain-data G4 asks
+# lookups of the two facts no check reads (an easy-control reference, not the mirror arm). XARGS="--subq-filter
+# path|mirror" restricts TFE/TFME/GFE/T1/T2 the same way (stated results and matched pools still come from both chains);
+# the run directory then gets "-sf<filter>" after the arm name, so it never overwrites the unfiltered run.
 # REPO: code checkout the job runs (default repo; ablation jobs use a frozen checkout, e.g. REPO=$HOME/cotd/repo-abl);
 # its commit (with -dirty if tracked files differ) goes into the job log and metrics.json args (code_commit).
 set -euo pipefail
@@ -95,6 +102,10 @@ arm_config() {           # sets F S T RLM DS for arm $1
     G3R) F=teacher; S=cot;   T=cot; DX="--grouped-aux 2 --aux-kind cot_randlabel --aux-weight 0.5" ;;  # G3, random node labels
     G3NA) F=teacher; S=cot;  T=cot; DX="--grouped-aux 2 --aux-kind cot --aux-weight 0.5 --aux-answer exclude" ;; # no answer-component nodes
     G3A) F=teacher; S=cot;   T=cot; DX="--grouped-aux 2 --aux-kind cot --aux-weight 0.5 --aux-answer only" ;;    # answer-component nodes only
+    G3P2) F=teacher; S=cot;  T=cot; DX="--grouped-aux 2 --aux-kind cot --aux-weight 0.5 --subq-filter path" ;;  # decision chains: path checks only
+    G3M2) F=teacher; S=cot;  T=cot; DX="--grouped-aux 2 --aux-kind cot --aux-weight 0.5 --subq-filter mirror" ;;  # decision chains: mirror checks only
+    G3P2X) F=teacher; S=cot; T=cot; DX="--grouped-aux 2 --aux-kind cot --aux-weight 0.5 --subq-filter path --aux-answer exclude" ;;  # path checks below the top
+    G3M2X) F=teacher; S=cot; T=cot; DX="--grouped-aux 2 --aux-kind cot --aux-weight 0.5 --subq-filter mirror --aux-answer exclude" ;;  # mirror checks below the top
     G4MC) F=teacher; S=random; T=fresh; DX="--grouped-aux 2 --aux-kind random_mc --aux-weight 0.5" ;; # MC controls
     TF) F=teacher; S=cot;    T=cot; DX="--tree-full true" ;;      # full tree: every node, parents' results stated
     TFE) F=teacher; S=cot;   T=cot; DX="--tree-full true --tree-eligible-only" ;;     # eligible nodes, parents stated
@@ -173,7 +184,8 @@ if [ -n "${EVAL_BASE:-}" ]; then          # untrained backbone control (Jeff nee
     || echo "base eval failed for $M"
 fi
 for ARM in $ARMS; do
-  OUT="runs/${ARM}${TAG:+-$TAG}-$(basename "$MODEL")-$(basename "$DATA")-s${SEED}"   # TAG names recipe variants
+  SF=$(sed -n 's/.*--subq-filter[ =]\([a-z]*\).*/\1/p' <<< "${XARGS:-}")               # XARGS chain filter -> -sf<f>
+  OUT="runs/${ARM}${SF:+-sf$SF}${TAG:+-$TAG}-$(basename "$MODEL")-$(basename "$DATA")-s${SEED}"   # TAG names recipe variants
   echo "=== $ARM -> $OUT  $(date +%T)"
   train "$ARM" "$DATA/train.jsonl" "$EVALS" "$OUT" --epochs "${EPOCHS:-2}" --micro-bs "${MBS:-2}" \
     --grad-accum "${GA:-16}" ${SAVE:+--save} || echo "arm $ARM failed"

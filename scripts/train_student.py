@@ -77,6 +77,10 @@ def main() -> None:
                          "facts, placebo = plain at zero weight, control = the control questions")
     ap.add_argument("--aux-answer", default="all", choices=["all", "exclude", "only"],
                     help="grouped training: auxiliary CoT nodes that are not (exclude) / are (only) answer components")
+    ap.add_argument("--subq-filter", default="all", choices=["all", "path", "mirror"],
+                    help="decision chains: ask only the nodes of the chain the final reads (path) or of the mirror "
+                         "chain (mirror) in --subq cot/mix, grouped and full-tree views (stated results and matched "
+                         "pools still use every node); all = every node")
     ap.add_argument("--tree-eligible-only", action="store_true",
                     help="full-tree groups: keep only the eligible node views (TFE/TFME/GFE); items without one train "
                          "their final question only; the per-problem auxiliary weight is split over the kept views")
@@ -137,6 +141,12 @@ def main() -> None:
     args = ap.parse_args()
     if args.tree_eligible_only and args.tree_full not in ("true", "matched", "plain", "placebo"):
         raise SystemExit("--tree-eligible-only needs --tree-full true/matched/plain/placebo")
+    if args.subq_filter != "all" and (args.depth_stages or args.fact_stages or args.facts_always):
+        raise SystemExit("--subq-filter is not implemented for --depth-stages / --fact-stages / --facts-always")
+    if args.subq_filter != "all" and (args.aux_kind in ("random", "random_mc") if args.grouped_aux else
+                                      args.tree_full == "control" if args.tree_full else args.subq in ("random", "none")):
+        raise SystemExit("--subq-filter only restricts CoT nodes; this arm asks none (control questions or no "
+                         "sub-questions), so the filter would do nothing")
 
     torch.manual_seed(args.seed)
     rng = random.Random(args.seed)
@@ -174,6 +184,9 @@ def main() -> None:
         opt = torch.optim.AdamW(params, lr=args.lr, weight_decay=0.0, fused=dev == "cuda")
 
     train_items = read_jsonl(args.train)
+    if args.subq_filter != "all" and not any("on_path" in sq for it in train_items for sq in it.get("subqs", [])):
+        raise SystemExit(f"--subq-filter {args.subq_filter}: no node of {args.train} has on_path (decision-chain data "
+                         "only, e.g. DATA=data/student_chain); the filter would drop every node")
     evals = {kv.split("=", 1)[0]: read_jsonl(kv.split("=", 1)[1]) for kv in args.eval}
 
     def epoch_examples() -> list[Example]:
@@ -182,7 +195,8 @@ def main() -> None:
             ex += build_examples(it, final=args.final, subq=args.subq, subq_target=args.subq_target,
                                  lambda_sub=args.lambda_sub, rng=rng, rationale_lm=args.rationale_lm,
                                  lambda_lm=args.lambda_lm, permute_final=args.permute_final,
-                                 subq_k=args.subq_k, subq_weight=args.subq_weight, subq_frac=args.subq_frac)
+                                 subq_k=args.subq_k, subq_weight=args.subq_weight, subq_frac=args.subq_frac,
+                                 subq_filter=args.subq_filter)
         rng.shuffle(ex)
         return ex
 
@@ -220,7 +234,7 @@ def main() -> None:
             ex += build_group(it, aux_kind=args.aux_kind, k=args.grouped_aux, aux_weight=args.aux_weight, rng=rng,
                               final=args.final, subq_target=args.subq_target, permute_final=args.permute_final,
                               keep_prob=keep, aux_active=not aux_sources or it.get("source") in aux_sources,
-                              aux_answer=args.aux_answer)
+                              aux_answer=args.aux_answer, subq_filter=args.subq_filter)
         passes["n"] += 1
         return ex
 
@@ -232,7 +246,8 @@ def main() -> None:
         groups = [g for g in (build_full_tree(it, mode=args.tree_full, rng=rng, cap=args.tree_cap,
                                               aux_total=args.aux_total, node_format=args.node_format,
                                               final=args.final, eligible_only=args.tree_eligible_only,
-                                              subq_target=args.subq_target, permute_final=args.permute_final)
+                                              subq_target=args.subq_target, permute_final=args.permute_final,
+                                              subq_filter=args.subq_filter)
                               for it in items) if g]
         b = args.items_per_update
         return [[e for g in groups[i:i + b] for e in g] for i in range(0, len(groups), b)]

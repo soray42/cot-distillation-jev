@@ -11,10 +11,24 @@ _KK_ONE_ROLE = re.compile(r"^(?:is|was) (\w+) (?:a|actually a|really a) (?:knigh
 
 def answer_component(sq: dict, item: dict) -> bool:
     """Whether a node asks for a component of the final answer: in Knights & Knaves, the role of one inhabitant
-    (the options are full role assignments). Other families have no such nodes once the final question in disguise
-    is filtered out (scripts/build_student_data.py, leaks_answer)."""
-    return (str(item.get("source") or "") == "knights_knaves"
-            and bool(_KK_ONE_ROLE.match(" ".join(sq.get("question", "").split()))))
+    (the options are full role assignments); in decision chains (source "chain"), the top check of either chain (the
+    path top is the final's decision bit; the mirror top is marked too, so path and mirror arms drop one node each).
+    Other families have no such nodes once the final question in disguise is filtered out
+    (scripts/build_student_data.py, leaks_answer)."""
+    src = str(item.get("source") or "")
+    if src == "chain":
+        return "on_path" in sq and sq.get("node_depth") == item.get("depth")
+    return src == "knights_knaves" and bool(_KK_ONE_ROLE.match(" ".join(sq.get("question", "").split())))
+
+
+def subq_keep(sq: dict, subq_filter: str = "all") -> bool:
+    """--subq-filter: which tree nodes may be asked. "all" every node; "path" / "mirror" only the nodes of the chain the
+    final reads / of the same-depth chain nothing reads (decision-chain data, on_path; nodes without it are dropped)."""
+    if subq_filter == "all":
+        return True
+    if subq_filter not in ("path", "mirror"):
+        raise ValueError(subq_filter)
+    return sq.get("on_path") is (subq_filter == "path")
 
 
 def node_depths(nodes: list[dict]) -> dict[str, int]:
@@ -63,7 +77,8 @@ def _descendants(nodes: list[dict]) -> dict[str, set]:
     return out
 
 
-def full_tree_plan(item: dict, *, cap: int, rng: random.Random, subq_target: str = "cot") -> list[dict]:
+def full_tree_plan(item: dict, *, cap: int, rng: random.Random, subq_target: str = "cot",
+                   subq_filter: str = "all") -> list[dict]:
     """The nodes of a full-tree group (at most `cap`, sampled if the tree is larger) with both fact sets:
     "parents" (true parent results) and "matched" (as many results from other nodes of the same item, depth-matched
     where possible, excluding the node, its parents, its descendants and the near-answer nodes: sinks at the maximum
@@ -74,9 +89,12 @@ def full_tree_plan(item: dict, *, cap: int, rng: random.Random, subq_target: str
     42% of matched results were ancestors), replace each parent only by a node of the same answer-component class
     (no such node: the view is not eligible), the nearest in depth (node_depth, on the graph before filtering), then
     with the same stated answer, ties at random (F4), and never list a node as its own parent (F12). Older data keeps
-    the original plan, so registered arms reproduce."""
+    the original plan, so registered arms reproduce. subq_filter (subq_keep) restricts the asked nodes only; parents
+    and the matched pool still come from every node of the item."""
     nodes = [sq for sq in item.get("subqs", []) if "id" in sq]
     asked = [sq for sq in nodes if _node_p(sq, subq_target) is not None]
+    if subq_filter != "all":
+        asked = [sq for sq in asked if subq_keep(sq, subq_filter)]
     if len(asked) > cap:
         asked = rng.sample(asked, cap)
     if not nodes:

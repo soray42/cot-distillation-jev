@@ -49,7 +49,9 @@ def _flip(line: str) -> str:
 
 def _cf_rule(item: dict, sq: dict, by: dict, flipped: str) -> bool | None:
     """Rule items: the node's truth when parent `flipped` is negated (node "a:k" = every condition of rule k holds,
-    parents "p:<predicate>"), else None."""
+    parents "p:<predicate>"); decision chains store it per parent (cf_value); else None."""
+    if isinstance(sq.get("cf_value"), dict):
+        return sq["cf_value"].get(flipped)
     var = sq.get("var") or ""
     if not var.startswith("a:") or "rules" not in item:
         return None
@@ -101,6 +103,8 @@ def build_views(items: list[dict], *, cap: int, seed: int, limit: int = 0) -> tu
                              "target": p >= 0.5, "truth_known": sq.get("truth") is not None,
                              "n_par": len(e["parents"]), "cf_changes": None if cf is None else cf != (p >= 0.5),
                              "n_facts": len(lines), "yes_first": yes_first})
+                if "on_path" in sq:              # decision chains: the chain the final reads vs the mirror chain
+                    meta[-1]["on_path"] = sq["on_path"]
     return exs, meta
 
 
@@ -111,11 +115,12 @@ def _logit(p: float, eps: float = 1e-6) -> float:
 
 def summarize(preds: list[dict], n_boot: int = 1000, seed: int = 0) -> dict:
     """Item-level means of the per-node contrasts, with 95% bootstrap intervals over items; overall, by source and by
-    stratum (npar1, cf_changes, cf_invariant)."""
+    stratum (npar1, cf_changes, cf_invariant; decision chains also path / mirror and each by cf)."""
     nodes: dict[tuple, dict] = {}
     for r in preds:
         n = nodes.setdefault((r["item_id"], r["node"]), {"item": r["item_id"], "src": r["source"], "t": r["target"],
-                                                         "npar": r.get("n_par"), "cf": r.get("cf_changes")})
+                                                         "npar": r.get("n_par"), "cf": r.get("cf_changes"),
+                                                         "path": r.get("on_path")})
         n[r["cond"]] = _logit(r["p_yes"])
     rows: dict[str, list[dict]] = {}
     for n in nodes.values():
@@ -130,7 +135,7 @@ def summarize(preds: list[dict], n_boot: int = 1000, seed: int = 0) -> dict:
         d["specific"] = d["drop_par"] - d["drop_np"]
         d["S_par"] = abs(n["true"] - n["flip_true"])
         d["S_np"] = abs(n["matched"] - n["flip_matched"])
-        rows.setdefault(n["item"], []).append(dict(d, _src=n["src"], _npar=n["npar"], _cf=n["cf"]))
+        rows.setdefault(n["item"], []).append(dict(d, _src=n["src"], _npar=n["npar"], _cf=n["cf"], _path=n["path"]))
     keys = [k for k in next(iter(rows.values()))[0] if not k.startswith("_")] if rows else []
 
     def block(sel):
@@ -154,6 +159,10 @@ def summarize(preds: list[dict], n_boot: int = 1000, seed: int = 0) -> dict:
 
     out = {"all": block(lambda x: True), "npar1": block(lambda x: x["_npar"] == 1),
            "cf_changes": block(lambda x: x["_cf"] is True), "cf_invariant": block(lambda x: x["_cf"] is False)}
+    for tag, want in (("path", True), ("mirror", False)):     # decision chains only (empty blocks are dropped)
+        out[tag] = block(lambda x, w=want: x["_path"] is w)
+        out[f"{tag}/cf_changes"] = block(lambda x, w=want: x["_path"] is w and x["_cf"] is True)
+        out[f"{tag}/cf_invariant"] = block(lambda x, w=want: x["_path"] is w and x["_cf"] is False)
     for s in sorted({x["_src"] for ns in rows.values() for x in ns}, key=str):
         out[f"src/{s}"] = block(lambda x, s=s: x["_src"] == s)
     return {k: v for k, v in out.items() if v}
