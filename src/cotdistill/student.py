@@ -508,6 +508,30 @@ def collate(tokenizer, batch: list[Example], max_len: int, device) -> dict:
             "last": torch.tensor([len(x) - 1 for x in enc], device=device)}
 
 
+def token_budget_batches(lengths: list[int], budget: int, max_seqs: int = 16) -> list[list[int]]:
+    """Split one update's sequences (token lengths as collate sees them) into micro-batches of indices, longest first:
+    a micro-batch grows while (n + 1) x its longest length <= budget padded tokens and n < max_seqs; a sequence
+    longer than the budget goes alone. Every index appears once. The update's gradient does not depend on the split
+    (sum over sequences of w x CE / norm), so this only changes the number of forward passes and the padding."""
+    out: list[list[int]] = []
+    for i in sorted(range(len(lengths)), key=lambda j: -lengths[j]):
+        if out and len(out[-1]) < max_seqs and (len(out[-1]) + 1) * lengths[out[-1][0]] <= budget:
+            out[-1].append(i)
+        else:
+            out.append([i])
+    return out
+
+
+def micro_batches(tokenizer, batch: list[Example], max_len: int, micro_bs: int, token_budget: int = 0,
+                  max_seqs: int = 16) -> list[list[Example]]:
+    """One update's micro-batches: consecutive chunks of micro_bs, or with token_budget the length-sorted split of
+    token_budget_batches (lengths counted as collate truncates them)."""
+    if not token_budget:
+        return [batch[i:i + micro_bs] for i in range(0, len(batch), micro_bs)]
+    lens = [min(max_len, len(tokenizer.encode(e.text, add_special_tokens=False))) for e in batch]
+    return [[batch[j] for j in b] for b in token_budget_batches(lens, token_budget, max_seqs)]
+
+
 def label_logits(model, tokenizer, batch: list[Example], max_len: int, label_ids_cache: dict,
                  hidden_out: list | None = None, layers: list[int] | None = None) -> list[torch.Tensor]:
     """Logits over each example's option letters at the readout position (optionally also appends each

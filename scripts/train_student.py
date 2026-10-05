@@ -13,6 +13,7 @@ import argparse
 import json
 import math
 import random
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -24,8 +25,12 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from cotdistill.student import (Example, brier_loss, build_examples, build_fact_examples, build_full_tree, build_group,  # noqa: E402
                                 build_stage_examples, evaluate, evaluate_subq, kl_loss, label_logits, lm_loss,
-                                load_model, subq_sets)
+                                load_model, micro_batches, subq_sets)
 
+
+# Arguments that do not change the training trajectory: a checkpoint may be resumed with different values.
+RESUME_FREE = {"stop_after_h", "ckpt_every_min", "ckpt_single", "stop_at_step", "code_commit", "eval", "eval_subq", "eval_bs",
+               "eval_max_len", "dump_hidden", "dump_layers", "log_every", "save"}
 
 LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj",
                 "in_proj_qkv", "in_proj_z", "in_proj_a", "in_proj_b", "out_proj"]
@@ -112,7 +117,23 @@ def main() -> None:
     ap.add_argument("--grad-accum", type=int, default=4)
     ap.add_argument("--max-len", type=int, default=1536)
     ap.add_argument("--precision", default="fp32master", choices=["fp32master", "bf16"])
-    ap.add_argument("--optim", default="adamw", choices=["adamw", "adamw8bit"])
+    ap.add_argument("--optim", default="adamw", choices=["adamw", "adamw8bit", "adamw8bit-sr", "adamw8bit_sr"],
+                    help="adamw8bit = bitsandbytes (round-to-nearest bf16 writes); adamw8bit-sr = torchao AdamW8bit "
+                         "with bf16 stochastic rounding (needs --precision bf16 and torchao; adamw8bit_sr = the same)")
+    ap.add_argument("--token-budget", "--mb-tokens", type=int, default=0,
+                    help="full-tree loop: length-sorted micro-batches of at most N padded tokens (and at most "
+                         "--token-budget-seqs sequences) instead of --micro-bs; same gradient per update; 0 = off")
+    ap.add_argument("--token-budget-seqs", type=int, default=16, help="--token-budget: sequences per micro-batch cap")
+    ap.add_argument("--stop-after-h", type=float, default=0.0,
+                    help="full-tree loop: at the first update boundary after H hours (counted from this process's "
+                         "start) write <out>/ckpt and exit with code 3; a rerun with the same --out resumes; 0 = off")
+    ap.add_argument("--ckpt-every-min", type=float, default=0.0,
+                    help="full-tree loop: also write <out>/ckpt every M minutes (one checkpoint, replaced atomically)")
+    ap.add_argument("--ckpt-single", action="store_true",
+                    help="delete the previous checkpoint before writing the new one: one copy on disk instead of two "
+                         "during a write (4B: about 17 instead of 34 GB), but a kill during the write leaves none")
+    ap.add_argument("--stop-at-step", type=int, default=0,
+                    help="planned stop (checkpoint + exit 3) after this update; for tests and the resume smoke")
     ap.add_argument("--no-grad-ckpt", action="store_true")
     ap.add_argument("--eval-bs", type=int, default=8)
     ap.add_argument("--eval-max-len", type=int, default=6144, help="long eval states (JevBench hard) need more room")
@@ -148,6 +169,18 @@ def main() -> None:
         raise SystemExit("--subq-filter only restricts CoT nodes; this arm asks none (control questions or no "
                          "sub-questions), so the filter would do nothing")
 
+    if args.optim == "adamw8bit_sr":     # the spelling of the plan notes
+        args.optim = "adamw8bit-sr"
+    if args.optim == "adamw8bit-sr" and args.precision != "bf16":
+        raise SystemExit("--optim adamw8bit-sr rounds bf16 weights stochastically; it needs --precision bf16")
+    resumable = bool(args.stop_after_h or args.ckpt_every_min or args.stop_at_step)
+    if (resumable or args.token_budget) and not args.tree_full:
+        raise SystemExit("--token-budget / --stop-after-h / --ckpt-every-min / --stop-at-step are implemented for the "
+                         "full-tree loop only (--tree-full)")
+    if args.ckpt_single and not resumable:
+        raise SystemExit("--ckpt-single needs --stop-after-h, --ckpt-every-min or --stop-at-step")
+    t_start = time.time()
+
     torch.manual_seed(args.seed)
     rng = random.Random(args.seed)
     # Problem order for the grouped and full-tree arms comes from its own generator, so every arm with the same seed
@@ -180,6 +213,16 @@ def main() -> None:
     if args.optim == "adamw8bit":
         import bitsandbytes as bnb
         opt = bnb.optim.AdamW8bit(params, lr=args.lr, weight_decay=0.0)
+    elif args.optim == "adamw8bit-sr":   # 8-bit block-wise states, bf16 weights written with stochastic rounding
+        try:
+            from torchao.optim import AdamW8bit
+        except ImportError as e:
+            try:                         # torchao < 0.11 keeps the low-bit optimizers under prototype
+                from torchao.prototype.low_bit_optim import AdamW8bit
+            except ImportError:
+                raise SystemExit(f"--optim adamw8bit-sr needs torchao (pip install --no-deps torchao, so pip leaves "
+                                 f"torch alone): {e}")
+        opt = AdamW8bit(params, lr=args.lr, weight_decay=0.0, bf16_stochastic_round=True)
     else:
         opt = torch.optim.AdamW(params, lr=args.lr, weight_decay=0.0, fused=dev == "cuda")
 
@@ -315,6 +358,67 @@ def main() -> None:
         trajectory.append(row)
         print("trajectory", json.dumps(row), flush=True)
         (out / "trajectory.json").write_text(json.dumps(trajectory, indent=1))
+
+    # Resume (full-tree loop only): <out>/ckpt holds the weights, the optimizer and scheduler state, the counters, every
+    # RNG state and the rest of the current epoch's updates. It is written to ckpt.tmp (state.pt last, by rename, so
+    # ckpt.tmp/state.pt marks a complete write) and swapped in by two renames; a kill at any point leaves a complete
+    # checkpoint (ckpt; between the renames the new ckpt.tmp, else ckpt.old), except during a --ckpt-single write.
+    ck_dir, train_args = out / "ckpt", {k: v for k, v in vars(args).items() if k not in RESUME_FREE}
+    ck_tmp, ck_old = out / "ckpt.tmp", out / "ckpt.old"
+    resume = None
+    if resumable:
+        if ck_dir.exists() and (ck_tmp / "state.pt").exists():   # killed after a complete write, before the swap
+            shutil.rmtree(ck_dir)
+        if not ck_dir.exists():
+            for d in (ck_tmp, ck_old):   # the newest complete one
+                if (d / "state.pt").exists():
+                    d.rename(ck_dir)
+                    print(f"recovered {d} as {ck_dir}", flush=True)
+                    break
+            else:
+                if ck_tmp.exists():
+                    print(f"{ck_tmp} is incomplete (killed during a write) and there is no other checkpoint: "
+                          "training starts from the beginning", flush=True)
+        shutil.rmtree(ck_tmp, ignore_errors=True)
+        shutil.rmtree(ck_old, ignore_errors=True)
+        if ck_dir.exists():
+            resume = torch.load(ck_dir / "state.pt", map_location="cpu", weights_only=False)
+            diff = {k: (resume["args"].get(k), v) for k, v in train_args.items() if resume["args"].get(k) != v}
+            if diff:
+                raise SystemExit(f"{ck_dir} was written with other training arguments (checkpoint, now): {diff}")
+            if not (ck_dir / "optim.pt").exists():
+                raise SystemExit(f"{ck_dir} has no optimizer state")
+            model.load_state_dict(torch.load(ck_dir / "model.pt", map_location="cpu", mmap=True, weights_only=True))
+            rng.setstate(resume["rng"])          # after the plan's counting pass, which consumed both generators
+            order_rng.setstate(resume["order_rng"])
+            torch.set_rng_state(resume["torch_rng"])
+            if dev == "cuda" and resume["cuda_rng"] is not None:
+                torch.cuda.set_rng_state_all(resume["cuda_rng"])
+            passes["n"], micro, seen_tok = resume["passes"], resume["micro"], resume["seen_tok"]
+            history, trajectory = resume["history"], resume["trajectory"]
+            t0 = time.time() - resume["elapsed"]    # s_per_step stays an average over the whole run
+
+    def save_ckpt(sched, upd_iter: list) -> None:
+        tmp, old = ck_tmp, ck_old
+        shutil.rmtree(tmp, ignore_errors=True)
+        shutil.rmtree(old, ignore_errors=True)
+        if args.ckpt_single:             # disk: one checkpoint at a time
+            shutil.rmtree(ck_dir, ignore_errors=True)
+        tmp.mkdir()
+        torch.save(model.state_dict(), tmp / "model.pt")
+        torch.save(opt.state_dict(), tmp / "optim.pt")
+        torch.save({"args": train_args, "step": step, "micro": micro, "seen_tok": seen_tok, "passes": passes["n"],
+                    "elapsed": time.time() - t0, "sched": sched.state_dict(), "upd_iter": upd_iter,
+                    "history": history, "trajectory": trajectory, "rng": rng.getstate(),
+                    "order_rng": order_rng.getstate(), "torch_rng": torch.get_rng_state(),
+                    "cuda_rng": torch.cuda.get_rng_state_all() if dev == "cuda" else None}, tmp / "state.part")
+        (tmp / "state.part").rename(tmp / "state.pt")
+        if ck_dir.exists():
+            ck_dir.rename(old)
+        tmp.rename(ck_dir)
+        shutil.rmtree(old, ignore_errors=True)
+        print(f"checkpoint {ck_dir} at step {step} ({time.time() - t_start:.0f} s into this process)", flush=True)
+    last_ckpt = time.time()
     model.train()
     for si, (name, make, _, stage_steps) in enumerate(plan):
         if args.reset_optim and si > 0:
@@ -325,6 +429,11 @@ def main() -> None:
         ex_iter: list[Example] = []
         end = step + stage_steps
         upd_iter: list[list[Example]] = []
+        if resume is not None:           # single-stage full-tree run; after the scheduler, whose constructor sets the LR
+            opt.load_state_dict(torch.load(ck_dir / "optim.pt", map_location="cpu", weights_only=False))
+            sched.load_state_dict(resume["sched"])
+            step, upd_iter = resume["step"], resume["upd_iter"]
+            print(f"resumed from {ck_dir} at step {step}", flush=True)
         while name == "fulltree" and step < end:
             # One problem group per update; the loss is scaled by 1 / (3 x items_per_update), the per-sequence
             # normalisation of the 1 final + 2 auxiliary grouped arms, so the learning-rate scale is comparable.
@@ -332,11 +441,14 @@ def main() -> None:
                 upd_iter = make()
             upd, upd_iter = upd_iter[0], upd_iter[1:]
             norm, upd_loss = 3 * args.items_per_update, 0.0
-            for i in range(0, len(upd), args.micro_bs):
-                mb = upd[i:i + args.micro_bs]
+            # micro_bs chunks, or length-sorted micro-batches of at most token_budget padded tokens
+            mbs = micro_batches(tok, upd, args.max_len, args.micro_bs, args.token_budget, args.token_budget_seqs)
+            for mb in mbs:
                 with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
                     z = label_logits(model, tok, mb, args.max_len, cache)
                     loss = kl_loss(z, mb, args.label_smoothing) * len(mb) / norm
+                    if args.lambda_brier:          # as in the grouped loop (was silently ignored in full-tree arms)
+                        loss = loss + args.lambda_brier * brier_loss(z, mb) * len(mb) / norm
                 loss.backward()
                 upd_loss += loss.item()
                 seen_tok += sum(min(args.max_len, len(e.text) // 3) for e in mb)
@@ -348,12 +460,23 @@ def main() -> None:
             if step % args.log_every == 0 or step == total_steps:
                 dt = time.time() - t0
                 mem = torch.cuda.max_memory_allocated() / 2**30 if dev == "cuda" else 0.0
-                row = {"step": step, "loss": upd_loss, "lr": sched.get_last_lr()[0], "s_per_step": dt / step,
+                row = {"step": step, "loss": upd_loss, "lr": float(sched.get_last_lr()[0]), "s_per_step": dt / step,
                        "approx_tok_per_s": seen_tok / dt, "peak_gib": mem, "seqs": len(upd)}
+                if args.token_budget:
+                    row["fwd"] = len(mbs)
                 history.append(row)
                 print(json.dumps(row), flush=True)
             if step in eval_steps:
                 mid_eval(step)
+            if resumable and step < total_steps:
+                stop = bool(args.stop_at_step and step >= args.stop_at_step or
+                            args.stop_after_h and time.time() - t_start >= args.stop_after_h * 3600)
+                if stop or args.ckpt_every_min and time.time() - last_ckpt >= args.ckpt_every_min * 60:
+                    save_ckpt(sched, upd_iter)
+                    last_ckpt = time.time()
+                if stop:
+                    print(f"planned stop after step {step}/{total_steps}; rerun with the same --out to resume", flush=True)
+                    sys.exit(3)
         while step < end:
             if len(ex_iter) < args.micro_bs:
                 ex_iter += make()
@@ -383,13 +506,16 @@ def main() -> None:
                 if step % args.log_every == 0 or step == total_steps:
                     dt = time.time() - t0
                     mem = torch.cuda.max_memory_allocated() / 2**30 if dev == "cuda" else 0.0
-                    row = {"step": step, "loss": loss.item() * args.grad_accum, "lr": sched.get_last_lr()[0],
+                    row = {"step": step, "loss": loss.item() * args.grad_accum, "lr": float(sched.get_last_lr()[0]),
                            "s_per_step": dt / step, "approx_tok_per_s": seen_tok / dt, "peak_gib": mem}
                     history.append(row)
                     print(json.dumps(row), flush=True)
                 if step in eval_steps:
                     mid_eval(step)
 
+    opt.state.clear()                    # the optimizer state is not needed for the evaluations (4B: about 9 GiB)
+    if dev == "cuda":
+        torch.cuda.empty_cache()
     results = {"args": vars(args), "history": history, "trajectory": trajectory, "eval": {}}
     for name, items in evals.items():
         hid = [] if name in args.dump_hidden.split(",") else None
@@ -416,6 +542,8 @@ def main() -> None:
             model = model.merge_and_unload()
         model.to(torch.bfloat16).save_pretrained(out / "model", safe_serialization=True)
         tok.save_pretrained(out / "model")
+    if resumable:                        # finished: metrics (and weights) are written, the checkpoint goes
+        shutil.rmtree(ck_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":

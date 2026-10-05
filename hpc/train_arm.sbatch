@@ -57,7 +57,22 @@
 # the run directory then gets "-sf<filter>" after the arm name, so it never overwrites the unfiltered run.
 # REPO: code checkout the job runs (default repo; ablation jobs use a frozen checkout, e.g. REPO=$HOME/cotd/repo-abl);
 # its commit (with -dirty if tracked files differ) goes into the job log and metrics.json args (code_commit).
+# 4B / long runs (full-tree arms only; notes/next_round/sev4b_plan.md §6-§7): PREC=bf16 OPTIM=adamw8bit-sr = torchao 8-bit
+# AdamW with bf16 stochastic rounding (needs torchao in the env); TOKBUDGET=3072 = length-sorted micro-batches of at most
+# 3072 padded tokens (--token-budget, same gradient as MBS; MBS/GA are then unused); STOPH=H = planned stop H hours after
+# the JOB start (smoke and base evals included; leave room for the final evals and one checkpoint write): the arm writes
+# $OUT/ckpt and the job exits with code 3 ("PLANNED STOP" in the log); resubmitting the same job resumes it, and arms
+# already finished ($OUT/metrics.json, no $OUT/ckpt) are skipped. CKPTMIN=M also writes the checkpoint every M minutes
+# (one checkpoint, replaced via ckpt.tmp + rename, so two exist during a write: about 2 x 17 GB at 4B, plus the 9.3 GB
+# base). CKPTONE=1 (--ckpt-single) deletes the old checkpoint before writing the new one: one copy on disk, but a kill
+# during the write leaves none (the arm then restarts from update 0). At the end, --save writes model/ (8.4 GB at 4B)
+# before the checkpoint is deleted. With STOPH or CKPTMIN every arm must be a full-tree arm, and the smoke stage also
+# runs a checkpoint round trip (stop after update 1, resume) on the first arm. No relay resubmits after exit 3 yet
+# (plan §7: same job again with --dependency=afterany); SLURM records the job as FAILED with exit code 3.
+# Relay scripts: TOKBUDGET STOPH CKPTMIN CKPTONE belong in the reset list (relay44's reset() lacks OPTIM too), so a
+# 4B setting never leaks into the next submission.
 set -euo pipefail
+JOB_T0=$(date +%s)
 cd "$HOME/cotd"
 module load cuda/12.4 2>/dev/null || true
 SEED="${SEED:-0}"; MODEL="${MODEL:-$HOME/cotd/models/Qwen3.5-2B-Base}"; DATA="${DATA:-data/student}"
@@ -135,7 +150,10 @@ train() {                # train <arm> <train.jsonl> <evals> <out> [extra args..
     ${SUBQK:+--subq-k "$SUBQK"} ${SUBQW:+--subq-weight "$SUBQW"} ${DS:+--depth-stages "$DS" --stage-k "${STAGEK:-1}"} \
     ${SUBQF:+--subq-frac "$SUBQF"} ${LORA:+--lora-r "$LORA"} ${DUMPL:+--dump-layers "$DUMPL"} $DX ${XARGS:-} \
     ${EVALAT:+--eval-at "$EVALAT"} ${EVALMID:+--eval-mid "$EVALMID"} ${ORDERSEED:+--order-seed "$ORDERSEED"} \
-    ${LSMOOTH:+--label-smoothing "$LSMOOTH"} --code-commit "$COMMIT" "$@"
+    ${LSMOOTH:+--label-smoothing "$LSMOOTH"} ${TOKBUDGET:+--token-budget "$TOKBUDGET"} --code-commit "$COMMIT" "$@"
+}
+stop_h() {               # hours left until STOPH hours after the job start (at least 0.01)
+  awk -v h="$STOPH" -v e="$(( $(date +%s) - JOB_T0 ))" 'BEGIN { r = h - e / 3600; printf "%.3f", (r < 0.01 ? 0.01 : r) }'
 }
 
 ARMS="${ARMS:-${ARM:-}}"
@@ -145,12 +163,27 @@ echo "=== smoke stage $(date +%T)"
 SM=$(mktemp -d)
 head -n 16 "$DATA/train.jsonl" > "$SM/train.jsonl"
 head -n 20 data/eval/kk_heldout.jsonl > "$SM/eval.jsonl"
+[ -z "${CKPTONE:-}" ] || [ -n "${STOPH:-}${CKPTMIN:-}" ] || { echo "CKPTONE needs STOPH or CKPTMIN"; exit 1; }
 for ARM in $ARMS; do
+  if [ -n "${STOPH:-}${CKPTMIN:-}${TOKBUDGET:-}" ]; then   # resume and token budgets: full-tree loop only
+    arm_config "$ARM"
+    [[ " $DX ${XARGS:-} " == *" --tree-full "* ]] || { echo "SMOKE FAILED $ARM: STOPH/CKPTMIN/TOKBUDGET need a full-tree arm"; exit 1; }
+  fi
   SUBQ_EXTRA= train "$ARM" "$SM/train.jsonl" "smoke=$SM/eval.jsonl" "$SM/out-$ARM" --epochs 0.5 --micro-bs 2 --grad-accum 2 \
     > "$SM/$ARM.log" 2>&1 || { echo "SMOKE FAILED $ARM"; tail -n 30 "$SM/$ARM.log"; exit 1; }
   [ -n "${DRY_RUN:-}" ] || grep -q '^smoke {' "$SM/$ARM.log" || { echo "SMOKE FAILED $ARM (no eval line)"; tail -n 30 "$SM/$ARM.log"; exit 1; }
   echo "smoke ok $ARM"
 done
+if [ -n "${STOPH:-}${CKPTMIN:-}" ]; then   # checkpoint round trip on the first arm: planned stop after update 1, resume
+  a=${ARMS%% *}; rc=0                    # (lower case: internal, so relay reset lists need not know them)
+  SUBQ_EXTRA= train "$a" "$SM/train.jsonl" "smoke=$SM/eval.jsonl" "$SM/res-$a" --epochs 1 --items-per-update 4 \
+    ${CKPTONE:+--ckpt-single} --stop-at-step 1 > "$SM/res1.log" 2>&1 || rc=$?
+  [ -n "${DRY_RUN:-}" ] || [ "$rc" = 3 ] || { echo "SMOKE FAILED resume $a (planned stop gave exit $rc)"; tail -n 30 "$SM/res1.log"; exit 1; }
+  SUBQ_EXTRA= train "$a" "$SM/train.jsonl" "smoke=$SM/eval.jsonl" "$SM/res-$a" --epochs 1 --items-per-update 4 \
+    ${CKPTONE:+--ckpt-single} --ckpt-every-min 1000 > "$SM/res2.log" 2>&1 || { echo "SMOKE FAILED resume $a"; tail -n 30 "$SM/res2.log"; exit 1; }
+  [ -n "${DRY_RUN:-}" ] || grep -q '^resumed from' "$SM/res2.log" || { echo "SMOKE FAILED resume $a (no resume line)"; tail -n 30 "$SM/res2.log"; exit 1; }
+  echo "smoke ok resume $a"
+fi
 head -n 3 "$DATA/val.jsonl" > "$SM/val3.jsonl"
 if [ -n "${EVAL_BASE:-}${BASE_SUBQ:-}" ]; then
   $PY $REPO/scripts/eval_student.py --model "$MODEL" --eval "smoke=$SM/eval.jsonl" --eval-subq "$SM/val3.jsonl" \
@@ -186,9 +219,18 @@ fi
 for ARM in $ARMS; do
   SF=$(sed -n 's/.*--subq-filter[ =]\([a-z]*\).*/\1/p' <<< "${XARGS:-}")               # XARGS chain filter -> -sf<f>
   OUT="runs/${ARM}${SF:+-sf$SF}${TAG:+-$TAG}-$(basename "$MODEL")-$(basename "$DATA")-s${SEED}"   # TAG names recipe variants
+  if [ -n "${STOPH:-}${CKPTMIN:-}" ] && [ -f "$OUT/metrics.json" ] && [ ! -d "$OUT/ckpt" ]; then
+    echo "=== $ARM: $OUT finished in an earlier job, skipped"; continue
+  fi
   echo "=== $ARM -> $OUT  $(date +%T)"
+  rc=0
   train "$ARM" "$DATA/train.jsonl" "$EVALS" "$OUT" --epochs "${EPOCHS:-2}" --micro-bs "${MBS:-2}" \
-    --grad-accum "${GA:-16}" ${SAVE:+--save} || echo "arm $ARM failed"
+    --grad-accum "${GA:-16}" ${SAVE:+--save} ${STOPH:+--stop-after-h "$(stop_h)"} ${CKPTMIN:+--ckpt-every-min "$CKPTMIN"} \
+    ${CKPTONE:+--ckpt-single} || rc=$?
+  if [ "$rc" = 3 ]; then
+    echo "PLANNED STOP $ARM: checkpoint in $OUT/ckpt; resubmit the same job to resume  $(date +%T)"; exit 3
+  fi
+  [ "$rc" = 0 ] || echo "arm $ARM failed"
   echo "done $OUT  $(date +%T)"
 done
 echo "all done $(date +%T)"
