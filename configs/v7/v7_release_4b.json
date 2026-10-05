@@ -1,0 +1,264 @@
+{
+ "name": "v7_release_4b",
+ "tier": "release",
+ "seed": 0,
+ "out": "data/student_v7_release_4b",
+ "description": "Release stage-1 mixture, 4B (plan \u00a71.3). Skeleton: proportions and some inputs stay open until the lab bets B1-B5 (plan \u00a74.1) are read; the script refuses to build while any open field remains. Stage 0 (breadth, 450k rows) is its own set from scripts/build_breadth.py; stage 2 (S2-PS) is not built.",
+ "plan": "notes/next_round/data_expansion/plan.md \u00a71.3, \u00a76.4 (shares by B-rule outcome), \u00a76.1 (licence)",
+ "stages": {
+  "0": "TODO: data/student_br450k (scripts/build_breadth.py --sizes 450000; then a v7 config with one breadth source)",
+  "2": "TODO: S2-PS fresh contexts, 1/2 CE + 1/4 Brier, 25% replay (not built)"
+ },
+ "total_rows": "TODO: stage-1 rows (plan \u00a71.3: 2B ~185k weight units, 4B larger)",
+ "val": {
+  "mode": "split",
+  "frac": 0.02,
+  "min_per_family": 2,
+  "max_per_family": 50
+ },
+ "dedup": {
+  "near": 0.8,
+  "shingle": 5,
+  "perms": 64,
+  "bands": 16
+ },
+ "caps": {
+  "slice_share_chars": {
+   "M": "TODO: .25 if B1/B3 pass, M finals-only if B1 rejects, <= .05 if B3 rejects",
+   "L": "TODO: .08 if B5 passes, 0 if it rejects",
+   "M+L+P": 0.3
+  },
+  "gsm_share_of_math_problems": "TODO: .15 if B2 passes, 0 if B2 rejects"
+ },
+ "sources": [
+  {
+   "name": "A_v5",
+   "slice": "A",
+   "train": "data/student_v5/train.jsonl",
+   "comment": "v6-A = v5 minus the MathQA/AQuA family (C6); K&K rows come from v3s below if relay50 confirms (then add knights_knaves to exclude_source)",
+   "exclude_source": "^(tasksource/math_qa$|superni/task(1419|1420|1421|1422|1423|1424|1678)_mathqa_|superni/task750_aqua_)",
+   "select": {
+    "weight": "TODO",
+    "rank": "hash"
+   },
+   "nodes": "keep",
+   "label": "as_is",
+   "licence": {
+    "from": "v5"
+   },
+   "gates": [
+    "13gram"
+   ],
+   "own_eval": [
+    "kk_",
+    "val_kk",
+    "diag_",
+    "xkk",
+    "rule_",
+    "claims_",
+    "policy_",
+    "jl_",
+    "chain_",
+    "sharc_dev",
+    "val_facts"
+   ]
+  },
+  {
+   "name": "A_kk_solver",
+   "slice": "A",
+   "train": "data/student_v3s/train.jsonl",
+   "comment": "K&K with solver proof nodes (relay50: G3 on v3s vs v3f)",
+   "select": {
+    "weight": "TODO",
+    "rank": "hash"
+   },
+   "nodes": "keep",
+   "label": "as_is",
+   "node_basis": "program",
+   "licence": {
+    "class": "PERM",
+    "text": "own generator"
+   },
+   "gates": [
+    "13gram"
+   ],
+   "own_eval": [
+    "kk_",
+    "val_kk",
+    "diag_",
+    "xkk"
+   ]
+  },
+  {
+   "name": "R_replay",
+   "slice": "R",
+   "train": "TODO: stage-0 replay file (sample of the stage-0 breadth set)",
+   "select": {
+    "weight": "TODO",
+    "rank": "hash"
+   },
+   "nodes": "drop",
+   "label": "as_is",
+   "licence": {
+    "from": "row"
+   },
+   "gates": [
+    "13gram",
+    "masked"
+   ]
+  },
+  {
+   "name": "M_numgen",
+   "slice": "M",
+   "dedup_group": "numgen",
+   "train": "data/student_numgen/train.jsonl",
+   "node_rows": "data/student_numgen/nodes_train.jsonl",
+   "node_link": "node_of",
+   "family_key": "frame",
+   "select": {
+    "weight": "TODO",
+    "rank": "hash"
+   },
+   "nodes": "TODO: keep if B1 adopts, drop if it rejects",
+   "max_node_rows_per_problem": 2,
+   "label": "program",
+   "label_basis": "program",
+   "node_basis": "program",
+   "licence": {
+    "class": "PERM",
+    "text": "own generator (src/cotdistill/numgen.py)"
+   },
+   "gates": [
+    "13gram",
+    "masked"
+   ],
+   "own_eval": [
+    "numgen_"
+   ],
+   "math": true
+  },
+  {
+   "name": "M_gsm8k_soc",
+   "slice": "M",
+   "train": "data/student_gsm8k_soc/train.jsonl",
+   "problem_key": "problem_id",
+   "node_link": "problem_id",
+   "family_key": "group",
+   "select": {
+    "problems": "TODO: 2500 (2B) / 3000 (4B) if B2 passes, else remove this source",
+    "rank": "pool_rank"
+   },
+   "nodes": "TODO: keep if B1 adopts",
+   "label": "gold",
+   "label_basis": "gold",
+   "node_basis": "program",
+   "licence": {
+    "from": "row"
+   },
+   "gates": [
+    "13gram",
+    "masked"
+   ],
+   "math": true,
+   "gsm_derived": true
+  },
+  {
+   "name": "M_rendered",
+   "slice": "M",
+   "train": "TODO: M2 DeepSeek-rendered numgen surfaces (scripts/render_numchain.py, not built; needs a DeepSeek top-up)",
+   "select": {
+    "weight": "TODO",
+    "rank": "hash"
+   },
+   "nodes": "TODO",
+   "label": "program",
+   "licence": {
+    "class": "PERM",
+    "text": "own program + DeepSeek output"
+   },
+   "gates": [
+    "13gram",
+    "masked"
+   ],
+   "math": true
+  },
+  {
+   "name": "M_dates_verify_rg",
+   "slice": "M",
+   "train": "TODO: M4 date chains, M5 reasoning-gym non-GSM arithmetic, M6 solution verification (not built)",
+   "select": {
+    "weight": "TODO"
+   },
+   "nodes": "TODO",
+   "label": "program",
+   "licence": {
+    "class": "PERM"
+   },
+   "gates": [
+    "13gram",
+    "masked"
+   ],
+   "math": true
+  },
+  {
+   "name": "L_goldproof",
+   "slice": "L",
+   "train": "data/student_goldproof/train.jsonl",
+   "comment": "FLD / BoardgameQA / RuleTaker gold or solver proof nodes; ProofWriter (train_proofwriter_lab.jsonl) stays out of the release (licence unverified); goldproof size tiers ['lab', 'release', '4b'] (plan \u00a71.2 lab / release / 4B problem counts)",
+   "select": {
+    "weight": "TODO",
+    "rank": "hash"
+   },
+   "nodes": "TODO: keep if B5 adopts, drop if it rejects",
+   "label": "gold",
+   "node_basis": "gold_proof",
+   "licence": {
+    "from": "row"
+   },
+   "gates": [
+    "13gram",
+    "masked"
+   ],
+   "where": {
+    "tier": [
+     "lab",
+     "release",
+     "4b"
+    ]
+   }
+  },
+  {
+   "name": "D_documents",
+   "slice": "D",
+   "train": "TODO: 2Wiki / CUAD / QASPER / TabFact teacher-soft documents (not built; DeepSeek)",
+   "select": {
+    "weight": "TODO"
+   },
+   "nodes": "drop",
+   "label": "as_is",
+   "label_basis": "teacher-soft",
+   "licence": {
+    "from": "row"
+   },
+   "gates": [
+    "13gram"
+   ]
+  },
+  {
+   "name": "QTP",
+   "slice": "P",
+   "train": "TODO: HelpSteer2 adequacy, agent actions, exact posteriors (not built)",
+   "select": {
+    "weight": "TODO"
+   },
+   "nodes": "drop",
+   "label": "gold",
+   "licence": {
+    "from": "row"
+   },
+   "gates": [
+    "13gram"
+   ]
+  }
+ ]
+}

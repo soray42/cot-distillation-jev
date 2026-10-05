@@ -1,0 +1,67 @@
+{
+ "name": "v7_pilot_br40k",
+ "tier": "lab",
+ "seed": 0,
+ "out": "data/student_v7_pilot_br40k",
+ "description": "R1 lane 4 (BR-40k): 40k tasksource breadth rows (data/student_br40k), re-screened against the current data/eval files and topped up to 40,000 from BR-150k in hash order; val is the byte copy of data/student_v5/val.jsonl shared with data/student_v5_40k for the paired contrast",
+ "plan": "notes/next_round/data_expansion/plan.md \u00a74 R1 lane 4, bet B4 (BR-40k - v5-40k)",
+ "val": {
+  "mode": "copy",
+  "path": "data/student_v5/val.jsonl"
+ },
+ "dedup": {
+  "near": 0.8,
+  "shingle": 5,
+  "perms": 64,
+  "bands": 16
+ },
+ "sources": [
+  {
+   "name": "br40k",
+   "slice": "B",
+   "dedup_group": "br",
+   "train": "data/student_br40k/train.jsonl",
+   "select": {
+    "problems": "all",
+    "rank": "file"
+   },
+   "nodes": "drop",
+   "label": "as_is",
+   "licence": {
+    "from": "row"
+   },
+   "gates": [
+    "13gram",
+    "masked"
+   ],
+   "own_eval": []
+  },
+  {
+   "name": "br150k_topup",
+   "slice": "B",
+   "dedup_group": "br",
+   "train": "data/student_br150k/train.jsonl",
+   "select": {
+    "rank": "hash",
+    "fill": true,
+    "skip_selected": true,
+    "candidates": 3000
+   },
+   "nodes": "drop",
+   "label": "as_is",
+   "licence": {
+    "from": "row"
+   },
+   "gates": [
+    "13gram",
+    "masked"
+   ],
+   "own_eval": []
+  }
+ ],
+ "fill": {
+  "source": "br150k_topup",
+  "target": "rows",
+  "rows": 40000
+ }
+}

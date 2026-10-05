@@ -1,0 +1,54 @@
+{
+ "name": "v7_pilot_math_M0",
+ "tier": "lab",
+ "seed": 0,
+ "out": "data/student_v7_pilot_math_M0",
+ "description": "R1/R2 lane 4 (M0): the G20 general replay alone, built by the same rules as the math arms (identical G20 rows; compare per_source.G20.kept_item_ids_md5)",
+ "plan": "notes/next_round/data_expansion/plan.md \u00a74 R1 lane 4, bet B3 (MS - M0)",
+ "val": {
+  "mode": "sources"
+ },
+ "dedup": {
+  "near": 0.8,
+  "shingle": 5,
+  "perms": 64,
+  "bands": 16
+ },
+ "sources": [
+  {
+   "name": "G20",
+   "slice": "G",
+   "comment": "plan \u00a74: the general replay every math arm carries = data/student_v5_20k minus its MathQA/AQuA rows (C6; task520_aquamuse is not AQuA). First in priority, so it is identical across MS/MA/MSgen/M0 (compare per_source.G20.kept_item_ids_md5)",
+   "train": "data/student_v5_20k/train.jsonl",
+   "exclude_source": "^(tasksource/math_qa$|superni/task(1419|1420|1421|1422|1423|1424|1678)_mathqa_|superni/task750_aqua_)",
+   "select": {
+    "problems": "all",
+    "rank": "file"
+   },
+   "nodes": "keep",
+   "label": "as_is",
+   "licence": {
+    "from": "v5"
+   },
+   "gates": [
+    "13gram"
+   ],
+   "own_eval": [
+    "kk_",
+    "val_kk",
+    "diag_",
+    "xkk",
+    "rule_",
+    "claims_",
+    "policy_",
+    "jl_",
+    "chain_",
+    "sharc_dev",
+    "val_facts"
+   ],
+   "val": {
+    "file": "data/student_v5/val.jsonl"
+   }
+  }
+ ]
+}

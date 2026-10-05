@@ -1,0 +1,171 @@
+{
+ "name": "v7_pilot_math_MA",
+ "tier": "lab",
+ "seed": 0,
+ "val": {
+  "mode": "sources"
+ },
+ "dedup": {
+  "near": 0.8,
+  "shingle": 5,
+  "perms": 64,
+  "bands": 16
+ },
+ "caps": {
+  "slice_share_chars": {
+   "M": 0.6
+  },
+  "gsm_share_of_math_problems": 0.26
+ },
+ "out": "data/student_v7_pilot_math_MA",
+ "description": "R1/R2 lane 2 (MA): the MS problems as finals only (subqs and node rows dropped; the GSM8K count held equal), token-matched to MS's math prompt characters with fresh numgen problems (ranks after MS's 5000)",
+ "plan": "notes/next_round/data_expansion/plan.md \u00a74 R1 lane 2, \u00a76.7 (MA = fresh problems, not more epochs)",
+ "sources": [
+  {
+   "name": "G20",
+   "slice": "G",
+   "comment": "plan \u00a74: the general replay every math arm carries = data/student_v5_20k minus its MathQA/AQuA rows (C6; task520_aquamuse is not AQuA). First in priority, so it is identical across MS/MA/MSgen/M0 (compare per_source.G20.kept_item_ids_md5)",
+   "train": "data/student_v5_20k/train.jsonl",
+   "exclude_source": "^(tasksource/math_qa$|superni/task(1419|1420|1421|1422|1423|1424|1678)_mathqa_|superni/task750_aqua_)",
+   "select": {
+    "problems": "all",
+    "rank": "file"
+   },
+   "nodes": "keep",
+   "label": "as_is",
+   "licence": {
+    "from": "v5"
+   },
+   "gates": [
+    "13gram"
+   ],
+   "own_eval": [
+    "kk_",
+    "val_kk",
+    "diag_",
+    "xkk",
+    "rule_",
+    "claims_",
+    "policy_",
+    "jl_",
+    "chain_",
+    "sharc_dev",
+    "val_facts"
+   ],
+   "val": {
+    "file": "data/student_v5/val.jsonl"
+   }
+  },
+  {
+   "name": "numgen",
+   "slice": "M",
+   "dedup_group": "numgen",
+   "rank_key": "numgen",
+   "comment": "plan \u00a71.1 M1: own numeric-chain generator, program labels and nodes (N1/N2/N3 yes/no subqs; N1/N4 node rows)",
+   "train": "data/student_numgen/train.jsonl",
+   "node_rows": "data/student_numgen/nodes_train.jsonl",
+   "node_link": "node_of",
+   "family_key": "frame",
+   "select": {
+    "problems": 5000,
+    "rank": "hash",
+    "offset": 0
+   },
+   "nodes": "drop",
+   "max_node_rows_per_problem": 2,
+   "label": "program",
+   "label_basis": "program",
+   "node_basis": "program",
+   "licence": {
+    "class": "PERM",
+    "text": "own generator (src/cotdistill/numgen.py)"
+   },
+   "gates": [
+    "13gram",
+    "masked"
+   ],
+   "own_eval": [
+    "numgen_"
+   ],
+   "math": true,
+   "gsm_derived": false,
+   "val": {
+    "file": "data/student_numgen/val.jsonl",
+    "problems": 400
+   }
+  },
+  {
+   "name": "gsm8k_soc",
+   "slice": "M",
+   "comment": "plan \u00a71.1 M3 (owner fork O1): GSM8K-train socratic steps, gold finals, program-verified step nodes; <=15% of math problems via pool_rank < 1700 (lab)",
+   "train": "data/student_gsm8k_soc/train.jsonl",
+   "problem_key": "problem_id",
+   "node_link": "problem_id",
+   "family_key": "group",
+   "select": {
+    "problems": 1700,
+    "rank": "pool_rank"
+   },
+   "nodes": "drop",
+   "label": "gold",
+   "label_basis": "gold",
+   "node_basis": "program",
+   "licence": {
+    "from": "row"
+   },
+   "gates": [
+    "13gram",
+    "masked"
+   ],
+   "own_eval": [],
+   "math": true,
+   "gsm_derived": true,
+   "val": {
+    "file": "data/student_gsm8k_soc/val.jsonl"
+   }
+  },
+  {
+   "name": "numgen_fresh",
+   "slice": "M",
+   "dedup_group": "numgen",
+   "rank_key": "numgen",
+   "comment": "plan \u00a71.1 M1: own numeric-chain generator, program labels and nodes (N1/N2/N3 yes/no subqs; N1/N4 node rows)",
+   "train": "data/student_numgen/train.jsonl",
+   "node_rows": "data/student_numgen/nodes_train.jsonl",
+   "node_link": "node_of",
+   "family_key": "frame",
+   "select": {
+    "rank": "hash",
+    "offset": 5000,
+    "fill": true,
+    "skip_selected": true
+   },
+   "nodes": "drop",
+   "max_node_rows_per_problem": 2,
+   "label": "program",
+   "label_basis": "program",
+   "node_basis": "program",
+   "licence": {
+    "class": "PERM",
+    "text": "own generator (src/cotdistill/numgen.py)"
+   },
+   "gates": [
+    "13gram",
+    "masked"
+   ],
+   "own_eval": [
+    "numgen_"
+   ],
+   "math": true,
+   "gsm_derived": false
+  }
+ ],
+ "fill": {
+  "source": "numgen_fresh",
+  "target": "math_chars",
+  "reference": "data/student_v7_pilot_math_MS",
+  "min_ratio": 0.95
+ },
+ "caps_comment": "lab arms: G20 is 20k rows, so M is above the release rule (M <= .25 of stage-1 mass, plan \u00a76.4) by design; these caps only flag gross errors. GSM8K <= 15% of math problems is the plan's figure for the full M slice (12k problems); with only M1+M3 built (6.7k) 1700 GSM problems are ~25.4% (cap .26)",
+ "fill_comment": "plan \u00a74/\u00a76.7: MA must match MS's math prompt characters with fresh numgen problems (valid when MS and MA are trained with the same --grouped-aux K). The 8,000-problem numgen pool leaves 3,000 fresh problems after MS's 5,000, i.e. 51% of the target; about 11.5k fresh problems (a pool of about 16.5k) are needed. min_ratio makes the build refuse until the pool is regenerated (--allow-short-fill reproduces the short pilot build)"
+}
