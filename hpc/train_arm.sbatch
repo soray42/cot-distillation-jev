@@ -69,8 +69,20 @@
 # before the checkpoint is deleted. With STOPH or CKPTMIN every arm must be a full-tree arm, and the smoke stage also
 # runs a checkpoint round trip (stop after update 1, resume) on the first arm. No relay resubmits after exit 3 yet
 # (plan §7: same job again with --dependency=afterany); SLURM records the job as FAILED with exit code 3.
-# Relay scripts: TOKBUDGET STOPH CKPTMIN CKPTONE belong in the reset list (relay44's reset() lacks OPTIM too), so a
-# 4B setting never leaks into the next submission.
+# Tree Forcing (notes/next_round/tree_forcing/impl.md; DATA=data/student_v3sl, built by scripts/build_local_kk.py): every
+# K&K node every epoch (--tree-cap 0), only K&K items get node views (--tree-sources knights_knaves; the other families
+# train their final question only), the final view unchanged. TFL = each node asked WITHOUT the problem: preamble + its
+# parents' results (parse nodes: their statement line) · TFA = the same with every ancestor's result, shallow to deep ·
+# TFLM = structure control: as many matched non-parent results (post-audit matching; nodes without a same-class
+# replacement keep their true parents in both arms) · GFP = every node with the full problem and no stated results.
+# NODEW=w gives every node view weight w (--tree-node-weight; default: the per-problem split, aux 1.0 / views, about
+# .023 per K&K node); set it to the same value for all four arms of a comparison. LOCAL_EVAL=path scores the
+# local-step probe (--eval-local: every K&K node in its local view, eval key local_kk); when unset it is
+# $DATA/val.jsonl if that file has local fields (any arm), and LOCAL_EVAL=0 turns it off.
+# NODEW also names the run dir (-nw<w> after the arm), so a dose variant never shares a dir with the default run;
+# relays that compute the run dir as their skip key must add the same suffix.
+# Relay scripts: TOKBUDGET STOPH CKPTMIN CKPTONE NODEW LOCAL_EVAL belong in the reset list (relay44's reset() lacks OPTIM
+# too), so a 4B or Tree Forcing setting never leaks into the next submission (le is internal, lower case).
 set -euo pipefail
 JOB_T0=$(date +%s)
 cd "$HOME/cotd"
@@ -135,6 +147,10 @@ arm_config() {           # sets F S T RLM DS for arm $1
     T1) F=teacher; S=cot;    T=cot; DX="--grouped-aux 2 --aux-kind tree --aux-weight 0.5" ;;     # tree: true parents
     T1S) F=teacher; S=cot;   T=cot; DX="--grouped-aux 2 --aux-kind tree_shuf --aux-weight 0.5" ;; # tree: rewired edges
     T2) F=teacher; S=cot;    T=cot; DX="--grouped-aux 2 --aux-kind tree --aux-weight 0.5 --fact-withdraw 0.75" ;;
+    TFL) F=teacher; S=cot;   T=cot; DX="--tree-full true --tree-view local --tree-cap 0 --tree-sources knights_knaves" ;;      # Tree Forcing: parents only
+    TFA) F=teacher; S=cot;   T=cot; DX="--tree-full true --tree-view ancestors --tree-cap 0 --tree-sources knights_knaves" ;;  # all ancestors
+    TFLM) F=teacher; S=cot;  T=cot; DX="--tree-full matched --tree-view local --tree-cap 0 --tree-sources knights_knaves" ;;  # matched non-parents
+    GFP) F=teacher; S=cot;   T=cot; DX="--tree-full plain --tree-view problem --tree-cap 0 --tree-sources knights_knaves" ;;   # every node, full problem
     *) echo "unknown ARM $1"; return 1 ;;
   esac
 }
@@ -150,12 +166,18 @@ train() {                # train <arm> <train.jsonl> <evals> <out> [extra args..
     ${SUBQK:+--subq-k "$SUBQK"} ${SUBQW:+--subq-weight "$SUBQW"} ${DS:+--depth-stages "$DS" --stage-k "${STAGEK:-1}"} \
     ${SUBQF:+--subq-frac "$SUBQF"} ${LORA:+--lora-r "$LORA"} ${DUMPL:+--dump-layers "$DUMPL"} $DX ${XARGS:-} \
     ${EVALAT:+--eval-at "$EVALAT"} ${EVALMID:+--eval-mid "$EVALMID"} ${ORDERSEED:+--order-seed "$ORDERSEED"} \
-    ${LSMOOTH:+--label-smoothing "$LSMOOTH"} ${TOKBUDGET:+--token-budget "$TOKBUDGET"} --code-commit "$COMMIT" "$@"
+    ${LSMOOTH:+--label-smoothing "$LSMOOTH"} ${TOKBUDGET:+--token-budget "$TOKBUDGET"} ${NODEW:+--tree-node-weight "$NODEW"} \
+    ${le:+--eval-local "$le"} --code-commit "$COMMIT" "$@"
 }
 stop_h() {               # hours left until STOPH hours after the job start (at least 0.01)
   awk -v h="$STOPH" -v e="$(( $(date +%s) - JOB_T0 ))" 'BEGIN { r = h - e / 3600; printf "%.3f", (r < 0.01 ? 0.01 : r) }'
 }
 
+LOCAL_EVAL="${LOCAL_EVAL:-}"            # the local-step probe (--eval-local) needs data with local fields
+if [ -z "$LOCAL_EVAL" ] && grep -q -m 1 '"local_preamble"' "$DATA/val.jsonl"; then LOCAL_EVAL="$DATA/val.jsonl"; fi
+[ "$LOCAL_EVAL" = 0 ] && LOCAL_EVAL=
+[ -z "$LOCAL_EVAL" ] || [ -f "$LOCAL_EVAL" ] || { echo "missing LOCAL_EVAL file $LOCAL_EVAL"; exit 1; }
+echo "local-step probe: ${LOCAL_EVAL:-off}"
 ARMS="${ARMS:-${ARM:-}}"
 [ -n "$ARMS${JEFF:-}${EVAL_BASE:-}${BASE_SUBQ:-}" ] || { echo "set ARMS (or JEFF/EVAL_BASE/BASE_SUBQ for an eval-only job)"; exit 1; }
 
@@ -163,15 +185,17 @@ echo "=== smoke stage $(date +%T)"
 SM=$(mktemp -d)
 head -n 16 "$DATA/train.jsonl" > "$SM/train.jsonl"
 head -n 20 data/eval/kk_heldout.jsonl > "$SM/eval.jsonl"
+[ -z "$LOCAL_EVAL" ] || grep -m 2 '"local_preamble"' "$LOCAL_EVAL" > "$SM/local.jsonl" || true   # no local fields: empty probe
 [ -z "${CKPTONE:-}" ] || [ -n "${STOPH:-}${CKPTMIN:-}" ] || { echo "CKPTONE needs STOPH or CKPTMIN"; exit 1; }
 for ARM in $ARMS; do
   if [ -n "${STOPH:-}${CKPTMIN:-}${TOKBUDGET:-}" ]; then   # resume and token budgets: full-tree loop only
     arm_config "$ARM"
     [[ " $DX ${XARGS:-} " == *" --tree-full "* ]] || { echo "SMOKE FAILED $ARM: STOPH/CKPTMIN/TOKBUDGET need a full-tree arm"; exit 1; }
   fi
-  SUBQ_EXTRA= train "$ARM" "$SM/train.jsonl" "smoke=$SM/eval.jsonl" "$SM/out-$ARM" --epochs 0.5 --micro-bs 2 --grad-accum 2 \
+  SUBQ_EXTRA= le=${LOCAL_EVAL:+$SM/local.jsonl} train "$ARM" "$SM/train.jsonl" "smoke=$SM/eval.jsonl" "$SM/out-$ARM" --epochs 0.5 --micro-bs 2 --grad-accum 2 \
     > "$SM/$ARM.log" 2>&1 || { echo "SMOKE FAILED $ARM"; tail -n 30 "$SM/$ARM.log"; exit 1; }
   [ -n "${DRY_RUN:-}" ] || grep -q '^smoke {' "$SM/$ARM.log" || { echo "SMOKE FAILED $ARM (no eval line)"; tail -n 30 "$SM/$ARM.log"; exit 1; }
+  [ -n "${DRY_RUN:-}" ] || [ ! -s "$SM/local.jsonl" ] || grep -q '^local_kk' "$SM/$ARM.log" || { echo "SMOKE FAILED $ARM (no local_kk line)"; tail -n 30 "$SM/$ARM.log"; exit 1; }
   echo "smoke ok $ARM"
 done
 if [ -n "${STOPH:-}${CKPTMIN:-}" ]; then   # checkpoint round trip on the first arm: planned stop after update 1, resume
@@ -218,13 +242,13 @@ if [ -n "${EVAL_BASE:-}" ]; then          # untrained backbone control (Jeff nee
 fi
 for ARM in $ARMS; do
   SF=$(sed -n 's/.*--subq-filter[ =]\([a-z]*\).*/\1/p' <<< "${XARGS:-}")               # XARGS chain filter -> -sf<f>
-  OUT="runs/${ARM}${SF:+-sf$SF}${TAG:+-$TAG}-$(basename "$MODEL")-$(basename "$DATA")-s${SEED}"   # TAG names recipe variants
+  OUT="runs/${ARM}${SF:+-sf$SF}${NODEW:+-nw$NODEW}${TAG:+-$TAG}-$(basename "$MODEL")-$(basename "$DATA")-s${SEED}"   # TAG names recipe variants; NODEW -> -nw<w>
   if [ -n "${STOPH:-}${CKPTMIN:-}" ] && [ -f "$OUT/metrics.json" ] && [ ! -d "$OUT/ckpt" ]; then
     echo "=== $ARM: $OUT finished in an earlier job, skipped"; continue
   fi
   echo "=== $ARM -> $OUT  $(date +%T)"
   rc=0
-  train "$ARM" "$DATA/train.jsonl" "$EVALS" "$OUT" --epochs "${EPOCHS:-2}" --micro-bs "${MBS:-2}" \
+  le=$LOCAL_EVAL train "$ARM" "$DATA/train.jsonl" "$EVALS" "$OUT" --epochs "${EPOCHS:-2}" --micro-bs "${MBS:-2}" \
     --grad-accum "${GA:-16}" ${SAVE:+--save} ${STOPH:+--stop-after-h "$(stop_h)"} ${CKPTMIN:+--ckpt-every-min "$CKPTMIN"} \
     ${CKPTONE:+--ckpt-single} || rc=$?
   if [ "$rc" = 3 ]; then

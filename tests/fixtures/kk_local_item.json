@@ -1,0 +1,461 @@
+{
+"item_id": "kk-104-00011",
+"source": "knights_knaves",
+"prompt": "On an island, knights always tell the truth and knaves always lie. Each of the 4 inhabitants below is either a knight or a knave.\n\n- Paul says: \"Bob is a knight if and only if Carol is a knight.\"\n- Carol says: \"Paul is a knight.\"\n- Bob says: \"Henry is a knave if and only if Carol is a knave.\"\n- Henry says: \"Bob is a knave.\"\n\nQuestion: Who is a knight and who is a knave?\nOptions:\nA) Paul: knight, Carol: knight, Bob: knight, Henry: knave\nB) Paul: knight, Carol: knight, Bob: knave, Henry: knight\nC) Paul: knave, Carol: knight, Bob: knave, Henry: knight\nD) Paul: knave, Carol: knight, Bob: knave, Henry: knave\nE) Paul: knave, Carol: knave, Bob: knight, Henry: knave\nF) Paul: knight, Carol: knave, Bob: knight, Henry: knave",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E",
+"F"
+],
+"gold_label": "E",
+"teacher": {
+"A": 4.1118700466300393e-10,
+"B": 1.3560090061686149e-09,
+"C": 2.385271428127116e-10,
+"D": 1.6099495308604918e-09,
+"E": 0.9999999942874382,
+"F": 2.096889028215123e-09
+},
+"depth": 4,
+"subqs": [
+{
+"question": "Is Paul a knave exactly when \"Bob is a knight if and only if Carol is a knight.\" is true?",
+"opposite": "Is Paul a knight exactly when \"Bob is a knight if and only if Carol is a knight.\" is true?",
+"p_cot": 0.0,
+"p_fresh": null,
+"truth": false,
+"type": "parse",
+"depends_on": [],
+"id": "n4",
+"initial": null,
+"status": "direct",
+"node_depth": 0,
+"source_tree": "solver",
+"local_lines": [
+"- Paul says: \"Bob is a knight if and only if Carol is a knight.\""
+]
+},
+{
+"question": "Is Carol a knave exactly when \"Paul is a knight.\" is true?",
+"opposite": "Is Carol a knight exactly when \"Paul is a knight.\" is true?",
+"p_cot": 0.0,
+"p_fresh": null,
+"truth": false,
+"type": "parse",
+"depends_on": [],
+"id": "n5",
+"initial": null,
+"status": "direct",
+"node_depth": 0,
+"source_tree": "solver",
+"local_lines": [
+"- Carol says: \"Paul is a knight.\""
+]
+},
+{
+"question": "Is Bob a knight exactly when \"Henry is a knave if and only if Carol is a knave.\" is true?",
+"opposite": "Is Bob a knave exactly when \"Henry is a knave if and only if Carol is a knave.\" is true?",
+"p_cot": 1.0,
+"p_fresh": null,
+"truth": true,
+"type": "parse",
+"depends_on": [],
+"id": "n6",
+"initial": null,
+"status": "direct",
+"node_depth": 0,
+"source_tree": "solver",
+"local_lines": [
+"- Bob says: \"Henry is a knave if and only if Carol is a knave.\""
+]
+},
+{
+"question": "Is Henry a knight exactly when \"Bob is a knave.\" is true?",
+"opposite": "Is Henry a knave exactly when \"Bob is a knave.\" is true?",
+"p_cot": 1.0,
+"p_fresh": null,
+"truth": true,
+"type": "parse",
+"depends_on": [],
+"id": "n7",
+"initial": null,
+"status": "direct",
+"node_depth": 0,
+"source_tree": "solver",
+"local_lines": [
+"- Henry says: \"Bob is a knave.\""
+]
+},
+{
+"question": "If Carol were a knight, would Carol's role require the statement \"Paul is a knight.\" to be false?",
+"opposite": "If Carol were a knight, would Carol's role require the statement \"Paul is a knight.\" to be true?",
+"p_cot": 0.0,
+"p_fresh": null,
+"truth": false,
+"type": "case",
+"depends_on": [
+"n5"
+],
+"id": "n8",
+"initial": null,
+"status": "direct",
+"node_depth": 1,
+"source_tree": "solver",
+"local_trivial": true
+},
+{
+"question": "If Carol were a knight, would Paul be a knight?",
+"opposite": "If Carol were a knight, would Paul be a knave?",
+"p_cot": 1.0,
+"p_fresh": null,
+"truth": true,
+"type": "case",
+"depends_on": [
+"n5",
+"n8"
+],
+"id": "n9",
+"initial": null,
+"status": "direct",
+"node_depth": 2,
+"source_tree": "solver",
+"local_trivial": false
+},
+{
+"question": "If Carol were a knight, would Paul's role require the statement \"Bob is a knight if and only if Carol is a knight.\" to be false?",
+"opposite": "If Carol were a knight, would Paul's role require the statement \"Bob is a knight if and only if Carol is a knight.\" to be true?",
+"p_cot": 0.0,
+"p_fresh": null,
+"truth": false,
+"type": "case",
+"depends_on": [
+"n4",
+"n9"
+],
+"id": "n10",
+"initial": null,
+"status": "direct",
+"node_depth": 3,
+"source_tree": "solver",
+"local_trivial": false
+},
+{
+"question": "If Carol were a knight, would Bob be a knight?",
+"opposite": "If Carol were a knight, would Bob be a knave?",
+"p_cot": 1.0,
+"p_fresh": null,
+"truth": true,
+"type": "case",
+"depends_on": [
+"n4",
+"n10"
+],
+"id": "n11",
+"initial": null,
+"status": "direct",
+"node_depth": 4,
+"source_tree": "solver",
+"local_trivial": false
+},
+{
+"question": "If Carol were a knight, would Bob's role require the statement \"Henry is a knave if and only if Carol is a knave.\" to be false?",
+"opposite": "If Carol were a knight, would Bob's role require the statement \"Henry is a knave if and only if Carol is a knave.\" to be true?",
+"p_cot": 0.0,
+"p_fresh": null,
+"truth": false,
+"type": "case",
+"depends_on": [
+"n6",
+"n11"
+],
+"id": "n12",
+"initial": null,
+"status": "direct",
+"node_depth": 5,
+"source_tree": "solver",
+"local_trivial": false
+},
+{
+"question": "If Carol were a knight, would Henry be a knave?",
+"opposite": "If Carol were a knight, would Henry be a knight?",
+"p_cot": 0.0,
+"p_fresh": null,
+"truth": false,
+"type": "case",
+"depends_on": [
+"n6",
+"n12"
+],
+"id": "n13",
+"initial": null,
+"status": "direct",
+"node_depth": 6,
+"source_tree": "solver",
+"local_trivial": false
+},
+{
+"question": "If Carol were a knight, would Henry's role require the statement \"Bob is a knave.\" to be false?",
+"opposite": "If Carol were a knight, would Henry's role require the statement \"Bob is a knave.\" to be true?",
+"p_cot": 0.0,
+"p_fresh": null,
+"truth": false,
+"type": "case",
+"depends_on": [
+"n7",
+"n13"
+],
+"id": "n14",
+"initial": null,
+"status": "direct",
+"node_depth": 7,
+"source_tree": "solver",
+"local_trivial": false
+},
+{
+"question": "If Carol were a knight, would the statement by Henry, \"Bob is a knave.\", be false?",
+"opposite": "If Carol were a knight, would the statement by Henry, \"Bob is a knave.\", be true?",
+"p_cot": 1.0,
+"p_fresh": null,
+"truth": true,
+"type": "case",
+"depends_on": [
+"n7",
+"n11"
+],
+"id": "n15",
+"initial": null,
+"status": "direct",
+"node_depth": 5,
+"source_tree": "solver",
+"local_trivial": false
+},
+{
+"question": "If Carol were a knight, would Henry's statement contradict the rule that knights tell the truth and knaves lie?",
+"opposite": "If Carol were a knight, would Henry's statement obey the rule that knights tell the truth and knaves lie?",
+"p_cot": 1.0,
+"p_fresh": null,
+"truth": true,
+"type": "case",
+"depends_on": [
+"n7",
+"n14",
+"n15"
+],
+"id": "n16",
+"initial": null,
+"status": "direct",
+"node_depth": 8,
+"source_tree": "solver",
+"local_trivial": false
+},
+{
+"question": "Is Carol a knave?",
+"opposite": "Is Carol a knight?",
+"p_cot": 1.0,
+"p_fresh": null,
+"truth": true,
+"type": "derive",
+"depends_on": [
+"n16"
+],
+"id": "n17",
+"initial": null,
+"status": "direct",
+"node_depth": 9,
+"source_tree": "solver",
+"local_trivial": false
+},
+{
+"question": "Does Carol's role require the statement \"Paul is a knight.\" to be true?",
+"opposite": "Does Carol's role require the statement \"Paul is a knight.\" to be false?",
+"p_cot": 0.0,
+"p_fresh": null,
+"truth": false,
+"type": "derive",
+"depends_on": [
+"n5",
+"n17"
+],
+"id": "n18",
+"initial": null,
+"status": "direct",
+"node_depth": 10,
+"source_tree": "solver",
+"local_trivial": false
+},
+{
+"question": "Is Paul a knave?",
+"opposite": "Is Paul a knight?",
+"p_cot": 1.0,
+"p_fresh": null,
+"truth": true,
+"type": "derive",
+"depends_on": [
+"n5",
+"n18"
+],
+"id": "n19",
+"initial": null,
+"status": "direct",
+"node_depth": 11,
+"source_tree": "solver",
+"local_trivial": false
+},
+{
+"question": "Does Paul's role require the statement \"Bob is a knight if and only if Carol is a knight.\" to be true?",
+"opposite": "Does Paul's role require the statement \"Bob is a knight if and only if Carol is a knight.\" to be false?",
+"p_cot": 0.0,
+"p_fresh": null,
+"truth": false,
+"type": "derive",
+"depends_on": [
+"n4",
+"n19"
+],
+"id": "n20",
+"initial": null,
+"status": "direct",
+"node_depth": 12,
+"source_tree": "solver",
+"local_trivial": false
+},
+{
+"question": "Is Bob a knave?",
+"opposite": "Is Bob a knight?",
+"p_cot": 0.0,
+"p_fresh": null,
+"truth": false,
+"type": "derive",
+"depends_on": [
+"n4",
+"n20",
+"n17"
+],
+"id": "n21",
+"initial": null,
+"status": "direct",
+"node_depth": 13,
+"source_tree": "solver",
+"local_trivial": false
+},
+{
+"question": "Does Bob's role require the statement \"Henry is a knave if and only if Carol is a knave.\" to be true?",
+"opposite": "Does Bob's role require the statement \"Henry is a knave if and only if Carol is a knave.\" to be false?",
+"p_cot": 1.0,
+"p_fresh": null,
+"truth": true,
+"type": "derive",
+"depends_on": [
+"n6",
+"n21"
+],
+"id": "n22",
+"initial": null,
+"status": "direct",
+"node_depth": 14,
+"source_tree": "solver",
+"local_trivial": false
+},
+{
+"question": "Is Henry a knave?",
+"opposite": "Is Henry a knight?",
+"p_cot": 1.0,
+"p_fresh": null,
+"truth": true,
+"type": "derive",
+"depends_on": [
+"n6",
+"n22",
+"n17"
+],
+"id": "n23",
+"initial": null,
+"status": "direct",
+"node_depth": 15,
+"source_tree": "solver",
+"local_trivial": false
+},
+{
+"question": "Does Henry's role require the statement \"Bob is a knave.\" to be true?",
+"opposite": "Does Henry's role require the statement \"Bob is a knave.\" to be false?",
+"p_cot": 0.0,
+"p_fresh": null,
+"truth": false,
+"type": "derive",
+"depends_on": [
+"n7",
+"n23"
+],
+"id": "n24",
+"initial": null,
+"status": "direct",
+"node_depth": 16,
+"source_tree": "solver",
+"local_trivial": false
+}
+],
+"random_subqs": [
+{
+"question": "Does Paul say Bob is a knight if and only if Carol is a knight?",
+"p_fresh": 0.9999959625364003
+},
+{
+"question": "Does Carol say Bob is a knight?",
+"p_fresh": 2.6919320726196348e-05
+},
+{
+"question": "Does Bob say Henry is a knave if and only if Carol is a knave?",
+"p_fresh": 0.9999822331471476
+},
+{
+"question": "Does Henry say Bob is a knight?",
+"p_fresh": 2.0850245320932414e-06
+},
+{
+"question": "Does Paul say Bob is a knave if and only if Carol is a knave?",
+"p_fresh": 0.014074658809753178
+},
+{
+"question": "Does Bob say Henry is a knight if and only if Carol is a knave?",
+"p_fresh": 0.06718862171726352
+},
+{
+"question": "Does Henry say Carol is a knave?",
+"p_fresh": 0.001168207378483676
+},
+{
+"question": "Does Carol say Paul is a knave?",
+"p_fresh": 2.026217914349008e-06
+},
+{
+"question": "Is the statement attributed to Bob about Henry and Carol an if-and-only-if statement?",
+"p_fresh": 0.9999978827267757
+},
+{
+"question": "Is the statement attributed to Paul about Bob and Carol an if-and-only-if statement?",
+"p_fresh": 0.9999968215361075
+},
+{
+"question": "Does Paul's statement mention Henry?",
+"p_fresh": 7.189758071307965e-07
+},
+{
+"question": "Does Bob's statement mention Paul?",
+"p_fresh": 1.988185335888253e-06
+},
+{
+"question": "Does Paul say: 'Bob is a knight if and only if Carol is a knave'?",
+"p_fresh": 5.169487682192084e-06
+}
+],
+"n_inconsistent_dropped": 2,
+"tree_fix": true,
+"n_leak_dropped": 0,
+"augment": null,
+"has_tree": true,
+"tree_source": "solver_kk_v3f",
+"local_preamble": "On an island, knights always tell the truth and knaves always lie. Each of the 4 inhabitants below is either a knight or a knave."
+}

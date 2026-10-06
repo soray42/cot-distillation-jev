@@ -18,8 +18,8 @@ import torch.nn.functional as F
 import torch.utils.checkpoint
 
 from .metrics import calibration  # noqa: F401  (re-exported for scripts)
-from .treeplan import (_descendants, _fact_line, _node_p, answer_component, full_tree_plan,  # noqa: F401
-                       node_depths, subq_keep)
+from .treeplan import (LOCAL_HEADER, _descendants, _fact_line, _node_p, ancestors, answer_component,  # noqa: F401
+                       full_tree_plan, is_local_leaf, local_context, node_depths, subq_keep, view_leak)
 
 SUBQ_TEMPLATE = "{problem}\n\nIntermediate question: {question}\nOptions:\nA) {a}\nB) {b}\nAnswer:"
 FINAL_TEMPLATE = "{problem}\n\nAnswer:"
@@ -280,7 +280,9 @@ def _mc_node_view(item: dict, sq: dict, lines: list[str], tgt: str, rng: random.
 
 def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10, aux_total: float = 1.0,
                     final: str = "teacher", subq_target: str = "cot", permute_final: float = 0.0,
-                    node_format: str = "yesno", eligible_only: bool = False, subq_filter: str = "all") -> list[Example]:
+                    node_format: str = "yesno", eligible_only: bool = False, subq_filter: str = "all",
+                    view: str = "problem", sources: set | None = None, node_weight: float = 0.0,
+                    stats: dict | None = None) -> list[Example]:
     """One problem with ALL its tree nodes (up to `cap`) instead of k sampled ones: [final] + one view per node.
     mode "true": eligible nodes are asked with their parents' results stated; "matched": with the same number of
     depth-matched non-parent results (see full_tree_plan); "plain": every node asked without facts; "placebo": the
@@ -291,11 +293,21 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
     matched); the plan, cap included, is drawn first as before, so the asked nodes are the same in every mode. An item
     with no eligible view trains its final question only. With eligible_only, plain views draw from rng as if they
     stated the parents' results, so GFE stays in lockstep with TFE/TFME (same node subsample, same option order).
-    subq_filter restricts the asked nodes (full_tree_plan); the control mode is not filtered."""
+    subq_filter restricts the asked nodes (full_tree_plan); the control mode is not filtered.
+    cap 0 asks every node. sources (a set of item sources, None = all): items of other sources train their final
+    question only. node_weight > 0 gives every node view that weight (times the item weight) instead of the
+    per-problem split aux_total / views. view "local" / "ancestors" (Tree Forcing): see _local_views; "problem" (the
+    default) is the behaviour above."""
     fin = [e for e in build_examples(item, final=final, subq="none", subq_target=subq_target, lambda_sub=0.0, rng=rng,
                                      permute_final=permute_final) if e.kind == "final"]
     if not fin:
         return []
+    if sources is not None and item.get("source") not in sources:
+        return fin
+    if view != "problem":
+        return fin + _local_views(item, mode=mode, view=view, rng=rng, cap=cap, aux_total=aux_total,
+                                  subq_target=subq_target, node_format=node_format, eligible_only=eligible_only,
+                                  subq_filter=subq_filter, node_weight=node_weight, stats=stats)
     wi = item.get("weight", 1.0)
     views = []
     if eligible_only and mode == "control":
@@ -314,7 +326,10 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
             facts = {"true": e["parents"], "matched": e["matched"]}.get(mode, [])
             views.append((e["node"], [by[j] for j in facts], subq_target, len(e["parents"])))
     out = list(fin)
-    w = 0.0 if mode == "placebo" else aux_total / max(1, len(views))
+    w = 0.0 if mode == "placebo" else (node_weight or aux_total / max(1, len(views)))
+    if stats is not None:
+        stats["items_with_views"] = stats.get("items_with_views", 0) + bool(views)
+        stats["views"] = stats.get("views", 0) + len(views)
     for sq, facts, tgt, k in views:
         lines = [_fact_line(x) for x in facts]
         rng.shuffle(lines)
@@ -330,6 +345,73 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
         a, b = ("Yes", "No") if yes_first else ("No", "Yes")
         out.append(Example(SUBQ_TEMPLATE.format(problem=problem, question=sq["question"], a=a, b=b), ["A", "B"],
                            _soft(_node_p(sq, tgt), yes_first), w * wi, "subq", item["item_id"]))
+    return out
+
+
+def _local_views(item: dict, *, mode: str, view: str, rng: random.Random, cap: int, aux_total: float,
+                 subq_target: str, node_format: str, eligible_only: bool, subq_filter: str, node_weight: float,
+                 stats: dict | None) -> list[Example]:
+    """Tree Forcing node views WITHOUT the original problem (local_context): the item's preamble, then
+    - parse nodes (local_lines): the statement line(s) they read, in every mode;
+    - other nodes, view "local": mode "true" = the results of the node's parents (its depends_on; every parent of a
+      solver-tree node is sufficient, scripts/build_local_kk.py), mode "matched" = as many matched non-parent results
+      (full_tree_plan's selection, post-audit rules) where the plan finds them, else the true parents (the view is
+      then the same in both modes; counted as matched_frozen), so the two modes state the same number of results in
+      every view and draw rng in lockstep;
+    - other nodes, view "ancestors" (mode "true" only): the results of every transitive ancestor, shallow to deep.
+    Views that would state the final answer (view_leak) are dropped and counted; so are non-leaf nodes without
+    parents or with a parent whose result is not confident (nothing sufficient to state). The node is then asked as
+    in the problem-view arms (yes/no order drawn from rng, the same soft target). Weight: node_weight, else
+    aux_total / views (the full-tree convention)."""
+    if mode not in ("true", "matched") or (view == "ancestors" and mode != "true") or view not in ("local", "ancestors"):
+        raise ValueError(f"--tree-view {view} is implemented for --tree-full true (and matched with the local view)")
+    if eligible_only or node_format != "yesno":
+        raise ValueError("--tree-view local/ancestors does not combine with --tree-eligible-only / --node-format mc")
+    st = stats if stats is not None else {}
+    bump = lambda k, n=1: st.__setitem__(k, st.get(k, 0) + n)
+    nodes = [sq for sq in item.get("subqs", []) if "id" in sq]
+    by = {sq["id"]: sq for sq in nodes}
+    depth = ({i: by[i]["node_depth"] for i in by} if all("node_depth" in sq for sq in nodes) else node_depths(nodes))
+    anc = ancestors(nodes) if view == "ancestors" else None
+    views = []
+    for e in full_tree_plan(item, cap=cap, rng=rng, subq_target=subq_target, subq_filter=subq_filter):
+        sq = e["node"]
+        if is_local_leaf(sq):
+            stated = []
+        else:
+            par = [x for x in (sq.get("depends_on") or []) if x in by and x != sq["id"]]
+            if not par:
+                bump("dropped_no_parents")
+                continue
+            if view == "ancestors":
+                ids = sorted(anc[sq["id"]] - {sq["id"]})
+            elif mode == "matched" and e["parents"]:
+                ids = e["matched"]
+            else:
+                ids = par
+                if mode == "matched":
+                    bump("matched_frozen")
+            stated = [by[j] for j in ids]
+            if not all(_fact_line(x) for x in stated):
+                bump("dropped_unconfident_parent")
+                continue
+        leak = view_leak(item, sq, stated)
+        if leak:
+            bump(f"dropped_leak_{leak}")
+            continue
+        views.append((sq, stated))
+    bump("items_with_views", bool(views))
+    bump("views", len(views))
+    bump("leaf_views", sum(is_local_leaf(sq) for sq, _ in views))
+    bump("stated_lines", sum(len(x) for _, x in views))
+    w = (node_weight or aux_total / max(1, len(views))) * item.get("weight", 1.0)
+    out = []
+    for sq, stated in views:
+        ctx = local_context(item, sq, stated, depth=depth, rng=rng, order="depth" if view == "ancestors" else "shuffle")
+        yes_first = rng.random() < 0.5
+        a, b = ("Yes", "No") if yes_first else ("No", "Yes")
+        out.append(Example(SUBQ_TEMPLATE.format(problem=ctx, question=sq["question"], a=a, b=b), ["A", "B"],
+                           _soft(_node_p(sq, subq_target), yes_first), w, "subq", item["item_id"]))
     return out
 
 
@@ -745,5 +827,88 @@ def evaluate_subq(model, tok, items: list[dict], max_len: int, bs: int, cache: d
         for g in ("chain", "chain_top", "chain_item"):
             if g in m:
                 groups.setdefault(f"cot/{m[g]}", []).append(ok)
+    metrics = {g: {"n": len(v), "acc": sum(v) / len(v)} for g, v in sorted(groups.items())}
+    return metrics, preds
+
+def local_eval_examples(items: list[dict], *, view: str = "local", seed: int = 0) -> tuple[list[Example], list[dict]]:
+    """The held-out local-step probe: every node of the items that carry local fields (K&K in data/student_v3sl),
+    asked in its local view with its TRUE parents' results (view "local") or all ancestors' results ("ancestors"),
+    no problem text; target = program truth. Leaf (parse) nodes show their statement line(s). Views that would state
+    the final answer (view_leak) are skipped, as in training."""
+    rng = random.Random(seed)
+    exs, meta = [], []
+    for it in items:
+        if it.get("local_preamble") is None:
+            continue
+        nodes = [sq for sq in it.get("subqs", []) if "id" in sq]
+        by = {sq["id"]: sq for sq in nodes}
+        depth = ({i: by[i]["node_depth"] for i in by} if all("node_depth" in sq for sq in nodes) else node_depths(nodes))
+        anc = ancestors(nodes) if view == "ancestors" else None
+        for sq in nodes:
+            tgt = sq["truth"] if sq.get("truth") is not None else (None if sq.get("p_cot") is None else sq["p_cot"] > 0.5)
+            if tgt is None:
+                continue
+            if is_local_leaf(sq):
+                stated = []
+            else:
+                par = [x for x in (sq.get("depends_on") or []) if x in by and x != sq["id"]]
+                ids = sorted(anc[sq["id"]] - {sq["id"]}) if view == "ancestors" else par
+                stated = [by[j] for j in ids]
+                if not par or not all(_fact_line(x) for x in stated) or view_leak(it, sq, stated):
+                    continue
+            ctx = local_context(it, sq, stated, depth=depth, rng=rng, order="depth" if view == "ancestors" else "shuffle")
+            yes_first = rng.random() < 0.5
+            a, b = ("Yes", "No") if yes_first else ("No", "Yes")
+            exs.append(Example(SUBQ_TEMPLATE.format(problem=ctx, question=sq["question"], a=a, b=b), ["A", "B"],
+                               [0.5, 0.5], 1.0, "subq", it["item_id"]))
+            meta.append({"item_id": it["item_id"], "id": sq["id"], "type": sq.get("type") or "node",
+                         "depth": depth[sq["id"]], "n_stated": len(stated), "target": bool(tgt),
+                         "trivial": None if is_local_leaf(sq) else sq.get("local_trivial"),
+                         "yes_first": yes_first, "question": sq["question"]})
+    return exs, meta
+
+
+def _depth_bin(d: int) -> str:
+    for lo, hi in ((0, 0), (1, 1), (2, 2), (3, 4), (5, 8), (9, 16)):
+        if lo <= d <= hi:
+            return f"{lo}" if lo == hi else f"{lo}-{hi}"
+    return "17+"
+
+
+@torch.no_grad()
+def evaluate_local(model, tok, items: list[dict], max_len: int, bs: int, cache: dict, *, view: str = "local",
+                   seed: int = 0) -> tuple[dict, list[dict]]:
+    """Accuracy on local_eval_examples (does the student apply each local operator from its parents' results alone?),
+    overall and by node type, exact depth and depth bin, and for derived nodes split into those their own hypothesis
+    decides (derived_trivial, data field local_trivial) and those that need the stated results (derived_nontrivial,
+    the operator test proper). Yes/no order randomised per question."""
+    exs, meta = local_eval_examples(items, view=view, seed=seed)
+    was_training = model.training
+    model.eval()
+    dev = next(model.parameters()).device
+    order = sorted(range(len(exs)), key=lambda i: len(exs[i].text))
+    p_yes = [0.0] * len(exs)
+    for s in range(0, len(order), bs):
+        idx = order[s:s + bs]
+        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev.type == "cuda"):
+            zs = label_logits(model, tok, [exs[i] for i in idx], max_len, cache)
+        for i, z in zip(idx, zs):
+            pa = torch.softmax(z, -1)[0].item()
+            p_yes[i] = pa if meta[i]["yes_first"] else 1 - pa
+    if was_training:
+        model.train()
+    groups: dict[str, list[int]] = {}
+    preds = []
+    for m, py in zip(meta, p_yes):
+        ok = int((py > 0.5) == m["target"])
+        preds.append(dict(m, p_yes=py, correct=ok))
+        gs = ["all", f"type/{m['type']}", f"depth/{m['depth']}", f"depth_bin/{_depth_bin(m['depth'])}",
+              f"type_depth_bin/{m['type']}/{_depth_bin(m['depth'])}"]
+        if m["trivial"] is not None:     # derived nodes: decided by their own hypothesis, or needing stated results
+            gs.append("derived_trivial" if m["trivial"] else "derived_nontrivial")
+            if not m["trivial"]:
+                gs.append(f"nontrivial_depth_bin/{_depth_bin(m['depth'])}")
+        for g in gs:
+            groups.setdefault(g, []).append(ok)
     metrics = {g: {"n": len(v), "acc": sum(v) / len(v)} for g, v in sorted(groups.items())}
     return metrics, preds

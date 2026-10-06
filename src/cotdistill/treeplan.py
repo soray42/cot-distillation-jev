@@ -95,7 +95,7 @@ def full_tree_plan(item: dict, *, cap: int, rng: random.Random, subq_target: str
     asked = [sq for sq in nodes if _node_p(sq, subq_target) is not None]
     if subq_filter != "all":
         asked = [sq for sq in asked if subq_keep(sq, subq_filter)]
-    if len(asked) > cap:
+    if cap and len(asked) > cap:                # cap 0: no cap (every node)
         asked = rng.sample(asked, cap)
     if not nodes:
         return []
@@ -136,3 +136,75 @@ def full_tree_plan(item: dict, *, cap: int, rng: random.Random, subq_target: str
                     entry = {"node": sq, "parents": par, "matched": matched}
         plan.append(entry)
     return plan
+
+
+# ---- Local views (Tree Forcing, --tree-view local / ancestors) ----------------------------------------------------
+# A node asked WITHOUT the original problem: the item's preamble (K&K: the island rules and the head count, field
+# local_preamble of data/student_v3sl) and either the statement line(s) the node reads (parse nodes, field local_lines)
+# or the results of the nodes it depends on (its parents, or every ancestor), never the problem's other text or the
+# final question's options.
+LOCAL_HEADER = "Known results:"
+_KK_ROLE_RESULT = re.compile(r"^Is ([A-Z][a-z]+) a (knight|knave)\?$")
+
+
+def ancestors(nodes: list[dict]) -> dict[str, set]:
+    """Transitive dependencies of every node (ids of the item; unknown ids ignored)."""
+    by = {sq["id"]: sq for sq in nodes if "id" in sq}
+    out: dict[str, set] = {}
+    for i in by:
+        seen, todo = set(), [x for x in (by[i].get("depends_on") or []) if x in by]
+        while todo:
+            j = todo.pop()
+            if j not in seen:
+                seen.add(j)
+                todo += [x for x in (by[j].get("depends_on") or []) if x in by]
+        out[i] = seen
+    return out
+
+
+def is_local_leaf(sq: dict) -> bool:
+    """Nodes that read the problem text (local view: their statement lines) rather than other nodes' results."""
+    return bool(sq.get("local_lines"))
+
+
+def local_context(item: dict, sq: dict, stated: list[dict] | None, *, depth: dict | None = None,
+                  rng=None, order: str = "shuffle") -> str:
+    """The text above "Intermediate question:" in a local view: preamble, then the node's statement line(s) (parse
+    nodes; `stated` is ignored) or "Known results:" with one "Q: ... A: Yes/No" line per stated node (_fact_line:
+    program truth, else a confident CoT answer). order "shuffle" draws the line order from rng (local view, as the
+    problem-view tree arms do), "depth" lists shallow to deep, ties in node order (ancestors view)."""
+    pre = item.get("local_preamble")
+    if pre is None:
+        raise ValueError(f"{item.get('item_id')}: no local_preamble (local views need e.g. data/student_v3sl)")
+    if is_local_leaf(sq):
+        return pre + "\n\n" + "\n".join(sq["local_lines"])
+    if order == "depth":
+        pos = {x["id"]: k for k, x in enumerate(item.get("subqs", [])) if "id" in x}
+        stated = sorted(stated, key=lambda x: (depth[x["id"]], pos[x["id"]]))
+    lines = [_fact_line(x) for x in stated]
+    if order == "shuffle":
+        rng.shuffle(lines)
+    return pre + f"\n\n{LOCAL_HEADER}\n" + "\n".join(lines)
+
+
+def kk_people(item: dict) -> list[str]:
+    return re.findall(r"^- ([A-Z][a-z]+) says: ", item.get("prompt", ""), re.M)
+
+
+def view_leak(item: dict, sq: dict, stated: list[dict]) -> str | None:
+    """Why a node view would state (part of) the final answer, else None: "question" / "stated" when leaks_final flags
+    the asked question / a stated result's question (the final question in disguise), "assignment" when the stated
+    unconditional role results name a role for every inhabitant (K&K: the full answer stated as results)."""
+    from .teacher import leaks_final       # lazy: stdlib only, but not needed by the default arms
+    kk = item.get("source") == "knights_knaves"
+    people = kk_people(item) if kk else []
+    rec = {"domain": "knights_knaves", "meta": {"people": people}, "prompt": item.get("prompt", "")} if kk else item
+    if leaks_final(sq["question"], rec):
+        return "question"
+    if any(leaks_final(x["question"], rec) for x in stated):
+        return "stated"
+    if kk and people:
+        named = {m.group(1) for m in (_KK_ROLE_RESULT.match(x["question"]) for x in stated) if m}
+        if named >= set(people):
+            return "assignment"
+    return None

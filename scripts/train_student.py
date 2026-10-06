@@ -10,6 +10,7 @@ Arms: --final {none,teacher,gold} x --subq {none,cot,random}. Writes metrics.jso
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import math
 import random
@@ -24,13 +25,16 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from cotdistill.student import (Example, brier_loss, build_examples, build_fact_examples, build_full_tree, build_group,  # noqa: E402
-                                build_stage_examples, evaluate, evaluate_subq, kl_loss, label_logits, lm_loss,
-                                load_model, micro_batches, subq_sets)
+                                build_stage_examples, evaluate, evaluate_local, evaluate_subq, kl_loss, label_logits,
+                                lm_loss, load_model, micro_batches, subq_sets)
 
 
 # Arguments that do not change the training trajectory: a checkpoint may be resumed with different values.
 RESUME_FREE = {"stop_after_h", "ckpt_every_min", "ckpt_single", "stop_at_step", "code_commit", "eval", "eval_subq", "eval_bs",
-               "eval_max_len", "dump_hidden", "dump_layers", "log_every", "save"}
+               "eval_max_len", "dump_hidden", "dump_layers", "log_every", "save", "eval_local", "eval_local_view"}
+
+# Training arguments added after checkpoints may have been written: a checkpoint without the key had this value.
+NEW_ARG_DEFAULTS = {"tree_view": "problem", "tree_sources": "", "tree_node_weight": 0.0}
 
 LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj",
                 "in_proj_qkv", "in_proj_z", "in_proj_a", "in_proj_b", "out_proj"]
@@ -94,7 +98,20 @@ def main() -> None:
     ap.add_argument("--order-seed", type=int, default=None,
                     help="seed of the problem order (grouped and full-tree arms); default = --seed. Varying it alone "
                          "or --seed alone (node sampling, option order) decomposes the seed variance")
-    ap.add_argument("--tree-cap", type=int, default=10, help="full-tree groups: at most this many nodes per problem")
+    ap.add_argument("--tree-cap", type=int, default=10,
+                    help="full-tree groups: at most this many nodes per problem (0 = no cap: every node every epoch)")
+    ap.add_argument("--tree-view", default="problem", choices=["problem", "local", "ancestors"],
+                    help="full-tree groups: how a node is asked. problem = with the original problem (the TF/TFM/GF "
+                         "arms); local = Tree Forcing: no problem text, only the preamble and the parents' results "
+                         "(--tree-full true) or as many matched non-parent results (matched); parse nodes show their "
+                         "statement line(s); ancestors = every transitive ancestor's result, shallow to deep (true "
+                         "only). Needs the local fields of data/student_v3sl (scripts/build_local_kk.py)")
+    ap.add_argument("--tree-sources", default="",
+                    help="full-tree groups: comma list of item sources that get node views; other items train their "
+                         "final question only (every view mode); empty = all sources")
+    ap.add_argument("--tree-node-weight", type=float, default=0.0,
+                    help="full-tree groups: loss weight of every node view (times the item weight); 0 = the per-problem "
+                         "convention, --aux-total split evenly over the problem's views")
     ap.add_argument("--node-format", default="yesno", choices=["yesno", "mc"],
                     help="full-tree groups: ask nodes as yes/no questions, or in multiple-choice form with other "
                          "confident No nodes of the item and 'None of them' as options (same stated results)")
@@ -153,6 +170,11 @@ def main() -> None:
                     "with --dump-hidden (shape [n, layers + 1, hidden]; the last entry is the final readout state)")
     ap.add_argument("--dump-hidden", default="", help="comma list of eval-set names whose readout hidden states "
                     "to save as hidden_<name>.pt (float16, preds order)")
+    ap.add_argument("--eval-local", default="", help="student data file with local fields (e.g. data/student_v3sl/"
+                    "val.jsonl): local-step probe, every K&K node asked in its local view (eval key local_kk, "
+                    "preds_local_kk.jsonl; accuracy by node type and depth)")
+    ap.add_argument("--eval-local-view", default="local", choices=["local", "ancestors"],
+                    help="--eval-local: parents' results (key local_kk) or all ancestors' results (local_kk_anc)")
     ap.add_argument("--eval-subq", default=None, help="student data file (e.g. val.jsonl) whose sub-questions to "
                     "score, or comma-separated name=path entries (predictions in preds_subq[_name].jsonl)")
     ap.add_argument("--seed", type=int, default=0)
@@ -160,6 +182,14 @@ def main() -> None:
     ap.add_argument("--out", required=True)
     ap.add_argument("--log-every", type=int, default=20)
     args = ap.parse_args()
+    tree_opts = args.tree_view != "problem" or args.tree_sources or args.tree_node_weight or args.tree_cap == 0
+    if tree_opts and not args.tree_full:
+        raise SystemExit("--tree-view / --tree-sources / --tree-node-weight / --tree-cap 0 need --tree-full")
+    if args.tree_view != "problem" and not (args.tree_full == "true" or
+                                             args.tree_full == "matched" and args.tree_view == "local"):
+        raise SystemExit(f"--tree-view {args.tree_view} is implemented for --tree-full true (and matched with local)")
+    if args.tree_view != "problem" and (args.tree_eligible_only or args.node_format != "yesno"):
+        raise SystemExit("--tree-view local/ancestors does not combine with --tree-eligible-only / --node-format mc")
     if args.tree_eligible_only and args.tree_full not in ("true", "matched", "plain", "placebo"):
         raise SystemExit("--tree-eligible-only needs --tree-full true/matched/plain/placebo")
     if args.subq_filter != "all" and (args.depth_stages or args.fact_stages or args.facts_always):
@@ -281,17 +311,27 @@ def main() -> None:
         passes["n"] += 1
         return ex
 
+    tree_sources = {x for x in args.tree_sources.split(",") if x} or None
+    if tree_sources and not any(it.get("source") in tree_sources for it in train_items):
+        raise SystemExit(f"--tree-sources {args.tree_sources}: no item of {args.train} has one of these sources")
+    tree_stats: dict = {}
+
     def fulltree_updates() -> list[list[Example]]:
         """Problems in shuffled order, each as [final] + all its node views; items_per_update problems per update
         (the number of sequences per update varies with tree size)."""
         items = train_items[:]
         order_rng.shuffle(items)
+        st: dict = {}
         groups = [g for g in (build_full_tree(it, mode=args.tree_full, rng=rng, cap=args.tree_cap,
                                               aux_total=args.aux_total, node_format=args.node_format,
                                               final=args.final, eligible_only=args.tree_eligible_only,
                                               subq_target=args.subq_target, permute_final=args.permute_final,
-                                              subq_filter=args.subq_filter)
+                                              subq_filter=args.subq_filter, view=args.tree_view,
+                                              sources=tree_sources, node_weight=args.tree_node_weight, stats=st)
                               for it in items) if g]
+        if tree_opts and not tree_stats:     # the plan's counting pass: views, dropped views, stated results
+            tree_stats.update(st)
+            print("tree views", json.dumps(st, sort_keys=True), flush=True)
         b = args.items_per_update
         return [[e for g in groups[i:i + b] for e in g] for i in range(0, len(groups), b)]
 
@@ -383,7 +423,8 @@ def main() -> None:
         shutil.rmtree(ck_old, ignore_errors=True)
         if ck_dir.exists():
             resume = torch.load(ck_dir / "state.pt", map_location="cpu", weights_only=False)
-            diff = {k: (resume["args"].get(k), v) for k, v in train_args.items() if resume["args"].get(k) != v}
+            diff = {k: (resume["args"].get(k, NEW_ARG_DEFAULTS.get(k)), v) for k, v in train_args.items()
+                    if resume["args"].get(k, NEW_ARG_DEFAULTS.get(k)) != v}
             if diff:
                 raise SystemExit(f"{ck_dir} was written with other training arguments (checkpoint, now): {diff}")
             if not (ck_dir / "optim.pt").exists():
@@ -434,6 +475,7 @@ def main() -> None:
             sched.load_state_dict(resume["sched"])
             step, upd_iter = resume["step"], resume["upd_iter"]
             print(f"resumed from {ck_dir} at step {step}", flush=True)
+        gwin: list[float] = []           # pre-clip gradient norms since the last log row (Tree Forcing arms)
         while name == "fulltree" and step < end:
             # One problem group per update; the loss is scaled by 1 / (3 x items_per_update), the per-sequence
             # normalisation of the 1 final + 2 auxiliary grouped arms, so the learning-rate scale is comparable.
@@ -441,6 +483,7 @@ def main() -> None:
                 upd_iter = make()
             upd, upd_iter = upd_iter[0], upd_iter[1:]
             norm, upd_loss = 3 * args.items_per_update, 0.0
+            split = {"final": 0.0, "subq": 0.0, "node_ce": 0.0, "node_n": 0}
             # micro_bs chunks, or length-sorted micro-batches of at most token_budget padded tokens
             mbs = micro_batches(tok, upd, args.max_len, args.micro_bs, args.token_budget, args.token_budget_seqs)
             for mb in mbs:
@@ -452,7 +495,18 @@ def main() -> None:
                 loss.backward()
                 upd_loss += loss.item()
                 seen_tok += sum(min(args.max_len, len(e.text) // 3) for e in mb)
-            torch.nn.utils.clip_grad_norm_(params, 1.0)
+                if tree_opts:                      # Tree Forcing arms: the loss split by kind (detached, no gradient)
+                    with torch.no_grad():
+                        for zz, e in zip(z, mb):
+                            ce = kl_loss([zz.detach().float()], [dataclasses.replace(e, weight=1.0)],
+                                         args.label_smoothing).item()
+                            split[e.kind if e.kind in split else "subq"] += e.weight * ce / norm
+                            if e.kind != "final":
+                                split["node_ce"] += ce
+                                split["node_n"] += 1
+            gnorm = torch.nn.utils.clip_grad_norm_(params, 1.0)
+            if tree_opts:                          # pre-clip gradient norm (clipped at 1.0), per update
+                gwin.append(float(gnorm))
             opt.step()
             sched.step()
             opt.zero_grad(set_to_none=True)
@@ -464,6 +518,13 @@ def main() -> None:
                        "approx_tok_per_s": seen_tok / dt, "peak_gib": mem, "seqs": len(upd)}
                 if args.token_budget:
                     row["fwd"] = len(mbs)
+                if tree_opts:      # this update's loss by kind (weighted; the two sum to loss without Brier), its
+                    # mean unweighted node CE, and the pre-clip gradient norms of the updates since the last row
+                    row.update(loss_final=split["final"], loss_node=split["subq"],
+                               node_ce=split["node_ce"] / max(1, split["node_n"]),
+                               gnorm=sum(gwin) / len(gwin), gnorm_max=max(gwin),
+                               clip_frac=sum(g > 1.0 for g in gwin) / len(gwin))
+                    gwin.clear()
                 history.append(row)
                 print(json.dumps(row), flush=True)
             if step in eval_steps:
@@ -517,6 +578,8 @@ def main() -> None:
     if dev == "cuda":
         torch.cuda.empty_cache()
     results = {"args": vars(args), "history": history, "trajectory": trajectory, "eval": {}}
+    if tree_opts:
+        results["tree_view_stats"] = tree_stats
     for name, items in evals.items():
         hid = [] if name in args.dump_hidden.split(",") else None
         m, preds = evaluate(model, tok, items, args.eval_max_len, args.eval_bs, cache, hidden=hid,
@@ -535,6 +598,15 @@ def main() -> None:
             for p in spreds:
                 f.write(json.dumps(p) + "\n")
         print(sname, json.dumps({k: round(v["acc"], 3) for k, v in sm.items()}), flush=True)
+    if args.eval_local:
+        lname = "local_kk" if args.eval_local_view == "local" else "local_kk_anc"
+        lm, lpreds = evaluate_local(model, tok, read_jsonl(args.eval_local), args.max_len, args.eval_bs, cache,
+                                    view=args.eval_local_view, seed=args.seed)
+        results["eval"][lname] = lm
+        with open(out / f"preds_{lname}.jsonl", "w") as f:
+            for p in lpreds:
+                f.write(json.dumps(p) + "\n")
+        print(lname, json.dumps({k: round(v["acc"], 3) for k, v in lm.items() if not k.startswith("depth/")}), flush=True)
     (out / "metrics.json").write_text(json.dumps(results, indent=1))
     if args.save:
         if args.lora_r:                  # adapter for reuse, merged weights so <out>/model loads like a full checkpoint
