@@ -6,6 +6,11 @@ Example (HPC):
       --final teacher --subq cot --subq-target cot --out runs/A1S1-seed0 --seed 0
 
 Arms: --final {none,teacher,gold} x --subq {none,cot,random}. Writes metrics.json and preds_<set>.jsonl.
+
+Two GPUs, one job (--fsdp, FSDP2 data parallel; notes/next_round/scale12b/fsdp2.md):
+  python -m torch.distributed.run --standalone --nproc_per_node 2 scripts/train_student.py ... --precision bf16 \
+      --fsdp --fsdp-optim cpu-adamw|8bit-sr [--token-budget 4096]
+Every update holds the same sequences as on one GPU, split across the ranks, gradients summed; rank 0 writes the files.
 """
 from __future__ import annotations
 
@@ -26,15 +31,17 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from cotdistill.student import (Example, brier_loss, build_examples, build_fact_examples, build_full_tree, build_group,  # noqa: E402
                                 build_stage_examples, evaluate, evaluate_local, evaluate_subq, kl_loss, label_logits,
-                                lm_loss, load_model, micro_batches, subq_sets)
+                                lm_loss, load_model, logit_softcap, micro_batches, special_prefix, subq_sets)
 
 
 # Arguments that do not change the training trajectory: a checkpoint may be resumed with different values.
 RESUME_FREE = {"stop_after_h", "ckpt_every_min", "ckpt_single", "stop_at_step", "code_commit", "eval", "eval_subq", "eval_bs",
-               "eval_max_len", "dump_hidden", "dump_layers", "log_every", "save", "eval_local", "eval_local_view"}
+               "eval_max_len", "dump_hidden", "dump_layers", "log_every", "save", "eval_local", "eval_local_view",
+               "log_update_loss"}
 
 # Training arguments added after checkpoints may have been written: a checkpoint without the key had this value.
-NEW_ARG_DEFAULTS = {"tree_view": "problem", "tree_sources": "", "tree_node_weight": 0.0}
+NEW_ARG_DEFAULTS = {"tree_view": "problem", "tree_sources": "", "tree_node_weight": 0.0, "attn_impl": "", "fsdp": False,
+                    "fsdp_optim": None}
 
 LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj",
                 "in_proj_qkv", "in_proj_z", "in_proj_a", "in_proj_b", "out_proj"]
@@ -155,6 +162,21 @@ def main() -> None:
     ap.add_argument("--stop-at-step", type=int, default=0,
                     help="planned stop (checkpoint + exit 3) after this update; for tests and the resume smoke")
     ap.add_argument("--no-grad-ckpt", action="store_true")
+    ap.add_argument("--fsdp", action="store_true",
+                    help="FSDP2 data parallelism over the torchrun ranks (one GPU each): every update holds the same "
+                         "sequences as on one GPU, split across the ranks, gradients summed; --precision bf16 (fp32master "
+                         "only with cpu-adamw, for equivalence checks); "
+                         "--token-budget works in every loop; rank 0 writes the outputs (scale12b/fsdp2.md)")
+    ap.add_argument("--fsdp-optim", default=None, choices=["cpu-adamw", "8bit-sr"],
+                    help="--fsdp optimizer (default cpu-adamw): cpu-adamw = fp32 master + AdamW of each rank's shard on "
+                         "the CPU (one gradient D2H and one weight H2D per update; no checkpoints); 8bit-sr = torchao "
+                         "AdamW8bit with bf16 stochastic rounding on the GPU shards (resumable)")
+    ap.add_argument("--log-update-loss", action="store_true",
+                    help="grouped / plain loops: also log upd_loss, the whole update's loss (the full-tree loop's and "
+                         "--fsdp's loss column); for step-by-step comparisons with --fsdp runs")
+    ap.add_argument("--attn-impl", default="", choices=["", "sdpa", "eager", "flex_attention"],
+                    help="attention implementation passed to from_pretrained (empty = the transformers default, sdpa). "
+                         "Gemma 4: not flash_attention_2, whose kernels stop at head_dim 256 (global layers use 512)")
     ap.add_argument("--eval-bs", type=int, default=8)
     ap.add_argument("--eval-max-len", type=int, default=6144, help="long eval states (JevBench hard) need more room")
     ap.add_argument("--save", action="store_true", help="save the final weights (bf16) to <out>/model")
@@ -210,9 +232,25 @@ def main() -> None:
     if args.optim == "adamw8bit-sr" and args.precision != "bf16":
         raise SystemExit("--optim adamw8bit-sr rounds bf16 weights stochastically; it needs --precision bf16")
     resumable = bool(args.stop_after_h or args.ckpt_every_min or args.stop_at_step)
-    if (resumable or args.token_budget) and not args.tree_full:
+    if (resumable or args.token_budget and not args.fsdp) and not args.tree_full:
         raise SystemExit("--token-budget / --stop-after-h / --ckpt-every-min / --stop-at-step are implemented for the "
-                         "full-tree loop only (--tree-full)")
+                         "full-tree loop only (--tree-full; --token-budget also with --fsdp)")
+    if args.fsdp_optim and not args.fsdp:
+        raise SystemExit("--fsdp-optim needs --fsdp")
+    if args.fsdp:
+        args.fsdp_optim = args.fsdp_optim or "cpu-adamw"
+        if args.precision != "bf16" and args.fsdp_optim != "cpu-adamw":
+            raise SystemExit("--fsdp-optim 8bit-sr rounds bf16 shards stochastically: use --precision bf16")
+        # (--precision fp32master with cpu-adamw keeps fp32 shards on the GPUs: the exact analogue of the single-GPU
+        # fp32master + AdamW recipe, for equivalence checks at small scale; 12B needs bf16 shards)
+        if args.optim != "adamw":
+            raise SystemExit("--fsdp: the optimizer is --fsdp-optim (8bit-sr = torchao AdamW8bit with bf16 stochastic "
+                             "rounding, cpu-adamw = fp32 master + AdamW on the CPU), not --optim")
+        if args.lora_r or args.rationale_lm:
+            raise SystemExit("--fsdp does not support --lora-r or --rationale-lm")
+        if resumable and args.fsdp_optim != "8bit-sr":
+            raise SystemExit("--fsdp-optim cpu-adamw does not checkpoint (fp32 master + m + v = 12 B/param, 143 GB at "
+                             "12B, over the 100 GB quota): no --stop-after-h / --ckpt-every-min / --stop-at-step")
     if args.ckpt_single and not resumable:
         raise SystemExit("--ckpt-single needs --stop-after-h, --ckpt-every-min or --stop-at-step")
     t_start = time.time()
@@ -225,6 +263,13 @@ def main() -> None:
     order_rng = random.Random(f"order-{args.seed if args.order_seed is None else args.order_seed}")
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
+    fs = None                        # --fsdp: rank, world, device and mesh (cotdistill.fsdp.Dist)
+    if args.fsdp:
+        import torch.distributed as dist
+        from cotdistill import fsdp as fsdp_lib
+        fs = fsdp_lib.init()
+        print(f"fsdp: {fs.world} ranks, device {fs.device}, optimizer {args.fsdp_optim}", flush=True)
+    is_main = fs is None or fs.rank == 0
     dev = "cuda" if torch.cuda.is_available() else "cpu"
 
     import transformers
@@ -232,10 +277,17 @@ def main() -> None:
     if tok.pad_token_id is None:
         tok.pad_token = tok.eos_token
     dtype = torch.float32 if args.precision == "fp32master" else torch.bfloat16
-    model = load_model(args.model, dtype).to(dev)
+    model = load_model(args.model, dtype, args.attn_impl or None)
+    if fs is None:
+        model = model.to(dev)
     model.config.use_cache = False
+    print(f"readout: special prefix {special_prefix(tok)}, logit soft-cap {logit_softcap(model)}, "
+          f"attention {model.config._attn_implementation}", flush=True)
     if not args.no_grad_ckpt and hasattr(model, "gradient_checkpointing_enable"):
-        model.gradient_checkpointing_enable()
+        if fs is None:
+            model.gradient_checkpointing_enable()
+        else:                        # non-reentrant checkpointing composes with FSDP2's per-layer hooks
+            model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     if args.lora_r:                  # frozen backbone + LoRA on attention, MLP and Gated-DeltaNet projections
         from peft import LoraConfig, get_peft_model
         names = {n.rsplit(".", 1)[-1] for n, _ in model.named_modules()}
@@ -245,8 +297,14 @@ def main() -> None:
         if not args.no_grad_ckpt:
             model.enable_input_require_grads()
         print(f"lora r={args.lora_r} targets={targets}", flush=True)
+    if fs is not None:               # shard on the CPU-loaded model: each rank moves only its shards to its GPU
+        model = fsdp_lib.shard_model(model, fs.mesh)
     params = [p for p in model.parameters() if p.requires_grad]
-    if args.optim == "adamw8bit":
+    trainer = None                   # --fsdp: clipping over the shards + the optimizer setup (cotdistill.fsdp.ShardedOptim)
+    if fs is not None:
+        trainer = fsdp_lib.ShardedOptim(params, args.fsdp_optim, args.lr, fs.device)
+        opt = trainer.opt
+    elif args.optim == "adamw8bit":
         import bitsandbytes as bnb
         opt = bnb.optim.AdamW8bit(params, lr=args.lr, weight_decay=0.0)
     elif args.optim == "adamw8bit-sr":   # 8-bit block-wise states, bf16 weights written with stochastic rounding
@@ -411,7 +469,8 @@ def main() -> None:
             row[name] = {k: m[k] for k in ("acc", "nll", "ece", "brier") if k in m}
         trajectory.append(row)
         print("trajectory", json.dumps(row), flush=True)
-        (out / "trajectory.json").write_text(json.dumps(trajectory, indent=1))
+        if is_main:
+            (out / "trajectory.json").write_text(json.dumps(trajectory, indent=1))
 
     # Resume (full-tree loop only): <out>/ckpt holds the weights, the optimizer and scheduler state, the counters, every
     # RNG state and the rest of the current epoch's updates. It is written to ckpt.tmp (state.pt last, by rename, so
@@ -420,30 +479,41 @@ def main() -> None:
     ck_dir, train_args = out / "ckpt", {k: v for k, v in vars(args).items() if k not in RESUME_FREE}
     ck_tmp, ck_old = out / "ckpt.tmp", out / "ckpt.old"
     resume = None
+    stop_mark = out / "planned_stop"   # --fsdp: torchrun turns the ranks' exit code 3 into 1, so the job script reads this
     if resumable:
-        if ck_dir.exists() and (ck_tmp / "state.pt").exists():   # killed after a complete write, before the swap
-            shutil.rmtree(ck_dir)
-        if not ck_dir.exists():
-            for d in (ck_tmp, ck_old):   # the newest complete one
-                if (d / "state.pt").exists():
-                    d.rename(ck_dir)
-                    print(f"recovered {d} as {ck_dir}", flush=True)
-                    break
-            else:
-                if ck_tmp.exists():
-                    print(f"{ck_tmp} is incomplete (killed during a write) and there is no other checkpoint: "
-                          "training starts from the beginning", flush=True)
-        shutil.rmtree(ck_tmp, ignore_errors=True)
-        shutil.rmtree(ck_old, ignore_errors=True)
+        if is_main:
+            if ck_dir.exists() and (ck_tmp / "state.pt").exists():   # killed after a complete write, before the swap
+                shutil.rmtree(ck_dir)
+            if not ck_dir.exists():
+                for d in (ck_tmp, ck_old):   # the newest complete one
+                    if (d / "state.pt").exists():
+                        d.rename(ck_dir)
+                        print(f"recovered {d} as {ck_dir}", flush=True)
+                        break
+                else:
+                    if ck_tmp.exists():
+                        print(f"{ck_tmp} is incomplete (killed during a write) and there is no other checkpoint: "
+                              "training starts from the beginning", flush=True)
+            shutil.rmtree(ck_tmp, ignore_errors=True)
+            shutil.rmtree(ck_old, ignore_errors=True)
+            if fs is not None:
+                stop_mark.unlink(missing_ok=True)
+        if fs is not None:
+            fs.barrier()
         if ck_dir.exists():
             resume = torch.load(ck_dir / "state.pt", map_location="cpu", weights_only=False)
             diff = {k: (resume["args"].get(k, NEW_ARG_DEFAULTS.get(k)), v) for k, v in train_args.items()
                     if resume["args"].get(k, NEW_ARG_DEFAULTS.get(k)) != v}
             if diff:
                 raise SystemExit(f"{ck_dir} was written with other training arguments (checkpoint, now): {diff}")
-            if not (ck_dir / "optim.pt").exists():
-                raise SystemExit(f"{ck_dir} has no optimizer state")
-            model.load_state_dict(torch.load(ck_dir / "model.pt", map_location="cpu", mmap=True, weights_only=True))
+            if fs is None:
+                if not (ck_dir / "optim.pt").exists():
+                    raise SystemExit(f"{ck_dir} has no optimizer state")
+                model.load_state_dict(torch.load(ck_dir / "model.pt", map_location="cpu", mmap=True, weights_only=True))
+            else:                            # sharded model (torch.distributed.checkpoint), one optimizer file per rank
+                if resume.get("world") != fs.world or not (ck_dir / f"optim.{fs.rank}.pt").exists():
+                    raise SystemExit(f"{ck_dir} was written by {resume.get('world')} ranks, this run has {fs.world}")
+                fsdp_lib.load_sharded(model, ck_dir / "model")
             rng.setstate(resume["rng"])          # after the plan's counting pass, which consumed both generators
             order_rng.setstate(resume["order_rng"])
             torch.set_rng_state(resume["torch_rng"])
@@ -455,6 +525,32 @@ def main() -> None:
 
     def save_ckpt(sched, upd_iter: list) -> None:
         tmp, old = ck_tmp, ck_old
+        if fs is not None:               # sharded: model via torch.distributed.checkpoint, optimizer + CUDA RNG per rank
+            if is_main:
+                shutil.rmtree(tmp, ignore_errors=True)
+                shutil.rmtree(old, ignore_errors=True)
+                if args.ckpt_single:
+                    shutil.rmtree(ck_dir, ignore_errors=True)
+                tmp.mkdir()
+            fs.barrier()
+            fsdp_lib.save_sharded(model, tmp / "model")
+            torch.save({"optim": opt.state_dict(), "cuda_rng": torch.cuda.get_rng_state() if dev == "cuda" else None},
+                       tmp / f"optim.{fs.rank}.pt")
+            fs.barrier()
+            if is_main:
+                torch.save({"args": train_args, "step": step, "micro": micro, "seen_tok": seen_tok, "passes": passes["n"],
+                            "elapsed": time.time() - t0, "sched": sched.state_dict(), "upd_iter": upd_iter,
+                            "history": history, "trajectory": trajectory, "rng": rng.getstate(),
+                            "order_rng": order_rng.getstate(), "torch_rng": torch.get_rng_state(), "cuda_rng": None,
+                            "world": fs.world}, tmp / "state.part")
+                (tmp / "state.part").rename(tmp / "state.pt")
+                if ck_dir.exists():
+                    ck_dir.rename(old)
+                tmp.rename(ck_dir)
+                shutil.rmtree(old, ignore_errors=True)
+            fs.barrier()
+            print(f"checkpoint {ck_dir} at step {step} ({time.time() - t_start:.0f} s into this process)", flush=True)
+            return
         shutil.rmtree(tmp, ignore_errors=True)
         shutil.rmtree(old, ignore_errors=True)
         if args.ckpt_single:             # disk: one checkpoint at a time
@@ -473,11 +569,69 @@ def main() -> None:
         tmp.rename(ck_dir)
         shutil.rmtree(old, ignore_errors=True)
         print(f"checkpoint {ck_dir} at step {step} ({time.time() - t_start:.0f} s into this process)", flush=True)
+
+    def fsdp_update(upd: list[Example], norm: float) -> dict:
+        """--fsdp: one optimizer update over the sequences upd, split across the ranks (cotdistill.fsdp.split_update).
+        Each sequence's loss is weight x CE / norm as in the single-GPU loops and FSDP sums the ranks' gradients, so
+        the update is the single-GPU one. Clips, steps and zeroes the gradients (the caller steps the scheduler).
+        Returns the update's loss over all ranks, its split by kind (Tree Forcing arms), the pre-clip gradient norm,
+        forward passes (all ranks, pads included), padded tokens and the timings."""
+        t_a = time.time()
+        parts = fsdp_lib.split_update(tok, upd, args.max_len, args.micro_bs, args.token_budget,
+                                      args.token_budget_seqs, fs.world)
+        acc = torch.zeros(6, dtype=torch.float64, device=fs.device)  # loss, final, node, node CE sum, nodes, padded tok
+        for mb, pad, ntok in parts[fs.rank]:
+            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
+                z = label_logits(model, tok, mb, args.max_len, cache)
+                loss = kl_loss(z, mb, args.label_smoothing) * len(mb) / norm
+                if args.lambda_brier:
+                    loss = loss + args.lambda_brier * brier_loss(z, mb) * len(mb) / norm
+            loss.backward()
+            if pad:                      # weight 0: no loss, no gradient, only the collectives
+                continue
+            acc[0] += loss.detach().double()
+            acc[5] += ntok
+            if tree_opts:
+                with torch.no_grad():
+                    for zz, e in zip(z, mb):
+                        ce = kl_loss([zz.detach().float()], [dataclasses.replace(e, weight=1.0)],
+                                     args.label_smoothing).double()
+                        acc[1 if e.kind == "final" else 2] += e.weight * ce / norm
+                        if e.kind != "final":
+                            acc[3] += ce
+                            acc[4] += 1
+        if dev == "cuda":
+            torch.cuda.synchronize()
+        t_b = time.time()
+        dist.all_reduce(acc)
+        gnorm = float(trainer.clip_grad_norm_(1.0))
+        t_c = time.time()
+        trainer.step()
+        trainer.zero_grad()
+        a = acc.tolist()
+        return {"loss": a[0], "loss_final": a[1], "loss_node": a[2], "node_ce": a[3] / max(1.0, a[4]), "gnorm": gnorm,
+                "fwd": len(parts[fs.rank]) * fs.world, "pad_fwd": sum(x[1] for r in parts for x in r),
+                "pad_tok": int(a[5]), "fb_s": t_b - t_a, "clip_s": t_c - t_b, "opt_s": time.time() - t_c,
+                **{k: v for k, v in trainer.timing.items() if k != "opt_step_s"}}
+
+    def fsdp_row(fu: dict) -> dict:
+        """--fsdp log columns: the update's loss, forwards, padded tokens, time split and per-rank memory (collective)."""
+        upd_s = fu["fb_s"] + fu["clip_s"] + fu["opt_s"]
+        r = {"upd_loss": fu["loss"], "fwd": fu["fwd"], "pad_fwd": fu["pad_fwd"], "pad_tok": fu["pad_tok"],
+             "upd_s": round(upd_s, 3), "fb_s": round(fu["fb_s"], 3), "clip_s": round(fu["clip_s"], 3),
+             "opt_s": round(fu["opt_s"], 3), "pad_tok_per_s": round(fu["pad_tok"] / max(upd_s, 1e-9), 1)}
+        r.update({k: round(v, 3) for k, v in fu.items() if k in ("step_s", "d2h_wait_s")})
+        r.update(fsdp_lib.rank_stats(fs.device))
+        return r
+
     last_ckpt = time.time()
     model.train()
     for si, (name, make, _, stage_steps) in enumerate(plan):
         if args.reset_optim and si > 0:
-            opt.state.clear()
+            if trainer is not None:
+                trainer.reset_state()
+            else:
+                opt.state.clear()
         warm = max(1, int(args.warmup * stage_steps))
         sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s, w=warm, t=stage_steps: min(1.0, (s + 1) / w) * 0.5 * (
             1 + math.cos(math.pi * min(1.0, s / t))))
@@ -485,7 +639,13 @@ def main() -> None:
         end = step + stage_steps
         upd_iter: list[list[Example]] = []
         if resume is not None:           # single-stage full-tree run; after the scheduler, whose constructor sets the LR
-            opt.load_state_dict(torch.load(ck_dir / "optim.pt", map_location="cpu", weights_only=False))
+            if fs is None:
+                opt.load_state_dict(torch.load(ck_dir / "optim.pt", map_location="cpu", weights_only=False))
+            else:
+                ost = torch.load(ck_dir / f"optim.{fs.rank}.pt", map_location="cpu", weights_only=False)
+                opt.load_state_dict(ost["optim"])
+                if ost["cuda_rng"] is not None:
+                    torch.cuda.set_rng_state(ost["cuda_rng"])
             sched.load_state_dict(resume["sched"])
             step, upd_iter = resume["step"], resume["upd_iter"]
             print(f"resumed from {ck_dir} at step {step}", flush=True)
@@ -498,39 +658,50 @@ def main() -> None:
             upd, upd_iter = upd_iter[0], upd_iter[1:]
             norm, upd_loss = 3 * args.items_per_update, 0.0
             split = {"final": 0.0, "subq": 0.0, "node_ce": 0.0, "node_n": 0}
-            # micro_bs chunks, or length-sorted micro-batches of at most token_budget padded tokens
-            mbs = micro_batches(tok, upd, args.max_len, args.micro_bs, args.token_budget, args.token_budget_seqs)
-            for mb in mbs:
-                with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
-                    z = label_logits(model, tok, mb, args.max_len, cache)
-                    loss = kl_loss(z, mb, args.label_smoothing) * len(mb) / norm
-                    if args.lambda_brier:          # as in the grouped loop (was silently ignored in full-tree arms)
-                        loss = loss + args.lambda_brier * brier_loss(z, mb) * len(mb) / norm
-                loss.backward()
-                upd_loss += loss.item()
-                seen_tok += sum(min(args.max_len, len(e.text) // 3) for e in mb)
-                if tree_opts:                      # Tree Forcing arms: the loss split by kind (detached, no gradient)
-                    with torch.no_grad():
-                        for zz, e in zip(z, mb):
-                            ce = kl_loss([zz.detach().float()], [dataclasses.replace(e, weight=1.0)],
-                                         args.label_smoothing).item()
-                            split[e.kind if e.kind in split else "subq"] += e.weight * ce / norm
-                            if e.kind != "final":
-                                split["node_ce"] += ce
-                                split["node_n"] += 1
-            gnorm = torch.nn.utils.clip_grad_norm_(params, 1.0)
-            if tree_opts:                          # pre-clip gradient norm (clipped at 1.0), per update
-                gwin.append(float(gnorm))
-            opt.step()
-            sched.step()
-            opt.zero_grad(set_to_none=True)
+            if fs is not None:           # the same sequences split across the ranks, gradients summed
+                fu = fsdp_update(upd, norm)
+                upd_loss = fu["loss"]
+                split.update(final=fu["loss_final"], subq=fu["loss_node"], node_ce=fu["node_ce"], node_n=1)
+                seen_tok += sum(min(args.max_len, len(e.text) // 3) for e in upd)
+                if tree_opts:
+                    gwin.append(fu["gnorm"])
+                sched.step()
+            else:
+                # micro_bs chunks, or length-sorted micro-batches of at most token_budget padded tokens
+                mbs = micro_batches(tok, upd, args.max_len, args.micro_bs, args.token_budget, args.token_budget_seqs)
+                for mb in mbs:
+                    with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
+                        z = label_logits(model, tok, mb, args.max_len, cache)
+                        loss = kl_loss(z, mb, args.label_smoothing) * len(mb) / norm
+                        if args.lambda_brier:          # as in the grouped loop (was silently ignored in full-tree arms)
+                            loss = loss + args.lambda_brier * brier_loss(z, mb) * len(mb) / norm
+                    loss.backward()
+                    upd_loss += loss.item()
+                    seen_tok += sum(min(args.max_len, len(e.text) // 3) for e in mb)
+                    if tree_opts:                      # Tree Forcing arms: the loss split by kind (detached, no gradient)
+                        with torch.no_grad():
+                            for zz, e in zip(z, mb):
+                                ce = kl_loss([zz.detach().float()], [dataclasses.replace(e, weight=1.0)],
+                                             args.label_smoothing).item()
+                                split[e.kind if e.kind in split else "subq"] += e.weight * ce / norm
+                                if e.kind != "final":
+                                    split["node_ce"] += ce
+                                    split["node_n"] += 1
+                gnorm = torch.nn.utils.clip_grad_norm_(params, 1.0)
+                if tree_opts:                          # pre-clip gradient norm (clipped at 1.0), per update
+                    gwin.append(float(gnorm))
+                opt.step()
+                sched.step()
+                opt.zero_grad(set_to_none=True)
             step += 1
             if step % args.log_every == 0 or step == total_steps:
                 dt = time.time() - t0
                 mem = torch.cuda.max_memory_allocated() / 2**30 if dev == "cuda" else 0.0
                 row = {"step": step, "loss": upd_loss, "lr": float(sched.get_last_lr()[0]), "s_per_step": dt / step,
                        "approx_tok_per_s": seen_tok / dt, "peak_gib": mem, "seqs": len(upd)}
-                if args.token_budget:
+                if fs is not None:
+                    row.update(fsdp_row(fu))
+                elif args.token_budget:
                     row["fwd"] = len(mbs)
                 if tree_opts:      # this update's loss by kind (weighted; the two sum to loss without Brier), its
                     # mean unweighted node CE, and the pre-clip gradient norms of the updates since the last row
@@ -546,13 +717,47 @@ def main() -> None:
             if resumable and step < total_steps:
                 stop = bool(args.stop_at_step and step >= args.stop_at_step or
                             args.stop_after_h and time.time() - t_start >= args.stop_after_h * 3600)
-                if stop or args.ckpt_every_min and time.time() - last_ckpt >= args.ckpt_every_min * 60:
+                ck_now = stop or args.ckpt_every_min and time.time() - last_ckpt >= args.ckpt_every_min * 60
+                if fs is not None:       # clock-based decisions: every rank follows rank 0's
+                    flags = torch.tensor([int(stop), int(bool(ck_now))], device=fs.device)
+                    dist.broadcast(flags, 0)
+                    stop, ck_now = bool(flags[0]), bool(flags[1])
+                if ck_now:
                     save_ckpt(sched, upd_iter)
                     last_ckpt = time.time()
                 if stop:
                     print(f"planned stop after step {step}/{total_steps}; rerun with the same --out to resume", flush=True)
+                    if fs is not None:
+                        if is_main:
+                            stop_mark.write_text(f"{step}\n")
+                        fs.barrier()
+                        dist.destroy_process_group()
                     sys.exit(3)
+        upd_acc = 0.0                    # --log-update-loss: the current update's loss so far
         while step < end:
+            if fs is not None:           # one whole update: the grad_accum micro-batches the loop below takes, split
+                upd = []                 # across the ranks (same refills, so the same sequences in the same updates)
+                for _ in range(args.grad_accum):
+                    if len(ex_iter) < args.micro_bs:
+                        ex_iter += make()
+                    batch, ex_iter = ex_iter[:args.micro_bs], ex_iter[args.micro_bs:]
+                    upd += batch
+                fu = fsdp_update(upd, args.micro_bs * args.grad_accum)   # = len(batch) x grad_accum below
+                seen_tok += sum(min(args.max_len, len(e.text) // 3) for e in upd)
+                micro += args.grad_accum
+                sched.step()
+                step += 1
+                if step % args.log_every == 0 or step == total_steps:
+                    dt = time.time() - t0
+                    mem = torch.cuda.max_memory_allocated() / 2**30 if dev == "cuda" else 0.0
+                    row = {"step": step, "loss": fu["loss"], "lr": float(sched.get_last_lr()[0]), "s_per_step": dt / step,
+                           "approx_tok_per_s": seen_tok / dt, "peak_gib": mem, "gnorm": fu["gnorm"]}
+                    row.update(fsdp_row(fu))
+                    history.append(row)
+                    print(json.dumps(row), flush=True)
+                if step in eval_steps:
+                    mid_eval(step)
+                continue
             if len(ex_iter) < args.micro_bs:
                 ex_iter += make()
             batch, ex_iter = ex_iter[:args.micro_bs], ex_iter[args.micro_bs:]
@@ -569,6 +774,8 @@ def main() -> None:
                     total = total + lm_loss(model, tok, lms, args.lm_max_len)
                 loss = total / len(batch) / args.grad_accum
             loss.backward()
+            if args.log_update_loss:     # the whole update's loss (the --fsdp loss column), for step-by-step comparisons
+                upd_acc += loss.item()
             seen_tok += sum(min(args.max_len, len(e.text) // 3) for e in cls) + \
                 sum(min(args.lm_max_len, (len(e.text) + len(e.continuation)) // 3) for e in lms)  # rough count
             micro += 1
@@ -583,44 +790,69 @@ def main() -> None:
                     mem = torch.cuda.max_memory_allocated() / 2**30 if dev == "cuda" else 0.0
                     row = {"step": step, "loss": loss.item() * args.grad_accum, "lr": float(sched.get_last_lr()[0]),
                            "s_per_step": dt / step, "approx_tok_per_s": seen_tok / dt, "peak_gib": mem}
+                    if args.log_update_loss:
+                        row["upd_loss"] = upd_acc
                     history.append(row)
                     print(json.dumps(row), flush=True)
+                upd_acc = 0.0
                 if step in eval_steps:
                     mid_eval(step)
 
-    opt.state.clear()                    # the optimizer state is not needed for the evaluations (4B: about 9 GiB)
+    if trainer is not None:              # --fsdp: GPU 8-bit states or the CPU masters and moments
+        trainer.release()
+    else:
+        opt.state.clear()                # the optimizer state is not needed for the evaluations (4B: about 9 GiB)
     if dev == "cuda":
         torch.cuda.empty_cache()
     results = {"args": vars(args), "history": history, "trajectory": trajectory, "eval": {}}
     if tree_opts:
         results["tree_view_stats"] = tree_stats
-    for name, items in evals.items():
+    if fs is not None:
+        results["fsdp"] = {"world": fs.world, "optim": args.fsdp_optim}
+    for name, items in evals.items():    # (--fsdp: every rank evaluates its share of the batches; rank 0 writes)
         hid = [] if name in args.dump_hidden.split(",") else None
         m, preds = evaluate(model, tok, items, args.eval_max_len, args.eval_bs, cache, hidden=hid,
                             layers=[int(x) for x in args.dump_layers.split(",") if x] or None)
-        if hid is not None:
+        if hid is not None and is_main:
             torch.save(torch.stack(hid).half(), out / f"hidden_{name}.pt")
         results["eval"][name] = m
-        with open(out / f"preds_{name}.jsonl", "w") as f:
-            for p in preds:
-                f.write(json.dumps(p) + "\n")
+        if is_main:
+            with open(out / f"preds_{name}.jsonl", "w") as f:
+                for p in preds:
+                    f.write(json.dumps(p) + "\n")
         print(name, json.dumps(m), flush=True)
     for sname, spath in subq_sets(args.eval_subq or ""):
         sm, spreds = evaluate_subq(model, tok, read_jsonl(spath), args.max_len, args.eval_bs, cache, seed=args.seed)
         results["eval"][sname] = sm
-        with open(out / f"preds_{sname}.jsonl", "w") as f:
-            for p in spreds:
-                f.write(json.dumps(p) + "\n")
+        if is_main:
+            with open(out / f"preds_{sname}.jsonl", "w") as f:
+                for p in spreds:
+                    f.write(json.dumps(p) + "\n")
         print(sname, json.dumps({k: round(v["acc"], 3) for k, v in sm.items()}), flush=True)
     if args.eval_local:
         lname = "local_kk" if args.eval_local_view == "local" else "local_kk_anc"
         lm, lpreds = evaluate_local(model, tok, read_jsonl(args.eval_local), args.max_len, args.eval_bs, cache,
                                     view=args.eval_local_view, seed=args.seed)
         results["eval"][lname] = lm
-        with open(out / f"preds_{lname}.jsonl", "w") as f:
-            for p in lpreds:
-                f.write(json.dumps(p) + "\n")
+        if is_main:
+            with open(out / f"preds_{lname}.jsonl", "w") as f:
+                for p in lpreds:
+                    f.write(json.dumps(p) + "\n")
         print(lname, json.dumps({k: round(v["acc"], 3) for k, v in lm.items() if not k.startswith("depth/")}), flush=True)
+    if fs is not None:
+        if is_main:
+            (out / "metrics.json").write_text(json.dumps(results, indent=1))
+            if resumable:                # quota: the sharded checkpoint goes before the full model is written
+                shutil.rmtree(ck_dir, ignore_errors=True)
+        if args.save:                    # full bf16 state dict gathered on rank 0's CPU (collective), rank 0 writes it
+            sd = fsdp_lib.full_state_dict(model)
+            if is_main:
+                model.model.save_pretrained(out / "model", state_dict=sd, safe_serialization=True)
+                tok.save_pretrained(out / "model")
+            del sd
+        fs.barrier()
+        dist.destroy_process_group()
+        return
     (out / "metrics.json").write_text(json.dumps(results, indent=1))
     if args.save:
         if args.lora_r:                  # adapter for reuse, merged weights so <out>/model loads like a full checkpoint

@@ -50,6 +50,55 @@ def letter_token_ids(tokenizer, letters: list[str]) -> list[int]:
     return ids
 
 
+_PREFIX: dict[int, tuple] = {}
+
+
+def special_prefix(tokenizer) -> list[int]:
+    """Special tokens the tokenizer itself puts before every text: [<bos>] for Gemma, [] for Qwen.
+
+    Our encodes use add_special_tokens=False so that left truncation keeps the question end; callers re-attach this
+    prefix after truncation (Gemma degrades badly without its BOS). The tokenizer object is kept in the cache, so
+    its id cannot be reused by another tokenizer."""
+    hit = _PREFIX.get(id(tokenizer))
+    if hit is None or hit[0] is not tokenizer:
+        probe = "Answer:"
+        with_sp = list(tokenizer.encode(probe, add_special_tokens=True))
+        without = list(tokenizer.encode(probe, add_special_tokens=False))
+        pre = with_sp[:len(with_sp) - len(without)] if with_sp[len(with_sp) - len(without):] == without else []
+        hit = _PREFIX[id(tokenizer)] = (tokenizer, pre)
+    return hit[1]
+
+
+def encode_tail(tokenizer, text: str, max_len: int) -> list[int]:
+    """Token ids of text, cut to its last tokens so that the special prefix plus the text fit max_len."""
+    pre = special_prefix(tokenizer)
+    ids = tokenizer.encode(text, add_special_tokens=False)
+    return pre + ids[-max(1, max_len - len(pre)):]
+
+
+def logit_softcap(model) -> float | None:
+    """final_logit_softcapping of the (text) config: 30.0 for Gemma 4, None for Qwen. The HF forward applies
+    s * tanh(z / s) to every logit, so a readout from h @ W.T must do the same to match the model's distribution."""
+    cfg = model.config
+    cfg = cfg.get_text_config() if hasattr(cfg, "get_text_config") else cfg
+    return getattr(cfg, "final_logit_softcapping", None) or None
+
+
+def head_logits(h: torch.Tensor, w: torch.Tensor, bias: torch.Tensor | None = None,
+                softcap: float | None = None) -> torch.Tensor:
+    """h @ w.T (+ bias) for rows w of the output embedding. Without a soft-cap: exactly the previous readout (in w's
+    dtype, so Qwen numbers are unchanged). With one: in float32 outside autocast (bf16 spacing is 0.125-0.25 at
+    |z| = 16-64, coarse for calibrated letter probabilities), then s * tanh(z / s)."""
+    if not softcap:
+        z = h.to(w.dtype) @ w.T
+        return z + bias if bias is not None else z
+    with torch.autocast(device_type=h.device.type, enabled=False):
+        z = h.float() @ w.float().T
+        if bias is not None:
+            z = z + bias.float()
+        return softcap * torch.tanh(z / softcap)
+
+
 def _soft(p_yes: float, yes_first: bool, eps: float = 1e-4) -> list[float]:
     p = min(max(p_yes, eps), 1 - eps)
     return [p, 1 - p] if yes_first else [1 - p, p]
@@ -595,7 +644,7 @@ def text_parts(model):
 
 
 def collate(tokenizer, batch: list[Example], max_len: int, device) -> dict:
-    enc = [tokenizer.encode(e.text, add_special_tokens=False)[-max_len:] for e in batch]  # keep the question end
+    enc = [encode_tail(tokenizer, e.text, max_len) for e in batch]  # keep the question end (and a BOS if any)
     L = max(len(x) for x in enc)
     pad = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
     ids = torch.full((len(enc), L), pad, dtype=torch.long)
@@ -627,7 +676,8 @@ def micro_batches(tokenizer, batch: list[Example], max_len: int, micro_bs: int, 
     token_budget_batches (lengths counted as collate truncates them)."""
     if not token_budget:
         return [batch[i:i + micro_bs] for i in range(0, len(batch), micro_bs)]
-    lens = [min(max_len, len(tokenizer.encode(e.text, add_special_tokens=False))) for e in batch]
+    n_pre = len(special_prefix(tokenizer))
+    lens = [min(max_len, n_pre + len(tokenizer.encode(e.text, add_special_tokens=False))) for e in batch]
     return [[batch[j] for j in b] for b in token_budget_batches(lens, token_budget, max_seqs)]
 
 
@@ -636,11 +686,14 @@ def label_logits(model, tokenizer, batch: list[Example], max_len: int, label_ids
     """Logits over each example's option letters at the readout position (optionally also appends each
     example's readout hidden state, detached, to hidden_out; with layers, a [len(layers) + 1, hidden] stack of the
     readout position's states after those decoder layers plus the final readout state)."""
+    if getattr(model, "cotd_readout", False):    # FSDP2 root (cotdistill.fsdp.Readout): this function runs in its forward
+        return model.readout(tokenizer, batch, max_len, label_ids_cache, hidden_out, layers)
     body, head = text_parts(model)
     dev = head.weight.device
     b = collate(tokenizer, batch, max_len, dev)
     want_layers = bool(layers) and hidden_out is not None
-    res = body(input_ids=b["input_ids"], attention_mask=b["attention_mask"], output_hidden_states=want_layers)
+    res = body(input_ids=b["input_ids"], attention_mask=b["attention_mask"], output_hidden_states=want_layers,
+               use_cache=False)
     hidden = res.last_hidden_state
     rows = torch.arange(hidden.shape[0], device=dev)
     h = hidden[rows, b["last"]]
@@ -650,21 +703,22 @@ def label_logits(model, tokenizer, batch: list[Example], max_len: int, label_ids
             hidden_out.extend(torch.stack(per, 1).detach().float().cpu())
         else:
             hidden_out.extend(h.detach().float().cpu())
-    out = []
+    out, cap = [], logit_softcap(model)
     for i, e in enumerate(batch):
         key = tuple(e.labels)
         if key not in label_ids_cache:
             label_ids_cache[key] = torch.tensor(letter_token_ids(tokenizer, e.labels), device=dev)
-        w = head.weight[label_ids_cache[key]]
-        z = h[i].to(w.dtype) @ w.T
-        if getattr(head, "bias", None) is not None:
-            z = z + head.bias[label_ids_cache[key]]
-        out.append(z.float())
+        rows = label_ids_cache[key]
+        bias = head.bias[rows] if getattr(head, "bias", None) is not None else None
+        out.append(head_logits(h[i], head.weight[rows], bias, cap).float())
     return out
 
 
-def _ce_sum(h: torch.Tensor, w: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-    return F.cross_entropy((h.to(w.dtype) @ w.T).float(), y, reduction="sum")
+def _ce_sum(h: torch.Tensor, w: torch.Tensor, y: torch.Tensor, softcap: float | None = None) -> torch.Tensor:
+    z = (h.to(w.dtype) @ w.T).float()
+    if softcap:                      # Gemma: the model's own (capped) next-token distribution
+        z = softcap * torch.tanh(z / softcap)
+    return F.cross_entropy(z, y, reduction="sum")
 
 
 def lm_loss(model, tokenizer, batch: list[Example], max_len: int, chunk: int = 512) -> torch.Tensor:
@@ -677,7 +731,7 @@ def lm_loss(model, tokenizer, batch: list[Example], max_len: int, chunk: int = 5
     dev = head.weight.device
     seqs, starts = [], []
     for e in batch:
-        pre = tokenizer.encode(e.text, add_special_tokens=False)[-(max_len // 2):]
+        pre = encode_tail(tokenizer, e.text, max_len // 2)
         cont = tokenizer.encode(e.continuation, add_special_tokens=False)
         room = max_len - len(pre)
         if len(cont) > room:
@@ -692,11 +746,12 @@ def lm_loss(model, tokenizer, batch: list[Example], max_len: int, chunk: int = 5
         ids[i, :len(x)] = torch.tensor(x)
         mask[i, :len(x)] = 1
     ids, mask = ids.to(dev), mask.to(dev)
-    hidden = body(input_ids=ids, attention_mask=mask).last_hidden_state
+    hidden = body(input_ids=ids, attention_mask=mask, use_cache=False).last_hidden_state
     total = hidden.new_zeros((), dtype=torch.float32)
+    cap = logit_softcap(model)
     for i, (x, st) in enumerate(zip(seqs, starts)):
         h, y = hidden[i, st - 1:len(x) - 1], ids[i, st:len(x)]
-        ce = sum(torch.utils.checkpoint.checkpoint(_ce_sum, h[j:j + chunk], head.weight, y[j:j + chunk],
+        ce = sum(torch.utils.checkpoint.checkpoint(_ce_sum, h[j:j + chunk], head.weight, y[j:j + chunk], cap,
                                                    use_reentrant=False) for j in range(0, len(y), chunk))
         total = total + batch[i].weight * ce / max(1, len(y))
     return total
@@ -724,12 +779,27 @@ def brier_loss(logits: list[torch.Tensor], batch: list[Example]) -> torch.Tensor
     return tot / len(batch)
 
 
-def load_model(path: str, dtype):
+def load_model(path: str, dtype, attn_implementation: str | None = None):
     import transformers
+    kw = {"attn_implementation": attn_implementation} if attn_implementation else {}
+    cfg = transformers.AutoConfig.from_pretrained(path)
+    if getattr(cfg, "model_type", None) == "gemma4_unified" and (cfg.vision_config is not None or
+                                                                   cfg.audio_config is not None):
+        # Gemma 4 12B "Unified" is encoder-free: images and audio enter through small linear embedders
+        # (model.embed_vision / model.embed_audio, 52.4M params) beside the text decoder. With both sub-configs
+        # removed, Gemma4UnifiedForConditionalGeneration builds the text decoder + tied head only (11.91B params),
+        # loads it with the same keys and logits, skips the embedder weights as unexpected keys, and saves a
+        # text-only checkpoint (vision_config/audio_config null) that loads back through this same path.
+        # (Gemma4UnifiedForCausalLM.from_pretrained on this checkpoint finds no weights under its key prefix
+        # model.* and silently returns a randomly initialised model; do not use it.)
+        cfg.vision_config = None
+        cfg.audio_config = None
+        kw["config"] = cfg
+        print("gemma4_unified: text-only load (vision/audio embedders dropped)", flush=True)
     try:
-        m = transformers.AutoModelForCausalLM.from_pretrained(path, torch_dtype=dtype)
+        m = transformers.AutoModelForCausalLM.from_pretrained(path, torch_dtype=dtype, **kw)
     except Exception:
-        m = transformers.AutoModelForImageTextToText.from_pretrained(path, torch_dtype=dtype)
+        m = transformers.AutoModelForImageTextToText.from_pretrained(path, torch_dtype=dtype, **kw)
     for n, p in m.named_parameters():
         if "visual" in n or "vision" in n:
             p.requires_grad = False
@@ -748,17 +818,26 @@ def evaluate(model, tok, items: list[dict], max_len: int, bs: int, cache: dict,
     dev = next(model.parameters()).device
     order = sorted(range(len(items)), key=lambda i: len(items[i]["prompt"]))
     probs_by, hid_by = {}, {}
-    for s in range(0, len(order), bs):
-        idx = order[s:s + bs]
-        batch = [Example(FINAL_TEMPLATE.format(problem=items[i]["prompt"]), items[i]["labels"],
-                         [0.0] * len(items[i]["labels"]), 1.0, "final", items[i]["item_id"]) for i in idx]
-        hs = [] if hidden is not None else None
-        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev.type == "cuda"):
-            zs = label_logits(model, tok, batch, max_len, cache, hidden_out=hs, layers=layers)
-        for j, (i, z) in enumerate(zip(idx, zs)):
+    if getattr(model, "cotd_readout", False):    # FSDP2 root: the same batches, split across the ranks and gathered
+        exs = [Example(FINAL_TEMPLATE.format(problem=it["prompt"]), it["labels"], [0.0] * len(it["labels"]), 1.0,
+                       "final", it["item_id"]) for it in items]
+        zs, hs = model.batched(tok, exs, order, bs, max_len, cache, hidden is not None, layers)
+        for i, z in enumerate(zs):
             probs_by[i] = torch.softmax(z, -1).tolist()
-            if hs is not None:
-                hid_by[i] = hs[j]
+            if hidden is not None:
+                hid_by[i] = hs[i]
+    else:
+        for s in range(0, len(order), bs):
+            idx = order[s:s + bs]
+            batch = [Example(FINAL_TEMPLATE.format(problem=items[i]["prompt"]), items[i]["labels"],
+                             [0.0] * len(items[i]["labels"]), 1.0, "final", items[i]["item_id"]) for i in idx]
+            hs = [] if hidden is not None else None
+            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev.type == "cuda"):
+                zs = label_logits(model, tok, batch, max_len, cache, hidden_out=hs, layers=layers)
+            for j, (i, z) in enumerate(zip(idx, zs)):
+                probs_by[i] = torch.softmax(z, -1).tolist()
+                if hs is not None:
+                    hid_by[i] = hs[j]
     if hidden is not None:
         hidden.extend(hid_by[i] for i in range(len(items)))
     probs, gold, preds = [], [], []
@@ -823,13 +902,18 @@ def evaluate_subq(model, tok, items: list[dict], max_len: int, bs: int, cache: d
     dev = next(model.parameters()).device
     order = sorted(range(len(exs)), key=lambda i: len(exs[i].text))
     p_yes = [0.0] * len(exs)
-    for s in range(0, len(order), bs):
-        idx = order[s:s + bs]
-        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev.type == "cuda"):
-            zs = label_logits(model, tok, [exs[i] for i in idx], max_len, cache)
-        for i, z in zip(idx, zs):
+    if getattr(model, "cotd_readout", False):    # FSDP2 root: the same batches, split across the ranks and gathered
+        for i, z in enumerate(model.batched(tok, exs, order, bs, max_len, cache)[0]):
             pa = torch.softmax(z, -1)[0].item()
             p_yes[i] = pa if meta[i]["yes_first"] else 1 - pa
+    else:
+        for s in range(0, len(order), bs):
+            idx = order[s:s + bs]
+            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev.type == "cuda"):
+                zs = label_logits(model, tok, [exs[i] for i in idx], max_len, cache)
+            for i, z in zip(idx, zs):
+                pa = torch.softmax(z, -1)[0].item()
+                p_yes[i] = pa if meta[i]["yes_first"] else 1 - pa
     if was_training:
         model.train()
     groups: dict[str, list[int]] = {}
@@ -905,13 +989,18 @@ def evaluate_local(model, tok, items: list[dict], max_len: int, bs: int, cache: 
     dev = next(model.parameters()).device
     order = sorted(range(len(exs)), key=lambda i: len(exs[i].text))
     p_yes = [0.0] * len(exs)
-    for s in range(0, len(order), bs):
-        idx = order[s:s + bs]
-        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev.type == "cuda"):
-            zs = label_logits(model, tok, [exs[i] for i in idx], max_len, cache)
-        for i, z in zip(idx, zs):
+    if getattr(model, "cotd_readout", False):    # FSDP2 root: the same batches, split across the ranks and gathered
+        for i, z in enumerate(model.batched(tok, exs, order, bs, max_len, cache)[0]):
             pa = torch.softmax(z, -1)[0].item()
             p_yes[i] = pa if meta[i]["yes_first"] else 1 - pa
+    else:
+        for s in range(0, len(order), bs):
+            idx = order[s:s + bs]
+            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev.type == "cuda"):
+                zs = label_logits(model, tok, [exs[i] for i in idx], max_len, cache)
+            for i, z in zip(idx, zs):
+                pa = torch.softmax(z, -1)[0].item()
+                p_yes[i] = pa if meta[i]["yes_first"] else 1 - pa
     if was_training:
         model.train()
     groups: dict[str, list[int]] = {}

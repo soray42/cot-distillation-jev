@@ -18,6 +18,17 @@ random batches of real lengths). Rate scenarios (tok/s, s per forward):
 The smoke (hpc/mem12b.sbatch) measures R ("baseline" tok_s), the D2H floor and STEP; rerun with --rate/--pcie/--cpu-gbs set from it.
 
   python scripts/cost12b.py [--rate 790 --b 0.3] [--pcie 16 --cpu-gbs 60] [--md]
+
+--slices 2: the same 12B on two 4g.40gb slices of one job (FSDP2, train_student.py --fsdp; scale12b/fsdp2.md), arms on
+data/student_v3sl with token-budget micro-batches (as on two slices every loop allows): each rank runs half of an
+update's micro-batches (an odd count is evened by splitting one), each micro-batch costs
+max(T_m / R + b, COMM) with COMM = forward all-gather + backward re-gather + reduce-scatter of the bf16 parameters
+(3 x 11.907B x 2 B / 2 per rank / --comm-gbs; 2.55 s at the measured 14 GB/s), and every update adds the optimizer:
+cpu-adamw = 5.95B params x 48 B / --cpu-gbs-rank on the CPU (bf16 -> fp32 gradient, clip, AdamW, cast back; the GPU
+idles), 8bit-sr = 0.3 s on the GPU (does not fit 12B in 40 GB; listed for reference). Evals: --eval-h2 (the c4 grid
+split over two ranks). Calibration (2B, one slice): G3-c4 2.6 h at MBS 2 (the 340 tok/s scenario reproduces it),
+TFL about 6 h at MBS 2 / 1.65 h at budget 3072.
+  python scripts/cost12b.py --slices 2 [--comm-gbs 14 --cpu-gbs-rank 30 --optim2 cpu-adamw] [--md]
 """
 from __future__ import annotations
 
@@ -112,6 +123,105 @@ def hours(a: dict, rate: float, b: float, pcie: float, cpu: float, eval_h: float
             "s_per_update": upd, "train_h": train_h, "gpu_only_h": gpu_only_h, "total_h": train_h + eval_h}
 
 
+N_SHARD = N_TEXT / 2                 # parameters per rank on two slices
+V3SL = ROOT / "data/student_v3sl/train.jsonl"
+TWO_SLICE_ARMS = (("A2-c12", None, 12), ("G3-c4", "G3 v3s", 4), ("TFL-c4", "TFL", 4), ("TFLM-c4", "TFLM", 4),
+                  ("TFLN-c4", "TFLN", 4), ("GFPS-c4", "GFPS", 4), ("GFP-c4", "GFP", 4), ("TFA-c4", "TFA", 4))
+
+
+def comm_s(comm_gbs: float) -> float:
+    """FSDP communication per micro-batch and rank (s): forward all-gather, backward re-gather, reduce-scatter."""
+    return 3 * N_TEXT * 2 / 2 / 1e9 / comm_gbs
+
+
+def opt_s(optim: str, cpu_gbs_rank: float) -> float:
+    return N_SHARD * 48 / 1e9 / cpu_gbs_rank if optim == "cpu-adamw" else 0.3
+
+
+def a2_budget(lengths: list[int], budget: int, per_update: int = 32, max_seqs: int = 16, seed: int = 0) -> tuple:
+    """(padded tokens per epoch, micro-batches per epoch, micro-batches per rank per epoch) of the A2 finals in
+    token-budget micro-batches (student.token_budget_batches on random updates of per_update), on two ranks."""
+    import sys
+    sys.path.insert(0, str(ROOT / "src"))
+    from cotdistill.student import token_budget_batches
+    rng = random.Random(seed)
+    order = lengths[:]
+    rng.shuffle(order)
+    pad = n_mb = n_rank = 0
+    for u in range(0, len(order) - per_update + 1, per_update):
+        upd = order[u:u + per_update]
+        mbs = token_budget_batches(upd, budget, max_seqs)
+        pad += sum(len(b) * upd[b[0]] for b in mbs)
+        n_mb += len(mbs)
+        n_rank += -(-len(mbs) // 2)
+    n_upd = len(order) // per_update
+    scale = UPD_PER_EPOCH / n_upd
+    return pad * scale, n_mb * scale, n_rank * scale
+
+
+def two_slice_arms(cost_json: Path = COST_JSON, train: Path = V3SL, budgets=(3072, 4096)) -> list[dict]:
+    c = json.loads(Path(cost_json).read_text())["arms"]
+    L = a2_lengths(Path(train))
+    out = []
+    for name, key, ep in TWO_SLICE_ARMS:
+        for tb in budgets:
+            if key is None:
+                pad, fwd, fwd_rank = a2_budget(L, tb)
+            else:
+                a = c[key]
+                pad, fwd = a[f"pad_tb{tb}"], a[f"fwd_tb{tb}"]
+                fwd_rank = (fwd / UPD_PER_EPOCH + 0.5) / 2 * UPD_PER_EPOCH    # half, odd counts evened by a split
+            out.append(dict(arm=name, batching=f"budget {tb}", epochs=ep, pad=pad, fwd=fwd, fwd_rank=fwd_rank))
+    return out
+
+
+def hours2(a: dict, rate: float, b: float, comm: float, step: float, eval_h: float) -> dict:
+    """Two slices: per update, each rank's micro-batches at max(compute, communication), then the optimizer."""
+    m_rank = a["fwd_rank"] / UPD_PER_EPOCH
+    tok_mb = a["pad"] / a["fwd"]
+    t_mb = tok_mb / rate + b
+    upd = m_rank * max(t_mb, comm) + step + 0.5
+    train_h = a["epochs"] * UPD_PER_EPOCH * upd / 3600
+    return {"M": a["fwd"] / UPD_PER_EPOCH, "M_rank": m_rank, "tok_per_mb": tok_mb, "bound": "comm" if comm > t_mb else "GPU",
+            "s_per_update": upd, "train_h": train_h, "total_h": train_h + eval_h}
+
+
+def main_two_slices(a) -> None:
+    missing = [f for f in (a.cost_json, a.train2) if not Path(f).exists()]
+    if missing:
+        print(f"two-slice table skipped: missing {missing} (pass --cost-json / --train2)")
+        return
+    comm, step = comm_s(a.comm_gbs), opt_s(a.optim2, a.cpu_gbs_rank)
+    print(f"two slices (FSDP2), {a.optim2}: communication {comm:.2f} s per micro-batch and rank (at {a.comm_gbs} GB/s), "
+          f"optimizer {step:.1f} s per update ({a.cpu_gbs_rank} GB/s per rank), evals {a.eval_h2} h")
+    hdr = ["arm", "batching", "ep", "padded M tok/ep", "mb/update", "mb/rank", "tok/mb"]
+    for r in a.rate:
+        hdr += [f"s/upd @{r:g}", f"bound @{r:g}", f"h @{r:g}"]
+    hdr += ["fits 24 h (per rate)"]
+    rows = []
+    for arm in two_slice_arms(a.cost_json, a.train2):
+        hs = [hours2(arm, r, b, comm, step, a.eval_h2) for r, b in zip(a.rate, a.b)]
+        row = [arm["arm"], arm["batching"], str(arm["epochs"]), f"{arm['pad'] / 1e6:.2f}", f"{hs[0]['M']:.1f}",
+               f"{hs[0]['M_rank']:.1f}", f"{hs[0]['tok_per_mb']:.0f}"]
+        for h in hs:
+            row += [f"{h['s_per_update']:.0f}", h["bound"], f"{h['total_h']:.1f}"]
+        row.append(" / ".join("ok" if h["total_h"] <= a.wall_h - 1 else "NO" for h in hs))
+        rows.append(row)
+    _print_table(hdr, rows, a.md)
+
+
+def _print_table(hdr, rows, md: bool) -> None:
+    if md:
+        print("| " + " | ".join(hdr) + " |")
+        print("|" + "---|" * len(hdr))
+        for r in rows:
+            print("| " + " | ".join(r) + " |")
+    else:
+        w = [max(len(x) for x in col) for col in zip(hdr, *rows)]
+        for r in [hdr] + rows:
+            print("  ".join(x.ljust(n) for x, n in zip(r, w)))
+
+
 def from_log(path: str) -> dict:
     """Measured inputs from the smoke's MEM12B lines (hpc/mem12b.sbatch)."""
     rows = []
@@ -156,7 +266,18 @@ def main(argv=None) -> None:
                                        "PCIe = bench d2h, CPU GB/s = 46 B/param / measured step_s")
     ap.add_argument("--cost-json", default=str(COST_JSON), help="tree_forcing/cost.json (per-arm epoch totals)")
     ap.add_argument("--train", default=str(TRAIN), help="data/student_v3f/train.jsonl (A2 final lengths)")
+    ap.add_argument("--slices", type=int, default=1, choices=[1, 2],
+                    help="2: the two-slice FSDP2 table (arms on data/student_v3sl, token budgets 3072 / 4096)")
+    ap.add_argument("--comm-gbs", type=float, default=14.0, help="--slices 2: collective GB/s between the slices")
+    ap.add_argument("--cpu-gbs-rank", type=float, default=30.0,
+                    help="--slices 2: CPU memory bandwidth per rank for the cpu-adamw step (GB/s)")
+    ap.add_argument("--optim2", default="cpu-adamw", choices=["cpu-adamw", "8bit-sr"])
+    ap.add_argument("--eval-h2", type=float, default=1.5, help="--slices 2: final evals per run (h)")
+    ap.add_argument("--train2", default=str(V3SL), help="--slices 2: data/student_v3sl/train.jsonl (A2 lengths)")
     a = ap.parse_args(argv)
+    if a.slices == 2:
+        main_two_slices(a)
+        return
     if a.from_log:
         m = from_log(a.from_log)
         print("measured:", json.dumps(m))

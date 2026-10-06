@@ -84,10 +84,29 @@
 # $DATA/val.jsonl if that file has local fields (any arm), and LOCAL_EVAL=0 turns it off.
 # NODEW also names the run dir (-nw<w> after the arm), so a dose variant never shares a dir with the default run;
 # relays that compute the run dir as their skip key must add the same suffix.
-# Relay scripts: TOKBUDGET STOPH CKPTMIN CKPTONE NODEW LOCAL_EVAL belong in the reset list (relay44's reset() lacks OPTIM
-# too), so a 4B or Tree Forcing setting never leaks into the next submission (le is internal, lower case).
+# Two slices, one job (notes/next_round/scale12b/fsdp2.md): NGPU=2 runs every train_student call (smoke included) under
+# torchrun with one rank per 4g.40gb slice (--fsdp: FSDP2, the same sequences per update as on one slice, split across
+# the ranks, gradients summed; rank 0 writes the outputs), PREC defaults to bf16, OMP threads = CPUs / 2 per rank.
+# FSDP_OPTIM picks the optimizer: cpu-adamw (default; fp32 master + AdamW of each rank's shard on the CPU, the only
+# setup that fits 12B; no checkpoints, so no STOPH/CKPTMIN) or 8bit-sr (torchao AdamW8bit on the GPU shards, as
+# OPTIM=adamw8bit-sr; resumable; does not fit 12B). TOKBUDGET then works for every arm (A2/G3 too). The #SBATCH lines
+# above ask for one slice: `NGPU=2 ... bash repo/hpc/train_arm.sbatch [sbatch options]` on the login node submits this
+# script with --gres=gpu:4g.40gb:2 --cpus-per-task=12 --mem=220G (96G for 8bit-sr) --time=24:00:00 plus the options
+# given (e.g. --dependency=afterany:<job>); a plain `sbatch` with NGPU=2 must pass those itself (the job checks that it
+# holds two GPUs and exits at once otherwise). 12B: MODEL=$HOME/cotd/models/gemma-4-12B TOKBUDGET=4096
+# XARGS="--eval-bs 16". Planned stops under torchrun leave $OUT/planned_stop (torchrun reports exit 3 as 1).
+# Relay scripts: TOKBUDGET STOPH CKPTMIN CKPTONE NODEW LOCAL_EVAL NGPU FSDP_OPTIM belong in the reset list (relay44's
+# reset() lacks OPTIM too), so a 4B, Tree Forcing or two-slice setting never leaks into the next submission (le, tr,
+# fs, pr, ng, mem are internal, lower case).
 set -euo pipefail
 JOB_T0=$(date +%s)
+ng="${NGPU:-1}"
+[ "$ng" = 1 ] || [ "$ng" = 2 ] || { echo "NGPU must be 1 or 2 (got $ng)"; exit 1; }
+if [ "$ng" = 2 ] && [ -z "${SLURM_JOB_ID:-}" ] && [ -z "${DRY_RUN:-}" ]; then   # login node: submit with two slices
+  mem=220G; [ "${FSDP_OPTIM:-cpu-adamw}" = 8bit-sr ] && mem=96G
+  echo "submitting: sbatch --gres=gpu:4g.40gb:2 --cpus-per-task=12 --mem=$mem --time=24:00:00 $* $0"
+  exec sbatch --gres=gpu:4g.40gb:2 --cpus-per-task=12 --mem="$mem" --time=24:00:00 "$@" "$0"
+fi
 cd "$HOME/cotd"
 module load cuda/12.4 2>/dev/null || true
 SEED="${SEED:-0}"; MODEL="${MODEL:-$HOME/cotd/models/Qwen3.5-2B-Base}"; DATA="${DATA:-data/student}"
@@ -100,6 +119,20 @@ export HF_HOME="$HOME/cotd/hf" TOKENIZERS_PARALLELISM=false
 [ -n "${CC1D:-}" ] && export PYTHONPATH="$HOME/cotd/cc1d${PYTHONPATH:+:$PYTHONPATH}"
 PY=envs/cotd/bin/python
 [ -n "${DRY_RUN:-}" ] && PY="echo [dry-run] python"
+tr="$PY"; fs=; pr=fp32master           # launcher, --fsdp arguments and default precision (NGPU=2: torchrun, FSDP, bf16)
+if [ "$ng" = 2 ]; then
+  case "${FSDP_OPTIM:-cpu-adamw}" in cpu-adamw|8bit-sr) ;; *) echo "FSDP_OPTIM must be cpu-adamw or 8bit-sr"; exit 1 ;; esac
+  tr="$PY -m torch.distributed.run --standalone --nproc_per_node 2"
+  fs="--fsdp --fsdp-optim ${FSDP_OPTIM:-cpu-adamw}"; pr=bf16
+  if [ -z "${DRY_RUN:-}" ]; then
+    n=$(awk -F, '{print NF}' <<< "${CUDA_VISIBLE_DEVICES:-}")
+    [ "${n:-0}" -ge 2 ] || { echo "NGPU=2 but this job sees ${n:-0} GPU(s) (CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}): submit with NGPU=2 bash repo/hpc/train_arm.sbatch, or sbatch --gres=gpu:4g.40gb:2 --cpus-per-task=12 --mem=220G"; exit 1; }
+  fi
+  export OMP_NUM_THREADS=$(( ${SLURM_CPUS_PER_TASK:-12} / 2 ))   # per rank (torchrun would set 1)
+  [ -z "${STOPH:-}${CKPTMIN:-}" ] || [ "${FSDP_OPTIM:-cpu-adamw}" = 8bit-sr ] || \
+    { echo "STOPH/CKPTMIN with NGPU=2 need FSDP_OPTIM=8bit-sr (cpu-adamw state, 143 GB at 12B, is not saved)"; exit 1; }
+  echo "two slices: torchrun, 2 ranks, ${FSDP_OPTIM:-cpu-adamw}, OMP_NUM_THREADS=$OMP_NUM_THREADS per rank"
+fi
 REPO="${REPO:-repo}"
 [ -f "$REPO/scripts/train_student.py" ] || { echo "missing $REPO/scripts/train_student.py"; exit 1; }
 COMMIT=$(git -C "$REPO" rev-parse HEAD 2>/dev/null || echo unknown)
@@ -161,11 +194,11 @@ arm_config() {           # sets F S T RLM DS for arm $1
 }
 
 train() {                # train <arm> <train.jsonl> <evals> <out> [extra args...]
-  local arm=$1 tr=$2 ev=$3 out=$4; shift 4
+  local arm=$1 trn=$2 ev=$3 out=$4; shift 4
   arm_config "$arm"
-  $PY $REPO/scripts/train_student.py --model "$MODEL" --train "$tr" --eval $ev \
+  $tr $REPO/scripts/train_student.py --model "$MODEL" --train "$trn" --eval $ev \
     --final "$F" --subq "$S" --subq-target "$T" --lambda-sub "${LAMBDA:-1.0}" \
-    --lr "${LR:-1e-5}" --max-len 1536 --precision "${PREC:-fp32master}" --optim "${OPTIM:-adamw}" \
+    --lr "${LR:-1e-5}" --max-len 1536 --precision "${PREC:-$pr}" --optim "${OPTIM:-adamw}" $fs \
     --seed "$SEED" --out "$out" --eval-subq "$DATA/val.jsonl${SUBQ_EXTRA:+,$SUBQ_EXTRA}" ${RLM:+--rationale-lm --lm-max-len 3072} \
     ${DUMP:+--dump-hidden "$DUMP,smoke"} ${PERM:+--permute-final "$PERM"} ${BRIER:+--lambda-brier "$BRIER"} \
     ${SUBQK:+--subq-k "$SUBQK"} ${SUBQW:+--subq-weight "$SUBQW"} ${DS:+--depth-stages "$DS" --stage-k "${STAGEK:-1}"} \
@@ -193,9 +226,9 @@ head -n 20 data/eval/kk_heldout.jsonl > "$SM/eval.jsonl"
 [ -z "$LOCAL_EVAL" ] || grep -m 2 '"local_preamble"' "$LOCAL_EVAL" > "$SM/local.jsonl" || true   # no local fields: empty probe
 [ -z "${CKPTONE:-}" ] || [ -n "${STOPH:-}${CKPTMIN:-}" ] || { echo "CKPTONE needs STOPH or CKPTMIN"; exit 1; }
 for ARM in $ARMS; do
-  if [ -n "${STOPH:-}${CKPTMIN:-}${TOKBUDGET:-}" ]; then   # resume and token budgets: full-tree loop only
-    arm_config "$ARM"
-    [[ " $DX ${XARGS:-} " == *" --tree-full "* ]] || { echo "SMOKE FAILED $ARM: STOPH/CKPTMIN/TOKBUDGET need a full-tree arm"; exit 1; }
+  if [ -n "${STOPH:-}${CKPTMIN:-}" ] || { [ -n "${TOKBUDGET:-}" ] && [ "$ng" = 1 ]; }; then   # resume (and one-slice
+    arm_config "$ARM"                                                                         # token budgets): full tree
+    [[ " $DX ${XARGS:-} " == *" --tree-full "* ]] || { echo "SMOKE FAILED $ARM: STOPH/CKPTMIN (and TOKBUDGET with NGPU=1) need a full-tree arm"; exit 1; }
   fi
   SUBQ_EXTRA= le=${LOCAL_EVAL:+$SM/local.jsonl} train "$ARM" "$SM/train.jsonl" "smoke=$SM/eval.jsonl" "$SM/out-$ARM" --epochs 0.5 --micro-bs 2 --grad-accum 2 \
     > "$SM/$ARM.log" 2>&1 || { echo "SMOKE FAILED $ARM"; tail -n 30 "$SM/$ARM.log"; exit 1; }
@@ -207,7 +240,7 @@ if [ -n "${STOPH:-}${CKPTMIN:-}" ]; then   # checkpoint round trip on the first 
   a=${ARMS%% *}; rc=0                    # (lower case: internal, so relay reset lists need not know them)
   SUBQ_EXTRA= train "$a" "$SM/train.jsonl" "smoke=$SM/eval.jsonl" "$SM/res-$a" --epochs 1 --items-per-update 4 \
     ${CKPTONE:+--ckpt-single} --stop-at-step 1 > "$SM/res1.log" 2>&1 || rc=$?
-  [ -n "${DRY_RUN:-}" ] || [ "$rc" = 3 ] || { echo "SMOKE FAILED resume $a (planned stop gave exit $rc)"; tail -n 30 "$SM/res1.log"; exit 1; }
+  [ -n "${DRY_RUN:-}" ] || [ "$rc" = 3 ] || [ -f "$SM/res-$a/planned_stop" ] || { echo "SMOKE FAILED resume $a (planned stop gave exit $rc)"; tail -n 30 "$SM/res1.log"; exit 1; }
   SUBQ_EXTRA= train "$a" "$SM/train.jsonl" "smoke=$SM/eval.jsonl" "$SM/res-$a" --epochs 1 --items-per-update 4 \
     ${CKPTONE:+--ckpt-single} --ckpt-every-min 1000 > "$SM/res2.log" 2>&1 || { echo "SMOKE FAILED resume $a"; tail -n 30 "$SM/res2.log"; exit 1; }
   [ -n "${DRY_RUN:-}" ] || grep -q '^resumed from' "$SM/res2.log" || { echo "SMOKE FAILED resume $a (no resume line)"; tail -n 30 "$SM/res2.log"; exit 1; }
@@ -256,7 +289,7 @@ for ARM in $ARMS; do
   le=$LOCAL_EVAL train "$ARM" "$DATA/train.jsonl" "$EVALS" "$OUT" --epochs "${EPOCHS:-2}" --micro-bs "${MBS:-2}" \
     --grad-accum "${GA:-16}" ${SAVE:+--save} ${STOPH:+--stop-after-h "$(stop_h)"} ${CKPTMIN:+--ckpt-every-min "$CKPTMIN"} \
     ${CKPTONE:+--ckpt-single} || rc=$?
-  if [ "$rc" = 3 ]; then
+  if [ "$rc" = 3 ] || { [ "$rc" != 0 ] && [ -f "$OUT/planned_stop" ]; }; then   # (torchrun: exit 1 + marker)
     echo "PLANNED STOP $ARM: checkpoint in $OUT/ckpt; resubmit the same job to resume  $(date +%T)"; exit 3
   fi
   [ "$rc" = 0 ] || echo "arm $ARM failed"
