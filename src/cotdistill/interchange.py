@@ -2,7 +2,9 @@
 
 A site is (layer L, readout position): the residual stream entering decoder layer L at the last prompt token, which is
 `hidden_states[L]` in Hugging Face's output (index 0 = embeddings), the same indexing as the hidden-state dumps. A
-forward pre-hook on decoder layer L rewrites that one vector:
+forward pre-hook on decoder layer L rewrites that one vector. Another token position can be used instead of the readout
+(`pos` in site_states / patched_logits, a "base_pos" entry per pair in iia / fit_das: absolute token indices of the
+collated, right-padded sequence); the letter logits are always read at the readout position:
 
   full    the base state is replaced by the source state at the site
   das     only a learned k-dimensional subspace is exchanged: h_b + (h_s - h_b) R^T R, where R (k x d) has orthonormal
@@ -77,8 +79,9 @@ def _letter_logits(model, tok, b: dict, labels: list[list[str]], cache: dict) ->
 
 @torch.no_grad()
 def site_states(model, tok, prompts: list[str], labels: list[list[str]], layers: list[int], max_len: int = 1536,
-                bs: int = 8) -> torch.Tensor:
-    """[n, len(layers), d] readout-position states entering each layer (float32, CPU), in input order."""
+                bs: int = 8, pos: list[int] | None = None) -> torch.Tensor:
+    """[n, len(layers), d] readout-position states entering each layer (float32, CPU), in input order. With `pos`
+    (one token index per prompt) the states at those positions instead."""
     body, head = text_parts(model)
     dev = head.weight.device
     out = [None] * len(prompts)
@@ -89,7 +92,8 @@ def site_states(model, tok, prompts: list[str], labels: list[list[str]], layers:
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev.type == "cuda"):
             res = body(input_ids=b["input_ids"], attention_mask=b["attention_mask"], output_hidden_states=True)
         rows = torch.arange(len(idx), device=dev)
-        st = torch.stack([res.hidden_states[l][rows, b["last"]] for l in layers], 1).float().cpu()
+        at = b["last"] if pos is None else _at(b, [pos[i] for i in idx])
+        st = torch.stack([res.hidden_states[l][rows, at] for l in layers], 1).float().cpu()
         for j, i in enumerate(idx):
             out[i] = st[j]
     return torch.stack(out)
@@ -121,21 +125,39 @@ def random_subspace(d: int, k: int, seed: int) -> Subspace:
     return Subspace(d, k, init=q.T.contiguous())
 
 
-def patched_logits(model, tok, base_prompts, labels, layer: int, fn, max_len: int, cache: dict) -> list[torch.Tensor]:
+def patched_logits(model, tok, base_prompts, labels, layer: int, fn, max_len: int, cache: dict,
+                   pos: list[int] | None = None) -> list[torch.Tensor]:
     dev = text_parts(model)[1].weight.device
     b = _batch(tok, base_prompts, labels, max_len, dev)
-    with patch_site(model, layer, b["last"], fn):
+    at = b["last"] if pos is None else _at(b, pos)
+    with patch_site(model, layer, at, fn):
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev.type == "cuda"):
             return _letter_logits(model, tok, b, labels, cache)
 
 
+def _at(b: dict, pos: list[int]) -> torch.Tensor:
+    """Token positions as a tensor, checked to be real (unpadded) tokens at or before each row's readout."""
+    at = torch.tensor(pos, device=b["last"].device)
+    if not bool(((at >= 0) & (at <= b["last"])).all()):
+        raise ValueError(f"patch positions outside the prompt: {pos} (readout {b['last'].tolist()})")
+    return at
+
+
+def _pos(chunk: list[dict]) -> list[int] | None:
+    return [p["base_pos"] for p in chunk] if "base_pos" in chunk[0] else None
+
+
 def iia(model, tok, pairs: list[dict], src_states: torch.Tensor, layer: int, method: str, sub: Subspace | None = None,
-        max_len: int = 1536, bs: int = 8, seed: int = 0) -> dict:
+        max_len: int = 1536, bs: int = 8, seed: int = 0, outcomes: tuple[str, ...] = (), return_preds: bool = False) -> dict:
     """Accuracy of the patched base on the target outcome. `pairs` entries carry base_prompt, labels (letters),
-    target (index), base_pred and source_pred (indices, the unpatched model's own answers); `src_states[i]` is pair
-    i's source state at `layer` ([d]). Also reports how often the patched answer copies the base or source answer."""
+    target (index), base_pred and source_pred (indices, the unpatched model's own answers; -1 = none), optionally
+    base_pos (the patched token position; default the readout); `src_states[i]` is pair i's source state at `layer`
+    ([d]). Also reports how often the patched answer copies the base or source answer, the share landing on each
+    index field named in `outcomes` ("to_<field>"; None never matches) and, with return_preds, the patched answers."""
     cache: dict = {}
     hits = copies_b = copies_s = 0
+    to = {k: 0 for k in outcomes}
+    preds: list[int] = []
     g = torch.Generator().manual_seed(seed)
     model.eval()
     with torch.no_grad():
@@ -154,14 +176,21 @@ def iia(model, tok, pairs: list[dict], src_states: torch.Tensor, layer: int, met
                     return hb + z @ R
                 return sub.exchange(hb, hs_)
             zs = patched_logits(model, tok, [p["base_prompt"] for p in chunk], [p["labels"] for p in chunk], layer, fn,
-                                max_len, cache)
+                                max_len, cache, pos=_pos(chunk))
             for p, z in zip(chunk, zs):
                 k = int(z.argmax())
                 hits += k == p["target"]
                 copies_b += k == p["base_pred"]
                 copies_s += k == p["source_pred"]
+                for f in outcomes:
+                    to[f] += p.get(f) is not None and k == p[f]
+                preds.append(k)
     n = max(1, len(pairs))
-    return {"iia": hits / n, "copy_base": copies_b / n, "copy_source": copies_s / n, "n": len(pairs)}
+    out = {"iia": hits / n, "copy_base": copies_b / n, "copy_source": copies_s / n, "n": len(pairs)}
+    out.update({f"to_{f}": v / n for f, v in to.items()})
+    if return_preds:
+        out["preds"] = preds
+    return out
 
 
 def fit_das(model, tok, pairs: list[dict], src_states: torch.Tensor, layer: int, k: int = 1, epochs: int = 3,
@@ -188,7 +217,7 @@ def fit_das(model, tok, pairs: list[dict], src_states: torch.Tensor, layer: int,
             def fn(hb, hs=hs):
                 return sub.exchange(hb.float(), hs.float())
             zs = patched_logits(model, tok, [p["base_prompt"] for p in chunk], [p["labels"] for p in chunk], layer, fn,
-                                max_len, cache)
+                                max_len, cache, pos=_pos(chunk))
             loss = sum(F.cross_entropy(z[None], torch.tensor([p["target"]], device=z.device)) for z, p in zip(zs, chunk))
             opt.zero_grad()
             (loss / len(chunk)).backward()
