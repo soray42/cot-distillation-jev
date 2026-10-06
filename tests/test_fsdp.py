@@ -89,6 +89,11 @@ def write_data(d: str) -> None:
     (Path(d) / "stub/torchao/optim").mkdir(parents=True, exist_ok=True)
     (Path(d) / "stub/torchao/__init__.py").write_text('__version__ = "0.0.0"\n')
     (Path(d) / "stub/torchao/optim/__init__.py").write_text(tr.STUB)
+    # a stub dist-info first on the path: importlib.metadata then reports torchao 0.0.0, so transformers'
+    # is_torchao_available() is False and it never imports the real torchao.prototype through the stub (HPC: the
+    # real torchao 0.18 is installed, and the stub package shadowed it -> "No module named 'torchao.prototype'")
+    (Path(d) / "stub/torchao-0.0.0.dist-info").mkdir(parents=True, exist_ok=True)
+    (Path(d) / "stub/torchao-0.0.0.dist-info/METADATA").write_text("Metadata-Version: 2.1\nName: torchao\nVersion: 0.0.0\n")
 
 
 def env(d: str, cuda: bool = False) -> dict:

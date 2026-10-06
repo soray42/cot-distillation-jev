@@ -244,6 +244,8 @@ class TestResume(unittest.TestCase):
             (Path(d) / "stub/torchao/optim").mkdir(parents=True)
             (Path(d) / "stub/torchao/__init__.py").write_text('__version__ = "0.0.0"\n')   # transformers reads it
             (Path(d) / "stub/torchao/optim/__init__.py").write_text(STUB)
+            (Path(d) / "stub/torchao-0.0.0.dist-info").mkdir(parents=True)   # hide a real torchao from transformers
+            (Path(d) / "stub/torchao-0.0.0.dist-info/METADATA").write_text("Metadata-Version: 2.1\nName: torchao\nVersion: 0.0.0\n")
             env = {"PYTHONPATH": d + "/stub" + os.pathsep + os.environ.get("PYTHONPATH", "")}
             common = ["--epochs", "1", "--precision", "bf16", "--optim", "adamw8bit-sr", "--token-budget", "300"]
             r = run(d, *common, "--stop-at-step", "1", "--out", d + "/o", env=env)
