@@ -75,8 +75,11 @@
 # parents' results (parse nodes: their statement line) · TFA = the same with every ancestor's result, shallow to deep ·
 # TFLM = structure control: as many matched non-parent results (post-audit matching; nodes without a same-class
 # replacement keep their true parents in both arms) · GFP = every node with the full problem and no stated results.
+# Controls: GFPS (GFP-S) = GFP with the problem cut to its statement block (preamble + "- X says" lines; no final
+# question, no options; rng lockstep with GFP) · TFLN = TFL with nothing stated (parse nodes still see their line,
+# derived nodes only the preamble; rng lockstep with TFL). Same knobs (NODEW, LOCAL_EVAL, run dir runs/<ARM>...).
 # NODEW=w gives every node view weight w (--tree-node-weight; default: the per-problem split, aux 1.0 / views, about
-# .023 per K&K node); set it to the same value for all four arms of a comparison. LOCAL_EVAL=path scores the
+# .023 per K&K node); set it to the same value for all arms of a comparison. LOCAL_EVAL=path scores the
 # local-step probe (--eval-local: every K&K node in its local view, eval key local_kk); when unset it is
 # $DATA/val.jsonl if that file has local fields (any arm), and LOCAL_EVAL=0 turns it off.
 # NODEW also names the run dir (-nw<w> after the arm), so a dose variant never shares a dir with the default run;
@@ -151,6 +154,8 @@ arm_config() {           # sets F S T RLM DS for arm $1
     TFA) F=teacher; S=cot;   T=cot; DX="--tree-full true --tree-view ancestors --tree-cap 0 --tree-sources knights_knaves" ;;  # all ancestors
     TFLM) F=teacher; S=cot;  T=cot; DX="--tree-full matched --tree-view local --tree-cap 0 --tree-sources knights_knaves" ;;  # matched non-parents
     GFP) F=teacher; S=cot;   T=cot; DX="--tree-full plain --tree-view problem --tree-cap 0 --tree-sources knights_knaves" ;;   # every node, full problem
+    GFPS) F=teacher; S=cot;  T=cot; DX="--tree-full plain --tree-view statements --tree-cap 0 --tree-sources knights_knaves" ;; # GFP-S: no question/options
+    TFLN) F=teacher; S=cot;  T=cot; DX="--tree-full plain --tree-view local --tree-cap 0 --tree-sources knights_knaves" ;;   # local view, nothing stated
     *) echo "unknown ARM $1"; return 1 ;;
   esac
 }

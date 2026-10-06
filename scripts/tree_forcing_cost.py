@@ -31,6 +31,8 @@ ARMS = {   # name: (data, kind, kwargs)
     "TFA": ("data/student_v3sl", "tree", dict(mode="true", cap=0, view="ancestors", sources={"knights_knaves"})),
     "TFLM": ("data/student_v3sl", "tree", dict(mode="matched", cap=0, view="local", sources={"knights_knaves"})),
     "GFP": ("data/student_v3sl", "tree", dict(mode="plain", cap=0, view="problem", sources={"knights_knaves"})),
+    "GFPS": ("data/student_v3sl", "tree", dict(mode="plain", cap=0, view="statements", sources={"knights_knaves"})),
+    "TFLN": ("data/student_v3sl", "tree", dict(mode="plain", cap=0, view="local", sources={"knights_knaves"})),
 }
 CALIB = {"TF cap10 v3f": "results/hpc/c4v3f/TF-c4-Qwen3.5-2B-Base-student_v3f-s12",
          "G3 v3f": "results/hpc/w1/G3-c4-Qwen3.5-2B-Base-student_v3f-s12",

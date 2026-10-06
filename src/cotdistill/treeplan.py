@@ -178,6 +178,8 @@ def local_context(item: dict, sq: dict, stated: list[dict] | None, *, depth: dic
         raise ValueError(f"{item.get('item_id')}: no local_preamble (local views need e.g. data/student_v3sl)")
     if is_local_leaf(sq):
         return pre + "\n\n" + "\n".join(sq["local_lines"])
+    if not stated:                  # TFLN (--tree-full plain --tree-view local): derived nodes, nothing stated
+        return pre
     if order == "depth":
         pos = {x["id"]: k for k, x in enumerate(item.get("subqs", [])) if "id" in x}
         stated = sorted(stated, key=lambda x: (depth[x["id"]], pos[x["id"]]))
@@ -185,6 +187,38 @@ def local_context(item: dict, sq: dict, stated: list[dict] | None, *, depth: dic
     if order == "shuffle":
         rng.shuffle(lines)
     return pre + f"\n\n{LOCAL_HEADER}\n" + "\n".join(lines)
+
+
+_KK_STATEMENT = re.compile(r'^- [A-Z][a-z]+ says: ".*"$')
+
+
+def statement_block(item: dict) -> str:
+    """The problem WITHOUT its final question and options (--tree-view statements, GFP-S): the context of a GFP view
+    minus the final question's text and its answer options.
+    - knights_knaves: the prompt before "\\n\\nQuestion: ", i.e. the island preamble and the "- X says: ..." lines;
+    - numgen (data/student_numgen*): the prompt's first line without the "Question: " label and without the answer
+      quantity's question sentence (program.quantities[answer].question, the last sentence), i.e. the frame intro, the
+      operation sentences and the noise sentences in prompt order. The options follow on later lines and are dropped.
+    Any other source, or a prompt that does not have this shape, raises ValueError (no clean definition)."""
+    src, p, iid = item.get("source"), item.get("prompt", ""), item.get("item_id")
+    if src == "knights_knaves":
+        head, sep, tail = p.partition("\n\nQuestion: ")
+        pre, _, body = head.partition("\n\n")
+        lines = body.split("\n")
+        if (not sep or "\n\nQuestion: " in tail or not body or not all(_KK_STATEMENT.match(x) for x in lines)
+                or item.get("local_preamble") not in (None, pre)):
+            raise ValueError(f"{iid}: K&K prompt is not preamble + statement lines + Question")
+        return head
+    if src == "numgen":
+        first, sep, _opts = p.partition("\nOptions:\n")
+        prog = item.get("program") or {}
+        ans = [q for q in prog.get("quantities", []) if q.get("id") == prog.get("answer")]
+        ask = ans[0].get("question") if len(ans) == 1 else None
+        if not (sep and ask and first.startswith("Question: ") and first.endswith(" " + ask) and "\n" not in first):
+            raise ValueError(f"{iid}: numgen prompt is not 'Question: <body> <answer question>' + options")
+        return first[len("Question: "):-len(ask) - 1]
+    raise ValueError(f"{iid}: --tree-view statements has no statement block for source {src!r} "
+                     "(defined for knights_knaves and numgen; restrict with --tree-sources)")
 
 
 def kk_people(item: dict) -> list[str]:

@@ -100,12 +100,15 @@ def main() -> None:
                          "or --seed alone (node sampling, option order) decomposes the seed variance")
     ap.add_argument("--tree-cap", type=int, default=10,
                     help="full-tree groups: at most this many nodes per problem (0 = no cap: every node every epoch)")
-    ap.add_argument("--tree-view", default="problem", choices=["problem", "local", "ancestors"],
+    ap.add_argument("--tree-view", default="problem", choices=["problem", "local", "ancestors", "statements"],
                     help="full-tree groups: how a node is asked. problem = with the original problem (the TF/TFM/GF "
                          "arms); local = Tree Forcing: no problem text, only the preamble and the parents' results "
-                         "(--tree-full true) or as many matched non-parent results (matched); parse nodes show their "
-                         "statement line(s); ancestors = every transitive ancestor's result, shallow to deep (true "
-                         "only). Needs the local fields of data/student_v3sl (scripts/build_local_kk.py)")
+                         "(--tree-full true) or as many matched non-parent results (matched) or nothing (plain: "
+                         "TFLN, in rng lockstep with TFL); parse nodes show their statement line(s); ancestors = every "
+                         "transitive ancestor's result, shallow to deep (true only). Needs the local fields of "
+                         "data/student_v3sl (scripts/build_local_kk.py). statements = GFP-S (plain only): the problem "
+                         "view without the final question and its options (K&K: preamble + statement lines; numgen: "
+                         "the problem text without its question sentence), in rng lockstep with GFP")
     ap.add_argument("--tree-sources", default="",
                     help="full-tree groups: comma list of item sources that get node views; other items train their "
                          "final question only (every view mode); empty = all sources")
@@ -185,11 +188,14 @@ def main() -> None:
     tree_opts = args.tree_view != "problem" or args.tree_sources or args.tree_node_weight or args.tree_cap == 0
     if tree_opts and not args.tree_full:
         raise SystemExit("--tree-view / --tree-sources / --tree-node-weight / --tree-cap 0 need --tree-full")
-    if args.tree_view != "problem" and not (args.tree_full == "true" or
-                                             args.tree_full == "matched" and args.tree_view == "local"):
-        raise SystemExit(f"--tree-view {args.tree_view} is implemented for --tree-full true (and matched with local)")
+    if args.tree_view != "problem" and not (args.tree_full == "true" and args.tree_view != "statements" or
+                                             args.tree_full in ("matched", "plain") and args.tree_view == "local" or
+                                             args.tree_full == "plain" and args.tree_view == "statements"):
+        raise SystemExit(f"--tree-view {args.tree_view} is implemented for --tree-full true (local/ancestors), matched "
+                         "(local) and plain (local, statements)")
     if args.tree_view != "problem" and (args.tree_eligible_only or args.node_format != "yesno"):
-        raise SystemExit("--tree-view local/ancestors does not combine with --tree-eligible-only / --node-format mc")
+        raise SystemExit("--tree-view local/ancestors/statements does not combine with --tree-eligible-only / "
+                         "--node-format mc")
     if args.tree_eligible_only and args.tree_full not in ("true", "matched", "plain", "placebo"):
         raise SystemExit("--tree-eligible-only needs --tree-full true/matched/plain/placebo")
     if args.subq_filter != "all" and (args.depth_stages or args.fact_stages or args.facts_always):
@@ -314,6 +320,14 @@ def main() -> None:
     tree_sources = {x for x in args.tree_sources.split(",") if x} or None
     if tree_sources and not any(it.get("source") in tree_sources for it in train_items):
         raise SystemExit(f"--tree-sources {args.tree_sources}: no item of {args.train} has one of these sources")
+    if args.tree_view == "statements":         # GFP-S: every node-view item needs a statement block (fail before training)
+        from cotdistill.treeplan import statement_block
+        for it in train_items:
+            if tree_sources is None or it.get("source") in tree_sources:
+                try:
+                    statement_block(it)
+                except ValueError as e:
+                    raise SystemExit(f"--tree-view statements: {e}")
     tree_stats: dict = {}
 
     def fulltree_updates() -> list[list[Example]]:

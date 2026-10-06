@@ -19,7 +19,8 @@ import torch.utils.checkpoint
 
 from .metrics import calibration  # noqa: F401  (re-exported for scripts)
 from .treeplan import (LOCAL_HEADER, _descendants, _fact_line, _node_p, ancestors, answer_component,  # noqa: F401
-                       full_tree_plan, is_local_leaf, local_context, node_depths, subq_keep, view_leak)
+                       full_tree_plan, is_local_leaf, local_context, node_depths, statement_block, subq_keep,
+                       view_leak)
 
 SUBQ_TEMPLATE = "{problem}\n\nIntermediate question: {question}\nOptions:\nA) {a}\nB) {b}\nAnswer:"
 FINAL_TEMPLATE = "{problem}\n\nAnswer:"
@@ -297,17 +298,22 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
     cap 0 asks every node. sources (a set of item sources, None = all): items of other sources train their final
     question only. node_weight > 0 gives every node view that weight (times the item weight) instead of the
     per-problem split aux_total / views. view "local" / "ancestors" (Tree Forcing): see _local_views; "problem" (the
-    default) is the behaviour above."""
+    default) is the behaviour above. view "statements" (GFP-S, mode "plain" only): the problem view with the problem
+    replaced by its statement block (treeplan.statement_block: no final question, no options); rng draws, nodes,
+    targets and weights are exactly those of mode "plain" with the problem view (GFP)."""
     fin = [e for e in build_examples(item, final=final, subq="none", subq_target=subq_target, lambda_sub=0.0, rng=rng,
                                      permute_final=permute_final) if e.kind == "final"]
     if not fin:
         return []
     if sources is not None and item.get("source") not in sources:
         return fin
-    if view != "problem":
+    if view not in ("problem", "statements"):
         return fin + _local_views(item, mode=mode, view=view, rng=rng, cap=cap, aux_total=aux_total,
                                   subq_target=subq_target, node_format=node_format, eligible_only=eligible_only,
                                   subq_filter=subq_filter, node_weight=node_weight, stats=stats)
+    if view == "statements" and (mode != "plain" or eligible_only or node_format != "yesno"):
+        raise ValueError("--tree-view statements is implemented for --tree-full plain (yes/no nodes, all nodes)")
+    context = statement_block(item) if view == "statements" else item["prompt"]
     wi = item.get("weight", 1.0)
     views = []
     if eligible_only and mode == "control":
@@ -340,7 +346,7 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
             if ex is not None:
                 out.append(ex)
                 continue
-        problem = item["prompt"] + (f"\n\n{FACTS_HEADER}\n" + "\n".join(lines) if lines else "")
+        problem = context + (f"\n\n{FACTS_HEADER}\n" + "\n".join(lines) if lines else "")
         yes_first = rng.random() < 0.5
         a, b = ("Yes", "No") if yes_first else ("No", "Yes")
         out.append(Example(SUBQ_TEMPLATE.format(problem=problem, question=sq["question"], a=a, b=b), ["A", "B"],
@@ -358,13 +364,18 @@ def _local_views(item: dict, *, mode: str, view: str, rng: random.Random, cap: i
       (full_tree_plan's selection, post-audit rules) where the plan finds them, else the true parents (the view is
       then the same in both modes; counted as matched_frozen), so the two modes state the same number of results in
       every view and draw rng in lockstep;
-    - other nodes, view "ancestors" (mode "true" only): the results of every transitive ancestor, shallow to deep.
+    - other nodes, view "ancestors" (mode "true" only): the results of every transitive ancestor, shallow to deep;
+    - other nodes, view "local" with mode "plain" (TFLN): nothing stated, the preamble only. The node set, the drops
+      and the rng draws are those of mode "true" (the parents' results are selected and checked, and their line order
+      drawn, but not shown), so TFLN is in lockstep with TFL: same nodes, order, weights and targets.
     Views that would state the final answer (view_leak) are dropped and counted; so are non-leaf nodes without
     parents or with a parent whose result is not confident (nothing sufficient to state). The node is then asked as
     in the problem-view arms (yes/no order drawn from rng, the same soft target). Weight: node_weight, else
     aux_total / views (the full-tree convention)."""
-    if mode not in ("true", "matched") or (view == "ancestors" and mode != "true") or view not in ("local", "ancestors"):
-        raise ValueError(f"--tree-view {view} is implemented for --tree-full true (and matched with the local view)")
+    if (mode not in ("true", "matched", "plain") or (view == "ancestors" and mode != "true")
+            or view not in ("local", "ancestors")):
+        raise ValueError(f"--tree-view {view} is implemented for --tree-full true (and matched / plain with the local "
+                         "view)")
     if eligible_only or node_format != "yesno":
         raise ValueError("--tree-view local/ancestors does not combine with --tree-eligible-only / --node-format mc")
     st = stats if stats is not None else {}
@@ -403,10 +414,16 @@ def _local_views(item: dict, *, mode: str, view: str, rng: random.Random, cap: i
     bump("items_with_views", bool(views))
     bump("views", len(views))
     bump("leaf_views", sum(is_local_leaf(sq) for sq, _ in views))
-    bump("stated_lines", sum(len(x) for _, x in views))
+    if mode == "plain":
+        bump("withheld_lines", sum(len(x) for _, x in views))
+    else:
+        bump("stated_lines", sum(len(x) for _, x in views))
     w = (node_weight or aux_total / max(1, len(views))) * item.get("weight", 1.0)
     out = []
     for sq, stated in views:
+        if mode == "plain" and stated:              # TFLN: TFL's line-order draw, nothing shown
+            rng.shuffle([None] * len(stated))
+            stated = []
         ctx = local_context(item, sq, stated, depth=depth, rng=rng, order="depth" if view == "ancestors" else "shuffle")
         yes_first = rng.random() < 0.5
         a, b = ("Yes", "No") if yes_first else ("No", "Yes")

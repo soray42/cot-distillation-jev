@@ -262,9 +262,13 @@ class TestLocalViews(unittest.TestCase):
         self.assertTrue(all(abs(e.weight - 0.1) < 1e-12 for e in ex[1:]))
 
     def test_errors(self):
-        for mode, view in (("matched", "ancestors"), ("plain", "local"), ("control", "local")):
+        for mode, view in (("matched", "ancestors"), ("plain", "ancestors"), ("control", "local"), ("placebo", "local"),
+                           ("true", "statements"), ("matched", "statements"), ("control", "statements")):
             with self.assertRaises(ValueError):
                 self.build(mode, view)
+        for kw in (dict(eligible_only=True), dict(node_format="mc")):
+            with self.assertRaises(ValueError):
+                self.build("plain", "statements", **kw)
         with self.assertRaises(ValueError):
             from cotdistill.student import build_full_tree
             build_full_tree(dict(KK, local_preamble=None), mode="true", view="local", rng=random.Random(0), cap=0)
@@ -284,6 +288,162 @@ class TestLocalViews(unittest.TestCase):
         self.assertEqual(sorted(map(norm, exs)), sorted(map(norm, ex[1:])))             # same views as training
 
 
+
+V3SL_VAL = ROOT / "data/student_v3sl/val.jsonl"
+NUMGEN_VAL = ROOT / "data/student_numgen_tf/val.jsonl"
+
+
+def first_items(path: Path, source: str, n: int) -> list[dict]:
+    out = []
+    with open(path) as f:
+        for line in f:
+            it = json.loads(line)
+            if it.get("source") == source:
+                out.append(it)
+                if len(out) == n:
+                    break
+    return out
+
+
+def p_yes(e) -> float:
+    """The soft target's probability of Yes (the yes/no order is drawn per view)."""
+    return e.target[0] if e.text.endswith("Options:\nA) Yes\nB) No\nAnswer:") else e.target[1]
+
+
+@unittest.skipUnless(HAVE, "needs torch")
+class TestControlArms(unittest.TestCase):
+    """GFP-S (--tree-full plain --tree-view statements) and TFLN (--tree-full plain --tree-view local)."""
+
+    def build(self, item, mode, view, seed=0, **kw):
+        from cotdistill.student import build_full_tree
+        st = {}
+        ex = build_full_tree(item, mode=mode, view=view, rng=random.Random(seed), cap=kw.pop("cap", 0), stats=st, **kw)
+        return ex, st
+
+    def check_gfps(self, item, seed):
+        """GFP-S views: statement block only (no final question, no options), else GFP in rng lockstep."""
+        from cotdistill.treeplan import statement_block
+        block = statement_block(item)
+        stmt = re.findall(r"^- .+$", item["prompt"], re.M)
+        opt_lines = item["prompt"].split("\nOptions:\n", 1)[1].split("\n")
+        self.assertEqual(block, item["prompt"].split("\n\nQuestion: ")[0])
+        self.assertEqual(block.split("\n\n")[0], item["local_preamble"])
+        s, _ = self.build(item, "plain", "statements", seed=seed)
+        g, _ = self.build(item, "plain", "problem", seed=seed)
+        self.assertEqual(s[0].text, item["prompt"] + "\n\nAnswer:")                    # final view unchanged
+        self.assertEqual(len(s) - 1, len(item["subqs"]))                               # every node
+        for es, eg in zip(s[1:], g[1:]):
+            head, q, stated = split_view(es)
+            self.assertEqual(head, block)
+            self.assertEqual(stated, [])
+            self.assertNotIn("Question:", head)
+            self.assertNotIn("Options:", head)
+            self.assertFalse(any(l[3:] in head for l in opt_lines))                    # no option text
+            self.assertTrue(all(l in head for l in stmt))                              # every statement line
+            self.assertEqual(es.text, eg.text.replace(item["prompt"], block, 1))       # GFP minus question/options
+            self.assertEqual((es.labels, es.target, es.weight, es.kind, es.item_id),
+                             (eg.labels, eg.target, eg.weight, eg.kind, eg.item_id))   # rng lockstep with GFP
+        return s
+
+    def check_tfln(self, item, seed):
+        """TFLN views: parse nodes their line, derived nodes the preamble only; else TFL in rng lockstep."""
+        from cotdistill.treeplan import LOCAL_HEADER
+        byq = {sq["question"]: sq for sq in item["subqs"]}
+        stmt = re.findall(r"^- .+$", item["prompt"], re.M)
+        n, st_n = self.build(item, "plain", "local", seed=seed)
+        t, st_t = self.build(item, "true", "local", seed=seed)
+        self.assertEqual(len(n), len(t))
+        self.assertEqual(n[0].text, t[0].text)
+        for en, et in zip(n[1:], t[1:]):
+            head, q, stated = split_view(en)
+            sq = byq[q]
+            self.assertEqual(q, split_view(et)[1])                                     # same node, same order
+            self.assertEqual((en.labels, en.target, en.weight), (et.labels, et.target, et.weight))   # lockstep
+            self.assertNotIn(LOCAL_HEADER, en.text)
+            self.assertEqual(stated, [])
+            self.assertNotIn("Question:", head)
+            if sq.get("local_lines"):
+                self.assertEqual(head, item["local_preamble"] + "\n\n" + "\n".join(sq["local_lines"]))
+                self.assertEqual(en.text, et.text)                                     # leaves identical to TFL
+            else:
+                self.assertEqual(head, item["local_preamble"])                         # nothing stated
+                self.assertFalse(any(l in en.text for l in stmt))
+        self.assertEqual(st_n["views"], st_t["views"])
+        self.assertEqual(st_n["leaf_views"], st_t["leaf_views"])
+        self.assertEqual(st_n["withheld_lines"], st_t["stated_lines"])
+        self.assertNotIn("stated_lines", st_n)
+        return n
+
+    def check_same_nodes(self, item, seed):
+        """GFP, GFP-S, TFL and TFLN: the same nodes in the same order with the same targets (as P(Yes); the yes/no
+        order is in lockstep only within GFP/GFP-S and within TFL/TFLN) and the same weights."""
+        arms = {name: self.build(item, mode, view, seed=seed)[0]
+                for name, (mode, view) in {"GFP": ("plain", "problem"), "GFPS": ("plain", "statements"),
+                                           "TFL": ("true", "local"), "TFLN": ("plain", "local")}.items()}
+        ref = arms["GFP"]
+        for name, ex in arms.items():
+            self.assertEqual([split_view(e)[1] for e in ex[1:]], [split_view(e)[1] for e in ref[1:]], name)
+            self.assertEqual([round(p_yes(e), 12) for e in ex[1:]], [round(p_yes(e), 12) for e in ref[1:]], name)
+            self.assertEqual([e.weight for e in ex], [e.weight for e in ref], name)
+            self.assertEqual(ex[0].text, ref[0].text, name)
+
+    def test_fixture(self):
+        for seed in range(6):
+            self.check_gfps(KK, seed)
+            self.check_tfln(KK, seed)
+            self.check_same_nodes(KK, seed)
+        with self.assertRaises(ValueError):                                            # TFLN needs local fields
+            self.build(dict(KK, local_preamble=None), "plain", "local")
+
+    @unittest.skipUnless(V3SL_VAL.exists(), "data/student_v3sl not built")
+    def test_real_v3sl_items(self):
+        items = first_items(V3SL_VAL, "knights_knaves", 5)
+        self.assertEqual(len(items), 5)
+        for it in items:
+            for seed in (0, 1):
+                self.check_gfps(it, seed)
+                self.check_tfln(it, seed)
+                self.check_same_nodes(it, seed)
+
+    def test_sources_and_weights(self):
+        for view in ("statements", "local"):
+            ex, _ = self.build(KK, "plain", view, sources={"justlogic"})
+            self.assertEqual([e.kind for e in ex], ["final"])
+            ex, _ = self.build(KK, "plain", view)
+            self.assertAlmostEqual(sum(e.weight for e in ex[1:]), 1.0)                 # per-problem convention
+            ex, _ = self.build(KK, "plain", view, node_weight=0.1)
+            self.assertTrue(all(abs(e.weight - 0.1) < 1e-12 for e in ex[1:]))
+        other = {"item_id": "o", "source": "justlogic", "prompt": "P\nOptions:\nA) a\nB) b", "labels": ["A", "B"],
+                 "gold_label": "A", "teacher": {"A": 0.8, "B": 0.2},
+                 "subqs": [{"id": "n1", "question": "q?", "p_cot": 0.9, "depends_on": []}]}
+        with self.assertRaises(ValueError):                                            # no statement block defined
+            self.build(other, "plain", "statements")
+        with self.assertRaises(ValueError):                                            # malformed K&K prompt
+            self.build(dict(KK, prompt=KK["prompt"].replace("\n\nQuestion: ", "\n\nAsk: ")), "plain", "statements")
+
+    @unittest.skipUnless(NUMGEN_VAL.exists(), "data/student_numgen_tf not built")
+    def test_numgen_statement_block(self):
+        from cotdistill.treeplan import statement_block
+        for it in first_items(NUMGEN_VAL, "numgen", 5):
+            block = statement_block(it)
+            ask = next(q["question"] for q in it["program"]["quantities"] if q["id"] == it["program"]["answer"])
+            self.assertEqual(it["prompt"].split("\nOptions:\n")[0], "Question: " + block + " " + ask)
+            self.assertTrue(block.startswith(it["local_preamble"] + " "))
+            self.assertNotIn("?", block)
+            self.assertNotIn("Question:", block)
+            self.assertNotIn("\n", block)
+            for sq in it["subqs"]:                                                     # every leaf sentence kept
+                for line in sq.get("local_lines") or []:
+                    self.assertIn(line, block)
+            s, _ = self.build(it, "plain", "statements", sources={"numgen"})
+            g, _ = self.build(it, "plain", "problem", sources={"numgen"})
+            self.assertEqual(len(s), len(g))
+            for es, eg in zip(s[1:], g[1:]):
+                self.assertEqual(split_view(es)[0], block)
+                self.assertEqual(es.text, eg.text.replace(it["prompt"], block, 1))
+                self.assertEqual((es.target, es.weight), (eg.target, eg.weight))
+
+
 @unittest.skipUnless(HAVE, "needs torch + transformers")
 class TestTrainLocal(unittest.TestCase):
     def test_training_on_cpu(self):
@@ -299,7 +459,8 @@ class TestTrainLocal(unittest.TestCase):
                  "--items-per-update", "3", "--epochs", "1", "--micro-bs", "8", "--max-len", "512", "--precision", "bf16",
                  "--no-grad-ckpt", "--log-every", "1", "--out", d + "/o", *a],
                 capture_output=True, text=True, timeout=900, env=ENV)
-            for mode, view in (("true", "local"), ("matched", "local"), ("true", "ancestors")):
+            for mode, view in (("true", "local"), ("matched", "local"), ("true", "ancestors"), ("plain", "local"),
+                               ("plain", "statements")):
                 out = run("--tree-full", mode, "--tree-view", view, "--tree-cap", "0", "--tree-sources", "knights_knaves",
                           "--eval-local", d + "/t.jsonl")
                 self.assertEqual(out.returncode, 0, out.stderr[-2000:])
@@ -318,6 +479,12 @@ class TestTrainLocal(unittest.TestCase):
                     self.assertTrue(0 <= h["clip_frac"] <= 1 and h["gnorm_max"] >= h["gnorm"])
             out = run("--tree-full", "matched", "--tree-view", "ancestors")
             self.assertNotEqual(out.returncode, 0)
+            for mode in ("true", "matched"):
+                out = run("--tree-full", mode, "--tree-view", "statements")
+                self.assertNotEqual(out.returncode, 0)
+            out = run("--tree-full", "plain", "--tree-view", "statements")       # justlogic items have no block
+            self.assertNotEqual(out.returncode, 0)
+            self.assertIn("no statement block", out.stderr)
             out = run("--tree-view", "local")
             self.assertNotEqual(out.returncode, 0)
 
