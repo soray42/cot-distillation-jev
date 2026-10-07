@@ -221,6 +221,19 @@ def statement_block(item: dict) -> str:
                      "(defined for knights_knaves and numgen; restrict with --tree-sources)")
 
 
+# Views that put the statement block (above) in place of some nodes' local views, in rng lockstep with TFL:
+# "local+ctxparse" (TFLP) for parse nodes and nodes without parents, "mix" (MIX) for a seeded coin's share of all nodes.
+CTX_VIEWS = ("local+ctxparse", "mix")
+
+
+def mix_statements(seed: int, epoch: int, item_id, node_id, p: float) -> bool:
+    """--tree-view mix: whether this node is asked in the statements view this epoch (else in its local view). Each
+    (seed, epoch, item, node) has a coin of its own: random.Random seeds a str key through sha512, so the draw depends
+    on nothing else (not on PYTHONHASHSEED, the training rng, the node order or the other nodes). p 0 never, p 1
+    always (random() < 1)."""
+    return random.Random(f"mix|{seed}|{epoch}|{item_id}|{node_id}").random() < p
+
+
 def kk_people(item: dict) -> list[str]:
     return re.findall(r"^- ([A-Z][a-z]+) says: ", item.get("prompt", ""), re.M)
 

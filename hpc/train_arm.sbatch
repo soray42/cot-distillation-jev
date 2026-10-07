@@ -78,6 +78,11 @@
 # Controls: GFPS (GFP-S) = GFP with the problem cut to its statement block (preamble + "- X says" lines; no final
 # question, no options; rng lockstep with GFP) · TFLN = TFL with nothing stated (parse nodes still see their line,
 # derived nodes only the preamble; rng lockstep with TFL). Same knobs (NODEW, LOCAL_EVAL, run dir runs/<ARM>...).
+# Premise extraction (impl.md section 9): TFLP = TFL with the parse nodes asked in the GFPS view (the whole statement
+# block instead of their own line) · MIX = every node asked once per epoch, in the GFPS view with probability .5 (a
+# coin per seed, epoch, item and node), else in its TFL view. Both in rng lockstep with TFL (same nodes, order, targets
+# and weights as TFL and GFPS); same knobs; no new upper-case knob. Another MIX share: XARGS="--tree-mix-p P" with
+# TAG=mp<P> (the run dir does not show P otherwise).
 # NODEW=w gives every node view weight w (--tree-node-weight; default: the per-problem split, aux 1.0 / views, about
 # .023 per K&K node); set it to the same value for all arms of a comparison. LOCAL_EVAL=path scores the
 # local-step probe (--eval-local: every K&K node in its local view, eval key local_kk); when unset it is
@@ -189,6 +194,8 @@ arm_config() {           # sets F S T RLM DS for arm $1
     GFP) F=teacher; S=cot;   T=cot; DX="--tree-full plain --tree-view problem --tree-cap 0 --tree-sources knights_knaves" ;;   # every node, full problem
     GFPS) F=teacher; S=cot;  T=cot; DX="--tree-full plain --tree-view statements --tree-cap 0 --tree-sources knights_knaves" ;; # GFP-S: no question/options
     TFLN) F=teacher; S=cot;  T=cot; DX="--tree-full plain --tree-view local --tree-cap 0 --tree-sources knights_knaves" ;;   # local view, nothing stated
+    TFLP) F=teacher; S=cot;  T=cot; DX="--tree-full true --tree-view local+ctxparse --tree-cap 0 --tree-sources knights_knaves" ;;  # TFL, parse nodes in the GFPS view
+    MIX) F=teacher; S=cot;   T=cot; DX="--tree-full true --tree-view mix --tree-cap 0 --tree-sources knights_knaves" ;;   # per node and epoch: TFL or GFPS view (p .5)
     *) echo "unknown ARM $1"; return 1 ;;
   esac
 }

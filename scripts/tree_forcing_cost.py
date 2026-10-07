@@ -33,6 +33,10 @@ ARMS = {   # name: (data, kind, kwargs)
     "GFP": ("data/student_v3sl", "tree", dict(mode="plain", cap=0, view="problem", sources={"knights_knaves"})),
     "GFPS": ("data/student_v3sl", "tree", dict(mode="plain", cap=0, view="statements", sources={"knights_knaves"})),
     "TFLN": ("data/student_v3sl", "tree", dict(mode="plain", cap=0, view="local", sources={"knights_knaves"})),
+    "TFLP": ("data/student_v3sl", "tree", dict(mode="true", cap=0, view="local+ctxparse", sources={"knights_knaves"})),
+    # MIX: the views of epoch 0 at seed 0 (the coins change every epoch; the share of statements views stays ~.5)
+    "MIX": ("data/student_v3sl", "tree", dict(mode="true", cap=0, view="mix", sources={"knights_knaves"}, mix_seed=0,
+                                              mix_epoch=0)),
 }
 CALIB = {"TF cap10 v3f": "results/hpc/c4v3f/TF-c4-Qwen3.5-2B-Base-student_v3f-s12",
          "G3 v3f": "results/hpc/w1/G3-c4-Qwen3.5-2B-Base-student_v3f-s12",

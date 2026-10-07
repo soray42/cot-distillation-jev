@@ -41,7 +41,7 @@ RESUME_FREE = {"stop_after_h", "ckpt_every_min", "ckpt_single", "stop_at_step", 
 
 # Training arguments added after checkpoints may have been written: a checkpoint without the key had this value.
 NEW_ARG_DEFAULTS = {"tree_view": "problem", "tree_sources": "", "tree_node_weight": 0.0, "attn_impl": "", "fsdp": False,
-                    "fsdp_optim": None}
+                    "fsdp_optim": None, "tree_mix_p": 0.5}
 
 LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj",
                 "in_proj_qkv", "in_proj_z", "in_proj_a", "in_proj_b", "out_proj"]
@@ -107,7 +107,8 @@ def main() -> None:
                          "or --seed alone (node sampling, option order) decomposes the seed variance")
     ap.add_argument("--tree-cap", type=int, default=10,
                     help="full-tree groups: at most this many nodes per problem (0 = no cap: every node every epoch)")
-    ap.add_argument("--tree-view", default="problem", choices=["problem", "local", "ancestors", "statements"],
+    ap.add_argument("--tree-view", default="problem",
+                    choices=["problem", "local", "ancestors", "statements", "local+ctxparse", "mix"],
                     help="full-tree groups: how a node is asked. problem = with the original problem (the TF/TFM/GF "
                          "arms); local = Tree Forcing: no problem text, only the preamble and the parents' results "
                          "(--tree-full true) or as many matched non-parent results (matched) or nothing (plain: "
@@ -115,7 +116,13 @@ def main() -> None:
                          "transitive ancestor's result, shallow to deep (true only). Needs the local fields of "
                          "data/student_v3sl (scripts/build_local_kk.py). statements = GFP-S (plain only): the problem "
                          "view without the final question and its options (K&K: preamble + statement lines; numgen: "
-                         "the problem text without its question sentence), in rng lockstep with GFP")
+                         "the problem text without its question sentence), in rng lockstep with GFP. local+ctxparse = "
+                         "TFLP (true only): TFL with the parse nodes asked in the statements view; mix = MIX (true "
+                         "only): each node asked once per epoch, in the statements view with probability "
+                         "--tree-mix-p (a coin per seed, epoch, item and node), else in its TFL view; both in rng "
+                         "lockstep with TFL")
+    ap.add_argument("--tree-mix-p", type=float, default=0.5,
+                    help="--tree-view mix: share of node views asked in the statements view (the rest local)")
     ap.add_argument("--tree-sources", default="",
                     help="full-tree groups: comma list of item sources that get node views; other items train their "
                          "final question only (every view mode); empty = all sources")
@@ -213,11 +220,13 @@ def main() -> None:
     if args.tree_view != "problem" and not (args.tree_full == "true" and args.tree_view != "statements" or
                                              args.tree_full in ("matched", "plain") and args.tree_view == "local" or
                                              args.tree_full == "plain" and args.tree_view == "statements"):
-        raise SystemExit(f"--tree-view {args.tree_view} is implemented for --tree-full true (local/ancestors), matched "
-                         "(local) and plain (local, statements)")
+        raise SystemExit(f"--tree-view {args.tree_view} is implemented for --tree-full true (local/ancestors/"
+                         "local+ctxparse/mix), matched (local) and plain (local, statements)")
     if args.tree_view != "problem" and (args.tree_eligible_only or args.node_format != "yesno"):
-        raise SystemExit("--tree-view local/ancestors/statements does not combine with --tree-eligible-only / "
-                         "--node-format mc")
+        raise SystemExit("--tree-view local/ancestors/statements/local+ctxparse/mix does not combine with "
+                         "--tree-eligible-only / --node-format mc")
+    if not 0.0 <= args.tree_mix_p <= 1.0 or args.tree_mix_p != 0.5 and args.tree_view != "mix":
+        raise SystemExit(f"--tree-mix-p {args.tree_mix_p}: a probability, for --tree-view mix only")
     if args.tree_eligible_only and args.tree_full not in ("true", "matched", "plain", "placebo"):
         raise SystemExit("--tree-eligible-only needs --tree-full true/matched/plain/placebo")
     if args.subq_filter != "all" and (args.depth_stages or args.fact_stages or args.facts_always):
@@ -378,14 +387,14 @@ def main() -> None:
     tree_sources = {x for x in args.tree_sources.split(",") if x} or None
     if tree_sources and not any(it.get("source") in tree_sources for it in train_items):
         raise SystemExit(f"--tree-sources {args.tree_sources}: no item of {args.train} has one of these sources")
-    if args.tree_view == "statements":         # GFP-S: every node-view item needs a statement block (fail before training)
-        from cotdistill.treeplan import statement_block
+    if args.tree_view in ("statements", "local+ctxparse", "mix"):   # GFP-S, TFLP, MIX: every node-view item needs a
+        from cotdistill.treeplan import statement_block                 # statement block (fail before training)
         for it in train_items:
             if tree_sources is None or it.get("source") in tree_sources:
                 try:
                     statement_block(it)
                 except ValueError as e:
-                    raise SystemExit(f"--tree-view statements: {e}")
+                    raise SystemExit(f"--tree-view {args.tree_view}: {e}")
     tree_stats: dict = {}
 
     def fulltree_updates() -> list[list[Example]]:
@@ -394,16 +403,22 @@ def main() -> None:
         items = train_items[:]
         order_rng.shuffle(items)
         st: dict = {}
+        ep = passes["n"]                     # MIX keys its per-node coins by it (checkpointed; the counting pass is 0)
+        passes["n"] += 1
         groups = [g for g in (build_full_tree(it, mode=args.tree_full, rng=rng, cap=args.tree_cap,
                                               aux_total=args.aux_total, node_format=args.node_format,
                                               final=args.final, eligible_only=args.tree_eligible_only,
                                               subq_target=args.subq_target, permute_final=args.permute_final,
                                               subq_filter=args.subq_filter, view=args.tree_view,
-                                              sources=tree_sources, node_weight=args.tree_node_weight, stats=st)
+                                              sources=tree_sources, node_weight=args.tree_node_weight, stats=st,
+                                              mix_p=args.tree_mix_p, mix_seed=args.seed, mix_epoch=ep)
                               for it in items) if g]
         if tree_opts and not tree_stats:     # the plan's counting pass: views, dropped views, stated results
             tree_stats.update(st)
             print("tree views", json.dumps(st, sort_keys=True), flush=True)
+        if args.tree_view == "mix":
+            print(f"mix pass {ep}: {st.get('statements_views', 0)} statements views, {st.get('local_views', 0)} local "
+                  "views", flush=True)
         b = args.items_per_update
         return [[e for g in groups[i:i + b] for e in g] for i in range(0, len(groups), b)]
 

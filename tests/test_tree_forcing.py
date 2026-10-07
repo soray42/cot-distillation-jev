@@ -1,5 +1,6 @@
-"""Tree Forcing views (--tree-view local / ancestors, --tree-cap 0, --tree-sources, --tree-node-weight, --eval-local):
-default behaviour identical to HEAD, rendering, filters and the matched-local control. CPU only."""
+"""Tree Forcing views (--tree-view local / ancestors / statements / local+ctxparse / mix, --tree-cap 0, --tree-sources,
+--tree-node-weight, --eval-local): default behaviour identical to HEAD, rendering, filters, the controls and the
+premise-extraction arms TFLP / MIX. CPU only."""
 import dataclasses
 import json
 import os
@@ -30,12 +31,16 @@ ENV = {**os.environ, "CUDA_VISIBLE_DEVICES": "", "OMP_NUM_THREADS": "2"}
 # The pre-Tree-Forcing commit the default path is compared with. Pinned, not HEAD: once the Tree Forcing code is
 # committed, HEAD would compare the new code with itself.
 BASE_REF = os.environ.get("TF_BASE_REF", "6a4a771")
+# The last commit before the TFLP / MIX views: the existing Tree Forcing views (TFL, TFA, TFLM, GFP, GFP-S, TFLN) are
+# compared with it.
+VIEWS_REF = os.environ.get("TF_VIEWS_REF", "c289894")
 
 
-def head_tree(dest: str) -> Path | None:
-    """src/ and scripts/ of the pre-Tree-Forcing commit BASE_REF under dest (None outside a git checkout)."""
+def head_tree(dest: str, ref: str = BASE_REF) -> Path | None:
+    """src/ and scripts/ of commit ref (default: the pre-Tree-Forcing BASE_REF) under dest (None outside a git
+    checkout)."""
     try:
-        blob = subprocess.run(["git", "-C", str(ROOT), "archive", BASE_REF, "src/cotdistill", "scripts/train_student.py"],
+        blob = subprocess.run(["git", "-C", str(ROOT), "archive", ref, "src/cotdistill", "scripts/train_student.py"],
                               capture_output=True, check=True).stdout
     except (OSError, subprocess.CalledProcessError):
         return None
@@ -47,15 +52,15 @@ def head_tree(dest: str) -> Path | None:
     return Path(dest)
 
 
-def head_student(dest: str):
-    """HEAD's cotdistill.student, imported as a separate package (cotdistill_head)."""
-    root = head_tree(dest)
+def head_student(dest: str, ref: str = BASE_REF, name: str = "cotdistill_head"):
+    """cotdistill.student of commit ref, imported as a separate package (name; one name per ref)."""
+    root = head_tree(dest, ref)
     if root is None:
         return None
-    (root / "src/cotdistill").rename(root / "src/cotdistill_head")
+    (root / "src/cotdistill").rename(root / f"src/{name}")
     sys.path.insert(0, str(root / "src"))
     import importlib
-    return importlib.import_module("cotdistill_head.student")
+    return importlib.import_module(f"{name}.student")
 
 
 def tiny(d: str) -> None:
@@ -487,6 +492,333 @@ class TestTrainLocal(unittest.TestCase):
             self.assertIn("no statement block", out.stderr)
             out = run("--tree-view", "local")
             self.assertNotEqual(out.returncode, 0)
+
+
+def yes_no_canon(text: str) -> str:
+    """A node view's text with its options in the order Yes, No (the order is drawn per view)."""
+    return text.replace("Options:\nA) No\nB) Yes\nAnswer:", "Options:\nA) Yes\nB) No\nAnswer:")
+
+
+def problem_sentences(item: dict) -> set:
+    """The problem's statement lines (K&K "- X says: ...") / sentences (numgen) that the item's parse nodes read."""
+    return {line for sq in item["subqs"] for line in sq.get("local_lines") or []}
+
+
+@unittest.skipUnless(HAVE, "needs torch")
+class TestCtxArms(unittest.TestCase):
+    """TFLP (--tree-full true --tree-view local+ctxparse) and MIX (--tree-full true --tree-view mix): TFL with some
+    nodes asked in the GFP-S statements view instead, in rng lockstep with TFL."""
+
+    def build(self, item, mode, view, seed=0, src="knights_knaves", **kw):
+        from cotdistill.student import build_full_tree
+        st = {}
+        ex = build_full_tree(item, mode=mode, view=view, rng=random.Random(seed), cap=kw.pop("cap", 0), stats=st,
+                             sources={src}, **kw)
+        return ex, st
+
+    def against_tfl(self, item, ex, seed, src):
+        """Each node view of ex is TFL's view byte for byte ("local") or TFL's view with its head replaced by the
+        statement block, nothing stated ("stmt"); nodes, order, labels, soft targets (yes/no order included), weights
+        and the final view are TFL's. -> (kinds, TFL's stats)."""
+        from cotdistill.treeplan import LOCAL_HEADER, statement_block
+        block = statement_block(item)
+        t, st_t = self.build(item, "true", "local", seed, src)
+        self.assertEqual(len(ex), len(t))
+        self.assertEqual(ex[0].text, t[0].text)
+        self.assertEqual(ex[0].text, item["prompt"] + "\n\nAnswer:")                  # final view unchanged
+        kinds = []
+        for e, et in zip(ex[1:], t[1:]):
+            head, q, stated = split_view(e)
+            head_t, q_t, _ = split_view(et)
+            self.assertEqual(q, q_t)                                                     # same node, same order
+            self.assertEqual((e.labels, e.target, e.weight, e.kind, e.item_id),
+                             (et.labels, et.target, et.weight, et.kind, et.item_id))     # rng lockstep with TFL
+            self.assertNotIn("Question:", head)
+            self.assertNotIn("Options:", head)
+            if head == block:
+                kinds.append("stmt")
+                self.assertEqual(stated, [])
+                self.assertNotIn(LOCAL_HEADER, e.text)
+                self.assertEqual(e.text, et.text.replace(head_t, block, 1))
+            else:
+                kinds.append("local")
+                self.assertEqual(e.text, et.text)
+        return kinds, st_t
+
+    def check_tflp(self, item, seed, src="knights_knaves"):
+        """TFLP: parse views = the whole statement block (every statement line, not only their own); derived views =
+        TFL's local views, with no problem text."""
+        from cotdistill.treeplan import statement_block
+        byq = {sq["question"]: sq for sq in item["subqs"]}
+        block, sent = statement_block(item), problem_sentences(item)
+        p, st = self.build(item, "true", "local+ctxparse", seed, src)
+        kinds, st_t = self.against_tfl(item, p, seed, src)
+        for e, k in zip(p[1:], kinds):
+            sq = byq[split_view(e)[1]]
+            if sq.get("local_lines"):
+                self.assertEqual(k, "stmt")
+                self.assertTrue(all(line in block for line in sq["local_lines"]))
+                self.assertTrue(all(line in e.text for line in sent))
+            else:
+                self.assertEqual(k, "local")
+                self.assertTrue(e.text.startswith(item["local_preamble"] + "\n\n"))
+                self.assertFalse(any(line in e.text for line in sent))                    # no problem text
+        self.assertEqual(st["views"], st_t["views"])
+        self.assertEqual(st["statements_views"], st_t["leaf_views"])
+        self.assertEqual(st["statements_leaf_views"], st_t["leaf_views"])
+        self.assertEqual(st["local_views"], st_t["views"] - st_t["leaf_views"])
+        self.assertEqual(st["stated_lines"], st_t["stated_lines"])
+        self.assertEqual((st["withheld_lines"], st["statements_no_parents"]), (0, 0))
+        return kinds
+
+    def check_mix(self, item, seed, src="knights_knaves", epoch=0, p=0.5):
+        """MIX: one view per node (TFL's or the statements view), counted in the stats; the choice depends on (seed,
+        epoch, item, node) only, not on the training rng; the same arguments give the same examples. -> kinds."""
+        kw = dict(mix_p=p, mix_seed=seed, mix_epoch=epoch)
+        m, st = self.build(item, "true", "mix", seed, src, **kw)
+        kinds, st_t = self.against_tfl(item, m, seed, src)
+        self.assertEqual(st["views"], st_t["views"])
+        self.assertEqual((st["statements_views"], st["local_views"]), (kinds.count("stmt"), kinds.count("local")))
+        self.assertEqual(st["stated_lines"] + st["withheld_lines"], st_t["stated_lines"])
+        self.assertEqual(st["statements_no_parents"], 0)
+        again, _ = self.build(item, "true", "mix", seed, src, **kw)
+        self.assertEqual([dataclasses.astuple(e) for e in again], [dataclasses.astuple(e) for e in m])
+        other_rng, _ = self.build(item, "true", "mix", seed + 100, src, **kw)          # another training-rng seed
+        self.assertEqual(self.against_tfl(item, other_rng, seed + 100, src)[0], kinds)
+        return kinds
+
+    def check_same_nodes(self, item, seed, src="knights_knaves"):
+        """TFLP and MIX vs GFP-S: the same nodes in the same order, P(Yes), weights and final view; MIX with mix_p 1
+        is GFP-S up to the yes/no order, with mix_p 0 it is TFL."""
+        g, _ = self.build(item, "plain", "statements", seed, src)
+        t, _ = self.build(item, "true", "local", seed, src)
+        arms = {"TFLP": self.build(item, "true", "local+ctxparse", seed, src)[0],
+                "MIX": self.build(item, "true", "mix", seed, src, mix_seed=seed)[0]}
+        for name, ex in arms.items():
+            self.assertEqual([split_view(e)[1] for e in ex[1:]], [split_view(e)[1] for e in g[1:]], name)
+            self.assertEqual([round(p_yes(e), 12) for e in ex[1:]], [round(p_yes(e), 12) for e in g[1:]], name)
+            self.assertEqual([e.weight for e in ex], [e.weight for e in g], name)
+            self.assertEqual(ex[0].text, g[0].text, name)
+        for e, eg in zip(arms["TFLP"][1:], g[1:]):                                       # parse views = GFP-S views
+            if split_view(e)[0] == split_view(eg)[0]:
+                self.assertEqual(yes_no_canon(e.text), yes_no_canon(eg.text))
+        all_stmt, _ = self.build(item, "true", "mix", seed, src, mix_p=1.0, mix_seed=seed)
+        self.assertEqual([yes_no_canon(e.text) for e in all_stmt], [yes_no_canon(e.text) for e in g])
+        self.assertEqual([round(p_yes(e), 12) for e in all_stmt], [round(p_yes(e), 12) for e in g])
+        all_local, _ = self.build(item, "true", "mix", seed, src, mix_p=0.0, mix_seed=seed)
+        self.assertEqual([dataclasses.astuple(e) for e in all_local], [dataclasses.astuple(e) for e in t])
+
+    def test_fixture(self):
+        kinds = {}
+        for seed in range(6):
+            k = self.check_tflp(KK, seed)
+            self.assertEqual(k.count("stmt"), sum(bool(sq.get("local_lines")) for sq in KK["subqs"]))
+            self.assertGreater(k.count("local"), 0)
+            for epoch in (0, 1):
+                kinds[seed, epoch] = self.check_mix(KK, seed, epoch=epoch)
+            self.assertNotEqual(kinds[seed, 0], kinds[seed, 1])                           # epochs differ
+            self.check_same_nodes(KK, seed)
+        self.assertNotEqual(kinds[0, 0], kinds[1, 0])                                     # seeds differ
+        share = sum(k.count("stmt") for k in kinds.values()) / sum(map(len, kinds.values()))
+        self.assertTrue(0.4 < share < 0.6, share)                                          # 12 x 21 views
+
+    @unittest.skipUnless(V3SL_VAL.exists(), "data/student_v3sl not built")
+    def test_real_v3sl_items(self):
+        items = first_items(V3SL_VAL, "knights_knaves", 5)
+        self.assertEqual(len(items), 5)
+        for seed in (0, 1):
+            share = {}
+            for epoch in (0, 1):
+                ks = [self.check_mix(it, seed, epoch=epoch) for it in items]
+                share[epoch] = sum(k.count("stmt") for k in ks) / sum(map(len, ks))
+                self.assertTrue(0.4 < share[epoch] < 0.6, share)                          # about half of each kind
+                share[epoch, "kinds"] = ks
+            self.assertNotEqual(share[0, "kinds"], share[1, "kinds"])
+            for it in items:
+                self.check_tflp(it, seed)
+                self.check_same_nodes(it, seed)
+
+    @unittest.skipUnless(NUMGEN_VAL.exists(), "data/student_numgen_tf not built")
+    def test_numgen_items(self):
+        """5 numgen val items: the first of each depth (d1: 1 operation, read / parse leaves only; d2-d4: with
+        derived nodes) and the second d4 item."""
+        items, per = [], {}
+        with open(NUMGEN_VAL) as f:
+            for line in f:
+                it = json.loads(line)
+                d = it["item_id"].split("-")[2]
+                per[d] = per.get(d, 0) + 1
+                if it.get("source") == "numgen" and per[d] <= (2 if d == "d4" else 1):
+                    items.append(it)
+        self.assertEqual(len(items), 5)
+        kinds = []
+        for it in items:
+            kinds += self.check_tflp(it, 0, "numgen")          # (depth-1 items have only read / parse leaves)
+            self.check_mix(it, 0, "numgen")
+            self.check_same_nodes(it, 0, "numgen")
+        self.assertGreater(kinds.count("stmt") * kinds.count("local"), 0)
+
+    def test_node_without_parents(self):
+        """A non-leaf node without parents: TFL drops it; TFLP and MIX ask it in the statements view."""
+        from cotdistill.treeplan import CTX_VIEWS, statement_block
+        item = json.loads(json.dumps(KK))
+        sq = next(x for x in item["subqs"] if not x.get("local_lines") and x["depends_on"])
+        sq["depends_on"] = []
+        t, st_t = self.build(item, "true", "local")
+        self.assertEqual(st_t["dropped_no_parents"], 1)
+        for view in CTX_VIEWS:
+            for p in (0.0, 1.0):
+                ex, st = self.build(item, "true", view, mix_p=p)
+                self.assertEqual(len(ex), len(t) + 1)
+                self.assertEqual(st["statements_no_parents"], 1)
+                e = next(e for e in ex[1:] if split_view(e)[1] == sq["question"])
+                self.assertEqual(split_view(e)[0], statement_block(item))
+
+    def test_sources_weights_errors(self):
+        from cotdistill.treeplan import CTX_VIEWS
+        other = {"item_id": "o", "source": "justlogic", "prompt": "P\nOptions:\nA) a\nB) b", "labels": ["A", "B"],
+                 "gold_label": "A", "teacher": {"A": 0.8, "B": 0.2}, "local_preamble": "P",
+                 "subqs": [{"id": "n1", "question": "q?", "p_cot": 0.9, "depends_on": [], "local_lines": ["P"]}]}
+        for view in CTX_VIEWS:
+            ex, _ = self.build(KK, "true", view, src="justlogic")
+            self.assertEqual([e.kind for e in ex], ["final"])
+            ex, _ = self.build(KK, "true", view)
+            self.assertAlmostEqual(sum(e.weight for e in ex[1:]), 1.0)                  # per-problem convention
+            ex, _ = self.build(KK, "true", view, node_weight=0.1)
+            self.assertTrue(all(abs(e.weight - 0.1) < 1e-12 for e in ex[1:]) and ex[0].weight == 1.0)
+            for mode in ("matched", "plain", "placebo", "control"):
+                with self.assertRaises(ValueError):
+                    self.build(KK, mode, view)
+            for kw in (dict(eligible_only=True), dict(node_format="mc"), dict(mix_p=1.5)):
+                with self.assertRaises(ValueError):
+                    self.build(KK, "true", view, **kw)
+            with self.assertRaisesRegex(ValueError, "no local_preamble"):
+                self.build(dict(KK, local_preamble=None), "true", view)
+            with self.assertRaisesRegex(ValueError, "no statement block"):
+                self.build(other, "true", view, src="justlogic")
+            with self.assertRaises(ValueError):                                          # malformed K&K prompt
+                self.build(dict(KK, prompt=KK["prompt"].replace("\n\nQuestion: ", "\n\nAsk: ")), "true", view)
+
+    def test_existing_views_match_ref(self):
+        """The views that existed before TFLP / MIX (TFL, TFLM, TFLN, TFA, GFP-S, GFP and the problem-view modes) give
+        exactly VIEWS_REF's examples and stats."""
+        from cotdistill.student import build_full_tree
+        with tempfile.TemporaryDirectory() as d:
+            ref = head_student(d, VIEWS_REF, "cotdistill_views")
+            if ref is None:
+                self.skipTest("not a git checkout")
+            items = [(KK, "knights_knaves")]
+            if V3SL_VAL.exists():
+                items += [(it, "knights_knaves") for it in first_items(V3SL_VAL, "knights_knaves", 3)]
+            if NUMGEN_VAL.exists():
+                items += [(it, "numgen") for it in first_items(NUMGEN_VAL, "numgen", 3)]
+            n = 0
+            for item, src in items:
+                for mode, view in (("true", "local"), ("matched", "local"), ("plain", "local"), ("true", "ancestors"),
+                                   ("plain", "statements"), ("plain", "problem"), ("true", "problem")):
+                    for nw in (0.0, 0.1):
+                        for seed in (0, 1):
+                            kw = dict(mode=mode, view=view, cap=0, sources={src}, node_weight=nw, permute_final=0.5)
+                            sa, sb = {}, {}
+                            a = ref.build_full_tree(item, rng=random.Random(seed), stats=sa, **kw)
+                            b = build_full_tree(item, rng=random.Random(seed), stats=sb, **kw)
+                            self.assertEqual([dataclasses.astuple(e) for e in a], [dataclasses.astuple(e) for e in b],
+                                             (item["item_id"], mode, view, nw, seed))
+                            self.assertEqual(sa, sb)
+                            n += 1
+            self.assertGreaterEqual(n, 28)
+
+
+@unittest.skipUnless(HAVE, "needs torch + transformers")
+class TestTrainCtxArms(unittest.TestCase):
+    OTHER = {"item_id": "o", "source": "justlogic", "prompt": "P\nOptions:\nA) a\nB) b", "labels": ["A", "B"],
+             "gold_label": "A", "teacher": {"A": 0.8, "B": 0.2},
+             "subqs": [{"id": "n1", "question": "q?", "p_cot": 0.9, "depends_on": []}]}
+
+    def setup_dir(self, d):
+        tiny(d)
+        items = [dict(KK, item_id=f"k{j}") for j in range(3)] + [dict(self.OTHER, item_id=f"o{j}") for j in range(3)]
+        Path(d + "/t.jsonl").write_text("\n".join(json.dumps(x) for x in items))
+
+    def run_script(self, d, *a, script=SCRIPT, out="o"):
+        return subprocess.run(
+            [sys.executable, script, "--model", d + "/m", "--train", d + "/t.jsonl", "--eval", "v=" + d + "/t.jsonl",
+             "--items-per-update", "3", "--micro-bs", "8", "--max-len", "512", "--no-grad-ckpt", "--log-every", "1",
+             "--out", f"{d}/{out}", *a], capture_output=True, text=True, timeout=900, env=ENV)
+
+    def test_training_on_cpu(self):
+        """Both arms train two epochs with the local-step probe; MIX draws new coins in each epoch (pass 0 = the
+        plan's counting pass, then epochs 0 and 1); the argument checks refuse the combinations that are not defined."""
+        with tempfile.TemporaryDirectory() as d:
+            self.setup_dir(d)
+            tree = ("--tree-cap", "0", "--tree-sources", "knights_knaves", "--epochs", "2", "--precision", "bf16")
+            for view in ("local+ctxparse", "mix"):
+                out = self.run_script(d, "--tree-full", "true", "--tree-view", view, *tree, "--eval-local", d + "/t.jsonl")
+                self.assertEqual(out.returncode, 0, out.stderr[-2000:])
+                m = json.loads(Path(d + "/o/metrics.json").read_text())
+                st = m["tree_view_stats"]
+                self.assertEqual(m["eval"]["local_kk"]["all"]["n"], st["views"])        # the TFL node set
+                self.assertIn("derived_nontrivial", m["eval"]["local_kk"])
+                self.assertEqual(st["statements_views"] + st["local_views"], st["views"])
+                self.assertGreater(st["statements_views"] * st["local_views"], 0)
+                if view == "mix":
+                    self.assertEqual(re.findall(r"^mix pass (\d+): ", out.stdout, re.M), ["0", "0", "1"])
+                else:
+                    self.assertEqual(st["statements_views"], st["leaf_views"])
+                    self.assertNotIn("mix pass", out.stdout)
+                for h in m["history"]:
+                    self.assertAlmostEqual(h["loss_final"] + h["loss_node"], h["loss"], delta=1e-3 * max(1, h["loss"]))
+                self.assertGreater(sum(h["loss_node"] for h in m["history"]), 0)
+            for bad in (("--tree-full", "plain", "--tree-view", "mix"),
+                        ("--tree-full", "matched", "--tree-view", "local+ctxparse"),
+                        ("--tree-full", "true", "--tree-view", "local", "--tree-mix-p", "0.3"),
+                        ("--tree-full", "true", "--tree-view", "mix", "--tree-mix-p", "1.5"),
+                        ("--tree-full", "true", "--tree-view", "mix", "--tree-eligible-only")):
+                out = self.run_script(d, *bad, "--tree-cap", "0", "--tree-sources", "knights_knaves")
+                self.assertNotEqual(out.returncode, 0, bad)
+            for view in ("local+ctxparse", "mix"):                                         # justlogic: no block
+                out = self.run_script(d, "--tree-full", "true", "--tree-view", view, "--tree-cap", "0")
+                self.assertNotEqual(out.returncode, 0)
+                self.assertIn("no statement block", out.stderr)
+
+    def test_mix_resume(self):
+        """MIX's epoch key survives a checkpoint: a run stopped after update 1 and resumed gives the uninterrupted
+        run's updates (the second epoch's coins included) and predictions."""
+        with tempfile.TemporaryDirectory() as d:
+            self.setup_dir(d)
+            common = ("--tree-full", "true", "--tree-view", "mix", "--tree-cap", "0", "--tree-sources",
+                      "knights_knaves", "--epochs", "2", "--precision", "fp32master", "--seed", "3")
+            a = self.run_script(d, *common, "--ckpt-every-min", "1000", out="a")
+            self.assertEqual(a.returncode, 0, a.stderr[-2000:])
+            b1 = self.run_script(d, *common, "--stop-at-step", "1", out="b")
+            self.assertEqual(b1.returncode, 3, b1.stderr[-2000:])
+            b2 = self.run_script(d, *common, "--ckpt-every-min", "1000", out="b")
+            self.assertEqual(b2.returncode, 0, b2.stderr[-2000:])
+            self.assertIn("resumed from", b2.stdout)
+            self.assertEqual(re.findall(r"^mix pass (\d+): ", b2.stdout, re.M), ["0", "1"])
+            key = lambda o: [(h["step"], h["loss"], h["seqs"], h["loss_final"], h["loss_node"])
+                             for h in json.loads(Path(f"{d}/{o}/metrics.json").read_text())["history"]]
+            self.assertEqual(key("a"), key("b"))
+            self.assertEqual([r[0] for r in key("a")], [1, 2, 3, 4])
+            self.assertEqual(Path(d + "/a/preds_v.jsonl").read_text(), Path(d + "/b/preds_v.jsonl").read_text())
+
+    def test_existing_arms_loop_match_ref(self):
+        """TFL and GFP-S through the training loop: VIEWS_REF's losses, update for update."""
+        with tempfile.TemporaryDirectory() as d:
+            if head_tree(d + "/h", VIEWS_REF) is None:
+                self.skipTest("not a git checkout")
+            self.setup_dir(d)
+            for mode, view in (("true", "local"), ("plain", "statements")):
+                res = {}
+                for name, script in (("ref", d + "/h/scripts/train_student.py"), ("now", SCRIPT)):
+                    out = self.run_script(d, "--tree-full", mode, "--tree-view", view, "--tree-cap", "0",
+                                          "--tree-sources", "knights_knaves", "--epochs", "2", "--precision", "bf16",
+                                          "--seed", "3", script=script, out=f"{name}-{mode}")
+                    self.assertEqual(out.returncode, 0, out.stderr[-2000:])
+                    m = json.loads(Path(f"{d}/{name}-{mode}/metrics.json").read_text())
+                    res[name] = ([(h["step"], h["loss"], h["seqs"]) for h in m["history"]], m["eval"]["v"],
+                                 m["tree_view_stats"])
+                self.assertEqual(res["ref"], res["now"], (mode, view))
 
 
 if __name__ == "__main__":

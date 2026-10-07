@@ -18,9 +18,9 @@ import torch.nn.functional as F
 import torch.utils.checkpoint
 
 from .metrics import calibration  # noqa: F401  (re-exported for scripts)
-from .treeplan import (LOCAL_HEADER, _descendants, _fact_line, _node_p, ancestors, answer_component,  # noqa: F401
-                       full_tree_plan, is_local_leaf, local_context, node_depths, statement_block, subq_keep,
-                       view_leak)
+from .treeplan import (CTX_VIEWS, LOCAL_HEADER, _descendants, _fact_line, _node_p, ancestors,  # noqa: F401
+                       answer_component, full_tree_plan, is_local_leaf, local_context, mix_statements, node_depths,
+                       statement_block, subq_keep, view_leak)
 
 SUBQ_TEMPLATE = "{problem}\n\nIntermediate question: {question}\nOptions:\nA) {a}\nB) {b}\nAnswer:"
 FINAL_TEMPLATE = "{problem}\n\nAnswer:"
@@ -332,7 +332,8 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
                     final: str = "teacher", subq_target: str = "cot", permute_final: float = 0.0,
                     node_format: str = "yesno", eligible_only: bool = False, subq_filter: str = "all",
                     view: str = "problem", sources: set | None = None, node_weight: float = 0.0,
-                    stats: dict | None = None) -> list[Example]:
+                    stats: dict | None = None, mix_p: float = 0.5, mix_seed: int = 0,
+                    mix_epoch: int = 0) -> list[Example]:
     """One problem with ALL its tree nodes (up to `cap`) instead of k sampled ones: [final] + one view per node.
     mode "true": eligible nodes are asked with their parents' results stated; "matched": with the same number of
     depth-matched non-parent results (see full_tree_plan); "plain": every node asked without facts; "placebo": the
@@ -349,7 +350,9 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
     per-problem split aux_total / views. view "local" / "ancestors" (Tree Forcing): see _local_views; "problem" (the
     default) is the behaviour above. view "statements" (GFP-S, mode "plain" only): the problem view with the problem
     replaced by its statement block (treeplan.statement_block: no final question, no options); rng draws, nodes,
-    targets and weights are exactly those of mode "plain" with the problem view (GFP)."""
+    targets and weights are exactly those of mode "plain" with the problem view (GFP). views "local+ctxparse" (TFLP)
+    and "mix" (MIX), mode "true" only: TFL with some nodes asked in the statements view instead (see _local_views;
+    mix_p, mix_seed and mix_epoch key MIX's per-node coin)."""
     fin = [e for e in build_examples(item, final=final, subq="none", subq_target=subq_target, lambda_sub=0.0, rng=rng,
                                      permute_final=permute_final) if e.kind == "final"]
     if not fin:
@@ -359,7 +362,8 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
     if view not in ("problem", "statements"):
         return fin + _local_views(item, mode=mode, view=view, rng=rng, cap=cap, aux_total=aux_total,
                                   subq_target=subq_target, node_format=node_format, eligible_only=eligible_only,
-                                  subq_filter=subq_filter, node_weight=node_weight, stats=stats)
+                                  subq_filter=subq_filter, node_weight=node_weight, stats=stats, mix_p=mix_p,
+                                  mix_seed=mix_seed, mix_epoch=mix_epoch)
     if view == "statements" and (mode != "plain" or eligible_only or node_format != "yesno"):
         raise ValueError("--tree-view statements is implemented for --tree-full plain (yes/no nodes, all nodes)")
     context = statement_block(item) if view == "statements" else item["prompt"]
@@ -405,7 +409,7 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
 
 def _local_views(item: dict, *, mode: str, view: str, rng: random.Random, cap: int, aux_total: float,
                  subq_target: str, node_format: str, eligible_only: bool, subq_filter: str, node_weight: float,
-                 stats: dict | None) -> list[Example]:
+                 stats: dict | None, mix_p: float = 0.5, mix_seed: int = 0, mix_epoch: int = 0) -> list[Example]:
     """Tree Forcing node views WITHOUT the original problem (local_context): the item's preamble, then
     - parse nodes (local_lines): the statement line(s) they read, in every mode;
     - other nodes, view "local": mode "true" = the results of the node's parents (its depends_on; every parent of a
@@ -417,33 +421,53 @@ def _local_views(item: dict, *, mode: str, view: str, rng: random.Random, cap: i
     - other nodes, view "local" with mode "plain" (TFLN): nothing stated, the preamble only. The node set, the drops
       and the rng draws are those of mode "true" (the parents' results are selected and checked, and their line order
       drawn, but not shown), so TFLN is in lockstep with TFL: same nodes, order, weights and targets.
+    - views "local+ctxparse" (TFLP) and "mix" (MIX), mode "true" only: TFL, except that some nodes are asked in the
+      GFP-S statements view (treeplan.statement_block: the problem without its final question and options, nothing
+      stated) instead of their local view. TFLP: the parse nodes. MIX: each node with probability mix_p, by its own
+      coin (treeplan.mix_statements, keyed by mix_seed, mix_epoch, item and node), so every node has one view per
+      epoch. Both keep the non-leaf nodes without parents that TFL drops, always in the statements view (counted as
+      statements_no_parents; none in v3sl or numgen, where such a node would break the lockstep with TFL).
+      A statements view still draws TFL's line-order shuffle (the TFLN trick), so both arms are in rng lockstep with
+      TFL (their local views are TFL's, byte for byte) and have its nodes, order, weights and soft targets; nodes,
+      order, weights and P(Yes) are GFP-S's too as long as TFL drops nothing (0 drops on v3sl and numgen).
+      stated_lines counts the results shown, withheld_lines those of TFL's view not shown (MIX's derived statements
+      views).
     Views that would state the final answer (view_leak) are dropped and counted; so are non-leaf nodes without
     parents or with a parent whose result is not confident (nothing sufficient to state). The node is then asked as
     in the problem-view arms (yes/no order drawn from rng, the same soft target). Weight: node_weight, else
     aux_total / views (the full-tree convention)."""
-    if (mode not in ("true", "matched", "plain") or (view == "ancestors" and mode != "true")
-            or view not in ("local", "ancestors")):
+    if (mode not in ("true", "matched", "plain") or (view != "local" and mode != "true")
+            or view not in ("local", "ancestors") + CTX_VIEWS):
         raise ValueError(f"--tree-view {view} is implemented for --tree-full true (and matched / plain with the local "
                          "view)")
     if eligible_only or node_format != "yesno":
-        raise ValueError("--tree-view local/ancestors does not combine with --tree-eligible-only / --node-format mc")
+        raise ValueError(f"--tree-view {view} does not combine with --tree-eligible-only / --node-format mc")
+    ctx_view = view in CTX_VIEWS
+    if ctx_view and not 0.0 <= mix_p <= 1.0:
+        raise ValueError(f"mix_p {mix_p} is not a probability")
+    block = statement_block(item) if ctx_view else None      # TFLP/MIX: raises for sources without a statement block
+    if ctx_view and item.get("local_preamble") is None:
+        raise ValueError(f"{item.get('item_id')}: no local_preamble (local views need e.g. data/student_v3sl)")
     st = stats if stats is not None else {}
     bump = lambda k, n=1: st.__setitem__(k, st.get(k, 0) + n)
     nodes = [sq for sq in item.get("subqs", []) if "id" in sq]
     by = {sq["id"]: sq for sq in nodes}
     depth = ({i: by[i]["node_depth"] for i in by} if all("node_depth" in sq for sq in nodes) else node_depths(nodes))
     anc = ancestors(nodes) if view == "ancestors" else None
-    views = []
+    views, no_par = [], set()
     for e in full_tree_plan(item, cap=cap, rng=rng, subq_target=subq_target, subq_filter=subq_filter):
         sq = e["node"]
         if is_local_leaf(sq):
             stated = []
         else:
             par = [x for x in (sq.get("depends_on") or []) if x in by and x != sq["id"]]
-            if not par:
+            if not par and not ctx_view:
                 bump("dropped_no_parents")
                 continue
-            if view == "ancestors":
+            if not par:                             # TFLP / MIX: no local view, asked in the statements view
+                ids = []
+                no_par.add(sq["id"])
+            elif view == "ancestors":
                 ids = sorted(anc[sq["id"]] - {sq["id"]})
             elif mode == "matched" and e["parents"]:
                 ids = e["matched"]
@@ -465,15 +489,31 @@ def _local_views(item: dict, *, mode: str, view: str, rng: random.Random, cap: i
     bump("leaf_views", sum(is_local_leaf(sq) for sq, _ in views))
     if mode == "plain":
         bump("withheld_lines", sum(len(x) for _, x in views))
-    else:
+    elif not ctx_view:
         bump("stated_lines", sum(len(x) for _, x in views))
+    else:                                           # TFLP / MIX: counted per view below
+        for k in ("stated_lines", "withheld_lines", "local_views", "statements_views", "statements_leaf_views"):
+            bump(k, 0)
+        bump("statements_no_parents", len(no_par))
     w = (node_weight or aux_total / max(1, len(views))) * item.get("weight", 1.0)
     out = []
     for sq, stated in views:
         if mode == "plain" and stated:              # TFLN: TFL's line-order draw, nothing shown
             rng.shuffle([None] * len(stated))
             stated = []
-        ctx = local_context(item, sq, stated, depth=depth, rng=rng, order="depth" if view == "ancestors" else "shuffle")
+        if ctx_view and (sq["id"] in no_par or (is_local_leaf(sq) if view == "local+ctxparse" else
+                                                mix_statements(mix_seed, mix_epoch, item["item_id"], sq["id"], mix_p))):
+            rng.shuffle([None] * len(stated))       # TFLP / MIX statements view: TFL's line-order draw, nothing shown
+            ctx = block
+            bump("statements_views")
+            bump("statements_leaf_views", is_local_leaf(sq))
+            bump("withheld_lines", len(stated))
+        else:
+            ctx = local_context(item, sq, stated, depth=depth, rng=rng,
+                                order="depth" if view == "ancestors" else "shuffle")
+            if ctx_view:
+                bump("local_views")
+                bump("stated_lines", len(stated))
         yes_first = rng.random() < 0.5
         a, b = ("Yes", "No") if yes_first else ("No", "Yes")
         out.append(Example(SUBQ_TEMPLATE.format(problem=ctx, question=sq["question"], a=a, b=b), ["A", "B"],
