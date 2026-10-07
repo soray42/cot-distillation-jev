@@ -68,7 +68,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from cotdistill.sources import NAMES as TRAIN_NAMES  # noqa: E402  (the 16 names K&K training uses)
 
 PREREG = ROOT / "notes" / "prereg_TF.md"
-PREREG_MD5 = "df083b08b17a2e76029d27cb454375c4"      # FINAL RECONCILIATION + item 7 addendum (13:50 CEST, before any run)
+PREREG_MD5 = "682d65ef173d979c6f64c07b0c061f93"      # FINAL RECONCILIATION + item 7 addendum (13:50 CEST, before any run)
 KKDEEP_ITEMS = ROOT / "data" / "eval" / "kk_deep.jsonl"
 ARMS = ["A2", "G3", "TFL", "GFPS", "GFP", "TFLM", "TFLN", "TFA"]
 REGISTERED = {"TFL": [12, 13, 14], "GFPS": [12, 13, 14], "A2": [12, 13, 14], "GFP": [12, 13], "TFLM": [12, 13],
