@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import random
 import sys
 from pathlib import Path
@@ -19,7 +20,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from cotdistill.student import build_full_tree, build_group, token_budget_batches  # noqa: E402
+from cotdistill.student import (build_examples, build_full_tree, build_group, scaffold_fade,  # noqa: E402
+                                token_budget_batches)
 
 ARMS = {   # name: (data, kind, kwargs)
     "TF cap10 v3f": ("data/student_v3f", "tree", dict(mode="true", cap=10)),
@@ -37,6 +39,12 @@ ARMS = {   # name: (data, kind, kwargs)
     # MIX: the views of epoch 0 at seed 0 (the coins change every epoch; the share of statements views stays ~.5)
     "MIX": ("data/student_v3sl", "tree", dict(mode="true", cap=0, view="mix", sources={"knights_knaves"}, mix_seed=0,
                                               mix_epoch=0)),
+    # GTF: GFPS + scaffold fading (--tree-scaffold 0.5) + depth weights (--tree-depth-weight 1, no token effect). The
+    # views change with p(t), so one row per epoch of a 4-epoch run at seed 0 (fade = (F, epochs, epoch)); from epoch
+    # 2 on p(t) = 0 and the views are GFPS's
+    **{f"GTF e{k}": ("data/student_v3sl", "tree", dict(mode="plain", cap=0, view="statements", sources={"knights_knaves"},
+                                                      depth_weight=1.0, mix_seed=0, mix_epoch=k, fade=(0.5, 4, k)))
+       for k in range(3)},
 }
 CALIB = {"TF cap10 v3f": "results/hpc/c4v3f/TF-c4-Qwen3.5-2B-Base-student_v3f-s12",
          "G3 v3f": "results/hpc/w1/G3-c4-Qwen3.5-2B-Base-student_v3f-s12",
@@ -47,11 +55,33 @@ def epoch_views(path: Path, kind: str, kw: dict, ipu: int = 32):
     """Yield (update index, item source, examples) for one epoch: problems in file order (the order does not change the
     totals), items_per_update problems per update."""
     rng = random.Random(0)
+    kw = dict(kw)
+    fade = kw.pop("fade", None)
+    if fade:   # GTF: each problem's p(t) as in a seed-0 training run, t = epoch x U + (its group's position in that
+        # epoch's problem order: the order_rng shuffle after the plan's counting pass and the earlier epochs) // ipu,
+        # of T = epochs x U updates (train_student.py); the totals below still go in file order like the other arms
+        with open(path) as f:
+            fin = [any(e.kind == "final" for e in build_examples(json.loads(line), final="teacher", subq="none",
+                                                                 subq_target="cot", lambda_sub=0.0,
+                                                                 rng=random.Random(0))) for line in f]
+        upp = math.ceil(sum(fin) / ipu)
+        total = max(1, math.ceil(fade[1] * upp))
+        order_rng = random.Random("order-0")
+        for _ in range(fade[2] + 2):
+            order = list(range(len(fin)))
+            order_rng.shuffle(order)
+        pos = {}
+        for j in order:
+            if fin[j]:
+                pos[j] = len(pos)
     with open(path) as f:
         for j, line in enumerate(f):
             it = json.loads(line)
             it.pop("rationale", None)
-            if kind == "tree":
+            if kind == "tree" and fade:
+                p = scaffold_fade(fade[2] * upp + pos[j] // ipu, total, fade[0]) if j in pos else 0.0
+                ex = build_full_tree(it, rng=rng, final="teacher", subq_target="cot", scaffold_p=p, **kw)
+            elif kind == "tree":
                 ex = build_full_tree(it, rng=rng, final="teacher", subq_target="cot", **kw)
             else:
                 ex = build_group(it, aux_kind="cot", k=2, aux_weight=0.5, rng=rng, final="teacher", subq_target="cot")

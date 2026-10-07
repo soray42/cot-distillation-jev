@@ -83,6 +83,12 @@
 # coin per seed, epoch, item and node), else in its TFL view. Both in rng lockstep with TFL (same nodes, order, targets
 # and weights as TFL and GFPS); same knobs; no new upper-case knob. Another MIX share: XARGS="--tree-mix-p P" with
 # TAG=mp<P> (the run dir does not show P otherwise).
+# GTF (grounded Tree Forcing, impl.md section 10) = GFPS + a fading scaffold + depth weights: a derived node is asked in
+# the GFPS view with its parents' results stated ("Known results:" under the statement lines) with probability
+# max(0, 1 - t / (0.5 T)) at update t of T (--tree-scaffold 0.5; a coin per seed, epoch, item and node, so the run is
+# step-matched with GFPS: same nodes, order, targets), and each problem's node weight (same total) is split in
+# proportion to 1 + node depth (--tree-depth-weight 1.0). Other values: XARGS="--tree-scaffold F --tree-depth-weight G"
+# with TAG (argparse: the last value wins); numgen: XARGS="--tree-sources numgen" as for the other arms.
 # NODEW=w gives every node view weight w (--tree-node-weight; default: the per-problem split, aux 1.0 / views, about
 # .023 per K&K node); set it to the same value for all arms of a comparison. LOCAL_EVAL=path scores the
 # local-step probe (--eval-local: every K&K node in its local view, eval key local_kk); when unset it is
@@ -193,6 +199,7 @@ arm_config() {           # sets F S T RLM DS for arm $1
     TFLM) F=teacher; S=cot;  T=cot; DX="--tree-full matched --tree-view local --tree-cap 0 --tree-sources knights_knaves" ;;  # matched non-parents
     GFP) F=teacher; S=cot;   T=cot; DX="--tree-full plain --tree-view problem --tree-cap 0 --tree-sources knights_knaves" ;;   # every node, full problem
     GFPS) F=teacher; S=cot;  T=cot; DX="--tree-full plain --tree-view statements --tree-cap 0 --tree-sources knights_knaves" ;; # GFP-S: no question/options
+    GTF) F=teacher; S=cot;   T=cot; DX="--tree-full plain --tree-view statements --tree-cap 0 --tree-sources knights_knaves --tree-scaffold 0.5 --tree-depth-weight 1.0" ;;  # GFPS + fading parents' results + depth weights
     TFLN) F=teacher; S=cot;  T=cot; DX="--tree-full plain --tree-view local --tree-cap 0 --tree-sources knights_knaves" ;;   # local view, nothing stated
     TFLP) F=teacher; S=cot;  T=cot; DX="--tree-full true --tree-view local+ctxparse --tree-cap 0 --tree-sources knights_knaves" ;;  # TFL, parse nodes in the GFPS view
     MIX) F=teacher; S=cot;   T=cot; DX="--tree-full true --tree-view mix --tree-cap 0 --tree-sources knights_knaves" ;;   # per node and epoch: TFL or GFPS view (p .5)

@@ -31,7 +31,8 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from cotdistill.student import (Example, brier_loss, build_examples, build_fact_examples, build_full_tree, build_group,  # noqa: E402
                                 build_stage_examples, evaluate, evaluate_local, evaluate_subq, kl_loss, label_logits,
-                                lm_loss, load_model, logit_softcap, micro_batches, special_prefix, subq_sets)
+                                lm_loss, load_model, logit_softcap, micro_batches, scaffold_fade, special_prefix,
+                                subq_sets)
 
 
 # Arguments that do not change the training trajectory: a checkpoint may be resumed with different values.
@@ -41,7 +42,7 @@ RESUME_FREE = {"stop_after_h", "ckpt_every_min", "ckpt_single", "stop_at_step", 
 
 # Training arguments added after checkpoints may have been written: a checkpoint without the key had this value.
 NEW_ARG_DEFAULTS = {"tree_view": "problem", "tree_sources": "", "tree_node_weight": 0.0, "attn_impl": "", "fsdp": False,
-                    "fsdp_optim": None, "tree_mix_p": 0.5}
+                    "fsdp_optim": None, "tree_mix_p": 0.5, "tree_scaffold": 0.0, "tree_depth_weight": 0.0}
 
 LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj",
                 "in_proj_qkv", "in_proj_z", "in_proj_a", "in_proj_b", "out_proj"]
@@ -123,6 +124,15 @@ def main() -> None:
                          "lockstep with TFL")
     ap.add_argument("--tree-mix-p", type=float, default=0.5,
                     help="--tree-view mix: share of node views asked in the statements view (the rest local)")
+    ap.add_argument("--tree-scaffold", type=float, default=0.0,
+                    help="GTF (--tree-full plain --tree-view statements only): scaffold fading over the first fraction "
+                         "F of the updates: at update t of T, a derived node is asked with its parents' results stated "
+                         "('Known results:' under the statement lines) with probability max(0, 1 - t / (F x T)), else "
+                         "in the plain GFP-S view; a coin per seed, epoch, item and node (not the training rng, so the "
+                         "run stays step-matched with GFP-S); 0 = off")
+    ap.add_argument("--tree-depth-weight", type=float, default=0.0,
+                    help="full-tree groups: split each problem's node-view weight (the same total) in proportion to "
+                         "(1 + node depth)^G instead of evenly; 0 = off (GTF uses 1)")
     ap.add_argument("--tree-sources", default="",
                     help="full-tree groups: comma list of item sources that get node views; other items train their "
                          "final question only (every view mode); empty = all sources")
@@ -214,9 +224,11 @@ def main() -> None:
     ap.add_argument("--out", required=True)
     ap.add_argument("--log-every", type=int, default=20)
     args = ap.parse_args()
-    tree_opts = args.tree_view != "problem" or args.tree_sources or args.tree_node_weight or args.tree_cap == 0
+    tree_opts = (args.tree_view != "problem" or args.tree_sources or args.tree_node_weight or args.tree_cap == 0 or
+                 args.tree_scaffold or args.tree_depth_weight)
     if tree_opts and not args.tree_full:
-        raise SystemExit("--tree-view / --tree-sources / --tree-node-weight / --tree-cap 0 need --tree-full")
+        raise SystemExit("--tree-view / --tree-sources / --tree-node-weight / --tree-cap 0 / --tree-scaffold / "
+                         "--tree-depth-weight need --tree-full")
     if args.tree_view != "problem" and not (args.tree_full == "true" and args.tree_view != "statements" or
                                              args.tree_full in ("matched", "plain") and args.tree_view == "local" or
                                              args.tree_full == "plain" and args.tree_view == "statements"):
@@ -227,6 +239,11 @@ def main() -> None:
                          "--tree-eligible-only / --node-format mc")
     if not 0.0 <= args.tree_mix_p <= 1.0 or args.tree_mix_p != 0.5 and args.tree_view != "mix":
         raise SystemExit(f"--tree-mix-p {args.tree_mix_p}: a probability, for --tree-view mix only")
+    if args.tree_scaffold < 0 or args.tree_scaffold and (args.tree_full, args.tree_view) != ("plain", "statements"):
+        raise SystemExit(f"--tree-scaffold {args.tree_scaffold}: a fraction > 0 of the updates, for --tree-full plain "
+                         "--tree-view statements only (GTF)")
+    if args.tree_depth_weight and args.tree_full == "control":
+        raise SystemExit("--tree-depth-weight needs tree nodes: control questions have no depth")
     if args.tree_eligible_only and args.tree_full not in ("true", "matched", "plain", "placebo"):
         raise SystemExit("--tree-eligible-only needs --tree-full true/matched/plain/placebo")
     if args.subq_filter != "all" and (args.depth_stages or args.fact_stages or args.facts_always):
@@ -396,6 +413,18 @@ def main() -> None:
                 except ValueError as e:
                     raise SystemExit(f"--tree-view {args.tree_view}: {e}")
     tree_stats: dict = {}
+    # GTF's scaffold fades with the update index t = epoch x U + (position of the problem's group in the epoch) // b
+    # over T updates. U (updates per pass) and T are counted here, before the plan's counting pass, from the problems
+    # with a final question (the others give no group); build_examples with permute_final 0 draws nothing from its
+    # rng, so a throwaway generator keeps the training rng untouched. Checked against the plan below.
+    fade = None
+    if args.tree_scaffold:
+        n_fin = sum(any(e.kind == "final" for e in build_examples(it, final=args.final, subq="none",
+                                                                 subq_target=args.subq_target, lambda_sub=0.0,
+                                                                 rng=random.Random(0)))
+                    for it in train_items)
+        upp = math.ceil(n_fin / args.items_per_update)
+        fade = {"U": upp, "T": max(1, math.ceil(args.epochs * upp))}
 
     def fulltree_updates() -> list[list[Example]]:
         """Problems in shuffled order, each as [final] + all its node views; items_per_update problems per update
@@ -403,23 +432,36 @@ def main() -> None:
         items = train_items[:]
         order_rng.shuffle(items)
         st: dict = {}
-        ep = passes["n"]                     # MIX keys its per-node coins by it (checkpointed; the counting pass is 0)
-        passes["n"] += 1
-        groups = [g for g in (build_full_tree(it, mode=args.tree_full, rng=rng, cap=args.tree_cap,
-                                              aux_total=args.aux_total, node_format=args.node_format,
-                                              final=args.final, eligible_only=args.tree_eligible_only,
-                                              subq_target=args.subq_target, permute_final=args.permute_final,
-                                              subq_filter=args.subq_filter, view=args.tree_view,
-                                              sources=tree_sources, node_weight=args.tree_node_weight, stats=st,
-                                              mix_p=args.tree_mix_p, mix_seed=args.seed, mix_epoch=ep)
-                              for it in items) if g]
+        ep = passes["n"]                     # MIX / GTF key their per-node coins by it (checkpointed; the counting
+        passes["n"] += 1                     # pass is 0)
+        b = args.items_per_update
+        groups, ps = [], []
+        for it in items:
+            p_sc = None
+            if fade is not None:             # GTF: p(t) of the update this problem's group lands in
+                p_sc = scaffold_fade(ep * fade["U"] + len(groups) // b, fade["T"], args.tree_scaffold)
+            g = build_full_tree(it, mode=args.tree_full, rng=rng, cap=args.tree_cap,
+                                aux_total=args.aux_total, node_format=args.node_format,
+                                final=args.final, eligible_only=args.tree_eligible_only,
+                                subq_target=args.subq_target, permute_final=args.permute_final,
+                                subq_filter=args.subq_filter, view=args.tree_view,
+                                sources=tree_sources, node_weight=args.tree_node_weight, stats=st,
+                                mix_p=args.tree_mix_p, mix_seed=args.seed, mix_epoch=ep, scaffold_p=p_sc,
+                                depth_weight=args.tree_depth_weight)
+            if g:
+                groups.append(g)
+                ps.append(p_sc)
         if tree_opts and not tree_stats:     # the plan's counting pass: views, dropped views, stated results
             tree_stats.update(st)
             print("tree views", json.dumps(st, sort_keys=True), flush=True)
         if args.tree_view == "mix":
             print(f"mix pass {ep}: {st.get('statements_views', 0)} statements views, {st.get('local_views', 0)} local "
                   "views", flush=True)
-        b = args.items_per_update
+        if fade is not None:
+            print(f"scaffold pass {ep}: {st.get('scaffold_views', 0)} scaffold views of "
+                  f"{st.get('scaffold_eligible', 0)} eligible derived nodes, p(t) {ps[0] if ps else 0:.4f} -> "
+                  f"{ps[-1] if ps else 0:.4f} (updates {ep * fade['U']}-{ep * fade['U'] + fade['U'] - 1} of "
+                  f"{fade['T']})", flush=True)
         return [[e for g in groups[i:i + b] for e in g] for i in range(0, len(groups), b)]
 
     if args.tree_full:
@@ -459,6 +501,9 @@ def main() -> None:
         print(f"stage {name}: {n} examples per pass, {plan[-1][3]} steps", flush=True)
     total_steps = sum(x[3] for x in plan)
     passes["n"] = 0                  # the counting pass above does not count as training progress
+    if fade is not None and (fade["U"], fade["T"]) != (plan[-1][2], total_steps):
+        raise SystemExit(f"--tree-scaffold: counted {fade['U']} updates per pass and {fade['T']} in all, the plan has "
+                         f"{plan[-1][2]} and {total_steps}")
     print(f"examples/epoch={plan[-1][2]} steps={total_steps} params={sum(p.numel() for p in params)/1e9:.2f}B "
           f"device={dev}", flush=True)
 

@@ -234,6 +234,29 @@ def mix_statements(seed: int, epoch: int, item_id, node_id, p: float) -> bool:
     return random.Random(f"mix|{seed}|{epoch}|{item_id}|{node_id}").random() < p
 
 
+# ---- GTF (grounded Tree Forcing): GFP-S with a fading scaffold and depth-weighted nodes --------------------------------
+def scaffold_fade(t: int, total: int, fade: float) -> float:
+    """--tree-scaffold F: the probability p(t) = max(0, 1 - t / (F x T)) that a derived node is asked with its parents'
+    results stated at update t (0-based) of T updates; 1 at the start, 0 from t = F x T on. F 0 (off): 0."""
+    if fade <= 0:
+        return 0.0
+    return max(0.0, 1.0 - t / (fade * max(1, total)))
+
+
+def scaffold_rng(seed: int, epoch: int, item_id, node_id) -> random.Random:
+    """The scaffold's own generator for one (seed, epoch, item, node): its first random() is the coin (scaffold iff
+    < p(t)), the rest orders the stated lines. Seeded through a str key (sha512) like MIX's coin, so it depends on
+    nothing else (not on PYTHONHASHSEED, the training rng, the node order or the other nodes)."""
+    return random.Random(f"scaffold|{seed}|{epoch}|{item_id}|{node_id}")
+
+
+def depth_split(total: float, depths: list[int], g: float) -> list[float]:
+    """--tree-depth-weight G: total split over the views in proportion to (1 + node depth)^G (sums to total)."""
+    raw = [(1.0 + d) ** g for d in depths]
+    s = sum(raw)
+    return [total * r / s for r in raw]
+
+
 def kk_people(item: dict) -> list[str]:
     return re.findall(r"^- ([A-Z][a-z]+) says: ", item.get("prompt", ""), re.M)
 

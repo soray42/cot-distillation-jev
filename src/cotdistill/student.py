@@ -19,8 +19,8 @@ import torch.utils.checkpoint
 
 from .metrics import calibration  # noqa: F401  (re-exported for scripts)
 from .treeplan import (CTX_VIEWS, LOCAL_HEADER, _descendants, _fact_line, _node_p, ancestors,  # noqa: F401
-                       answer_component, full_tree_plan, is_local_leaf, local_context, mix_statements, node_depths,
-                       statement_block, subq_keep, view_leak)
+                       answer_component, depth_split, full_tree_plan, is_local_leaf, local_context, mix_statements,
+                       node_depths, scaffold_fade, scaffold_rng, statement_block, subq_keep, view_leak)
 
 SUBQ_TEMPLATE = "{problem}\n\nIntermediate question: {question}\nOptions:\nA) {a}\nB) {b}\nAnswer:"
 FINAL_TEMPLATE = "{problem}\n\nAnswer:"
@@ -333,7 +333,7 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
                     node_format: str = "yesno", eligible_only: bool = False, subq_filter: str = "all",
                     view: str = "problem", sources: set | None = None, node_weight: float = 0.0,
                     stats: dict | None = None, mix_p: float = 0.5, mix_seed: int = 0,
-                    mix_epoch: int = 0) -> list[Example]:
+                    mix_epoch: int = 0, scaffold_p: float | None = None, depth_weight: float = 0.0) -> list[Example]:
     """One problem with ALL its tree nodes (up to `cap`) instead of k sampled ones: [final] + one view per node.
     mode "true": eligible nodes are asked with their parents' results stated; "matched": with the same number of
     depth-matched non-parent results (see full_tree_plan); "plain": every node asked without facts; "placebo": the
@@ -352,18 +352,29 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
     replaced by its statement block (treeplan.statement_block: no final question, no options); rng draws, nodes,
     targets and weights are exactly those of mode "plain" with the problem view (GFP). views "local+ctxparse" (TFLP)
     and "mix" (MIX), mode "true" only: TFL with some nodes asked in the statements view instead (see _local_views;
-    mix_p, mix_seed and mix_epoch key MIX's per-node coin)."""
+    mix_p, mix_seed and mix_epoch key MIX's per-node coin).
+    GTF (grounded Tree Forcing) = GFP-S plus two options, both off by default:
+    - scaffold_p (None = off; view "statements" only): this problem's probability p(t) (treeplan.scaffold_fade) that a
+      derived node is asked with its parents' results stated under the statement block (_scaffold_lines); the coin
+      and the line order come from the node's own generator (treeplan.scaffold_rng, keyed by mix_seed, mix_epoch,
+      item and node), never from rng, so nodes, order, targets (yes/no order included) and weights stay GFP-S's;
+    - depth_weight G (0 = off; every view and mode except control): the problem's node-view weight (aux_total, or
+      node_weight x views) split in proportion to (1 + node depth)^G instead of evenly (_depths)."""
     fin = [e for e in build_examples(item, final=final, subq="none", subq_target=subq_target, lambda_sub=0.0, rng=rng,
                                      permute_final=permute_final) if e.kind == "final"]
     if not fin:
         return []
     if sources is not None and item.get("source") not in sources:
         return fin
+    if scaffold_p is not None and (view != "statements" or mode != "plain" or not 0.0 <= scaffold_p <= 1.0):
+        raise ValueError(f"scaffold_p {scaffold_p}: a probability, for --tree-full plain --tree-view statements (GTF)")
+    if depth_weight and mode == "control":
+        raise ValueError("--tree-depth-weight needs tree nodes: control questions have no depth")
     if view not in ("problem", "statements"):
         return fin + _local_views(item, mode=mode, view=view, rng=rng, cap=cap, aux_total=aux_total,
                                   subq_target=subq_target, node_format=node_format, eligible_only=eligible_only,
                                   subq_filter=subq_filter, node_weight=node_weight, stats=stats, mix_p=mix_p,
-                                  mix_seed=mix_seed, mix_epoch=mix_epoch)
+                                  mix_seed=mix_seed, mix_epoch=mix_epoch, depth_weight=depth_weight)
     if view == "statements" and (mode != "plain" or eligible_only or node_format != "yesno"):
         raise ValueError("--tree-view statements is implemented for --tree-full plain (yes/no nodes, all nodes)")
     context = statement_block(item) if view == "statements" else item["prompt"]
@@ -371,6 +382,7 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
     views = []
     if eligible_only and mode == "control":
         raise ValueError("eligible_only needs tree nodes: control questions have no parents")
+    by = {sq["id"]: sq for sq in item.get("subqs", []) if "id" in sq}
     if mode == "control":
         pool = [sq for sq in item.get("random_subqs", []) if sq.get("p_fresh") is not None]
         if len(pool) > cap:
@@ -380,36 +392,86 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
         plan = full_tree_plan(item, cap=cap, rng=rng, subq_target=subq_target, subq_filter=subq_filter)
         if eligible_only:
             plan = [e for e in plan if e["parents"]]
-        by = {sq["id"]: sq for sq in item.get("subqs", []) if "id" in sq}
         for e in plan:
             facts = {"true": e["parents"], "matched": e["matched"]}.get(mode, [])
             views.append((e["node"], [by[j] for j in facts], subq_target, len(e["parents"])))
     out = list(fin)
     w = 0.0 if mode == "placebo" else (node_weight or aux_total / max(1, len(views)))
+    ws = [w] * len(views)
+    if depth_weight and views:                              # GTF: same total per problem, split by depth
+        total = 0.0 if mode == "placebo" else (node_weight * len(views) if node_weight else aux_total)
+        depth = _depths(item)
+        ws = depth_split(total, [depth[sq["id"]] for sq, *_ in views], depth_weight)
     if stats is not None:
         stats["items_with_views"] = stats.get("items_with_views", 0) + bool(views)
         stats["views"] = stats.get("views", 0) + len(views)
-    for sq, facts, tgt, k in views:
+        if scaffold_p is not None:
+            for key in ("scaffold_views", "scaffold_lines", "scaffold_eligible"):
+                stats[key] = stats.get(key, 0)
+    for (sq, facts, tgt, k), wk in zip(views, ws):
         lines = [_fact_line(x) for x in facts]
         rng.shuffle(lines)
         if eligible_only and not lines:                     # GFE: the draws of the k stated lines of TFE/TFME
             rng.shuffle([None] * k)
         if node_format == "mc" and mode != "control":      # multiple-choice node view, same stated results
-            ex = _mc_node_view(item, sq, lines, tgt, rng, w * wi)
+            ex = _mc_node_view(item, sq, lines, tgt, rng, wk * wi)
             if ex is not None:
                 out.append(ex)
                 continue
         problem = context + (f"\n\n{FACTS_HEADER}\n" + "\n".join(lines) if lines else "")
+        if scaffold_p is not None:                          # GTF (lines is empty in mode plain)
+            sc = _scaffold_lines(item, sq, by, scaffold_p, mix_seed, mix_epoch, stats)
+            if sc:
+                problem = context + f"\n\n{LOCAL_HEADER}\n" + "\n".join(sc)
         yes_first = rng.random() < 0.5
         a, b = ("Yes", "No") if yes_first else ("No", "Yes")
         out.append(Example(SUBQ_TEMPLATE.format(problem=problem, question=sq["question"], a=a, b=b), ["A", "B"],
-                           _soft(_node_p(sq, tgt), yes_first), w * wi, "subq", item["item_id"]))
+                           _soft(_node_p(sq, tgt), yes_first), wk * wi, "subq", item["item_id"]))
     return out
+
+
+def _depths(item: dict) -> dict:
+    """Node depth by id: the node_depth field when every node has one (v3s/v3sl/numgen), else node_depths()."""
+    nodes = [sq for sq in item.get("subqs", []) if "id" in sq]
+    return ({sq["id"]: sq["node_depth"] for sq in nodes} if all("node_depth" in sq for sq in nodes)
+            else node_depths(nodes))
+
+
+def _scaffold_lines(item: dict, sq: dict, by: dict, p: float, seed: int, epoch: int, stats: dict | None) -> list[str]:
+    """GTF's stated results for one node view (empty: the plain GFP-S view): the "Q: ... A: Yes/No" lines of the
+    node's parents (depends_on within the item; _fact_line: program truth, else a confident CoT answer), in an order
+    drawn from the node's own generator, with probability p (its first draw). Always plain: leaves (parse / read
+    nodes with local_lines, or no parent), nodes with an unconfident parent, and nodes whose stated results would give
+    the final answer away (view_leak, the TF views' filter). Every case is counted in stats."""
+    st = stats if stats is not None else {}
+    bump = lambda key, n=1: st.__setitem__(key, st.get(key, 0) + n)
+    par = [x for x in (sq.get("depends_on") or []) if x in by and x != sq["id"]]
+    if is_local_leaf(sq) or not par:
+        bump("scaffold_leaf")
+        return []
+    stated = [by[j] for j in par]
+    if not all(_fact_line(x) for x in stated):
+        bump("scaffold_unconfident")
+        return []
+    leak = view_leak(item, sq, stated)
+    if leak:
+        bump(f"scaffold_leak_{leak}")
+        return []
+    bump("scaffold_eligible")
+    r = scaffold_rng(seed, epoch, item["item_id"], sq["id"])
+    if not r.random() < p:
+        return []
+    lines = [_fact_line(x) for x in stated]
+    r.shuffle(lines)
+    bump("scaffold_views")
+    bump("scaffold_lines", len(lines))
+    return lines
 
 
 def _local_views(item: dict, *, mode: str, view: str, rng: random.Random, cap: int, aux_total: float,
                  subq_target: str, node_format: str, eligible_only: bool, subq_filter: str, node_weight: float,
-                 stats: dict | None, mix_p: float = 0.5, mix_seed: int = 0, mix_epoch: int = 0) -> list[Example]:
+                 stats: dict | None, mix_p: float = 0.5, mix_seed: int = 0, mix_epoch: int = 0,
+                 depth_weight: float = 0.0) -> list[Example]:
     """Tree Forcing node views WITHOUT the original problem (local_context): the item's preamble, then
     - parse nodes (local_lines): the statement line(s) they read, in every mode;
     - other nodes, view "local": mode "true" = the results of the node's parents (its depends_on; every parent of a
@@ -435,7 +497,8 @@ def _local_views(item: dict, *, mode: str, view: str, rng: random.Random, cap: i
     Views that would state the final answer (view_leak) are dropped and counted; so are non-leaf nodes without
     parents or with a parent whose result is not confident (nothing sufficient to state). The node is then asked as
     in the problem-view arms (yes/no order drawn from rng, the same soft target). Weight: node_weight, else
-    aux_total / views (the full-tree convention)."""
+    aux_total / views (the full-tree convention); depth_weight G splits the same total in proportion to
+    (1 + node depth)^G."""
     if (mode not in ("true", "matched", "plain") or (view != "local" and mode != "true")
             or view not in ("local", "ancestors") + CTX_VIEWS):
         raise ValueError(f"--tree-view {view} is implemented for --tree-full true (and matched / plain with the local "
@@ -496,8 +559,12 @@ def _local_views(item: dict, *, mode: str, view: str, rng: random.Random, cap: i
             bump(k, 0)
         bump("statements_no_parents", len(no_par))
     w = (node_weight or aux_total / max(1, len(views))) * item.get("weight", 1.0)
+    ws = [w] * len(views)
+    if depth_weight and views:                      # same total per problem, split by depth
+        ws = [x * item.get("weight", 1.0) for x in depth_split(node_weight * len(views) if node_weight else aux_total,
+                                                               [depth[sq["id"]] for sq, _ in views], depth_weight)]
     out = []
-    for sq, stated in views:
+    for (sq, stated), w in zip(views, ws):
         if mode == "plain" and stated:              # TFLN: TFL's line-order draw, nothing shown
             rng.shuffle([None] * len(stated))
             stated = []
