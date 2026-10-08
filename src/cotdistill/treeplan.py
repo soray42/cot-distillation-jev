@@ -190,6 +190,24 @@ def local_context(item: dict, sq: dict, stated: list[dict] | None, *, depth: dic
 
 
 _KK_STATEMENT = re.compile(r'^- [A-Z][a-z]+ says: ".*"$')
+_AGENT_ASK = r"Question: What should the agent do\?"
+# Sources whose prompt is "<statements>\n\n<final question>\nOptions:\n<options>": the final question is the last
+# paragraph before the options, in the one form its generator writes (a BoardgameQA question names the claim it asks
+# about, as numgen's answer question names the quantity; the judged statement / hypothesis of JustLogic, FOLIO, FLD
+# and RuleTaker is a paragraph of the problem and stays). Not here, no clean cut: arc_challenge / arc_easy (the
+# question is the whole problem) and gsm8k_soc (one free-text paragraph whose last sentence may carry premises).
+FINAL_QUESTION = {
+    "justlogic": r"Question: Is the statement true, false, or uncertain given the passage\?",
+    "folio": r"Question: Is the statement true, false, or uncertain given the premises\?",
+    "sharc": r"Question: Based only on the rule text, the scenario and the earlier answers, how should the user's "
+             r"question be answered\?",
+    "returns": _AGENT_ASK, "expense": _AGENT_ASK, "subscription": _AGENT_ASK,             # policygen.py
+    "rule": r"(?:Question: )?What should the [a-z][a-z' -]* do\?",                       # rulegen.py: list / bullets, prose
+    "goldproof/fld": r"Question: Based only on the facts, is the hypothesis proved, disproved, or neither \(unknown\)\?",
+    "goldproof/boardgameqa": r"Question: Based on the game state and the rules and preferences, [^\n]+\?",
+    "goldproof/ruletaker": r"Question: Does the statement follow from the context\? What is not explicitly stated as "
+                           r"true is considered false\.",
+}
 
 
 def statement_block(item: dict) -> str:
@@ -201,6 +219,8 @@ def statement_block(item: dict) -> str:
       operation sentences and the noise sentences in prompt order. The options follow on later lines and are dropped.
     - fa_tier0 (data/student_fa0, failure attribution): the log (header, task, optional reference answer, the steps)
       before "\n\nQuestion: ", i.e. without the attribution question and its step / agent options.
+    - the sources of FINAL_QUESTION: the prompt before its last paragraph, which must be that source's final question
+      (the only "Options:" block follows it; no earlier paragraph opens with "Question: ").
     Any other source, or a prompt that does not have this shape, raises ValueError (no clean definition)."""
     src, p, iid = item.get("source"), item.get("prompt", ""), item.get("item_id")
     if src == "knights_knaves":
@@ -225,8 +245,17 @@ def statement_block(item: dict) -> str:
                 or not head.startswith(_FA_HEADER)):
             raise ValueError(f"{iid}: fa_tier0 prompt is not log + Question + options")
         return head
+    if src in FINAL_QUESTION:
+        head, sep, opts = p.partition("\nOptions:\n")
+        body, cut, last = head.rpartition("\n\n")
+        if (not sep or "\nOptions:" in opts or not cut or not body.strip() or not re.fullmatch(FINAL_QUESTION[src], last)
+                or "\n\nQuestion: " in body or body.startswith("Question: ")):
+            raise ValueError(f"{iid}: no statement block: the {src} prompt is not <statements> + its final question "
+                             "paragraph + options")
+        return body
     raise ValueError(f"{iid}: --tree-view statements has no statement block for source {src!r} "
-                     "(defined for knights_knaves and numgen; restrict with --tree-sources)")
+                     "(defined for knights_knaves, numgen, fa_tier0 and treeplan.FINAL_QUESTION; restrict with "
+                     "--tree-sources)")
 
 
 _FA_HEADER = "The log below comes from a multi-agent system that failed to solve its task.\n\nTask: "
@@ -235,8 +264,9 @@ _FA_HEADER = "The log below comes from a multi-agent system that failed to solve
 def problem_no_options(item: dict) -> str:
     """The problem WITHOUT its answer options but WITH its final question (--tree-view statements+question, GFPQ): the
     prompt before "\nOptions:" (K&K: preamble, statement lines and the question line; numgen: the "Question: ..." line
-    with the answer quantity's question sentence). The final question names what is asked (e.g. which quantity a word
-    problem wants), which GFP-S drops. Defined for the sources statement_block covers; anything else raises ValueError."""
+    with the answer quantity's question sentence; FINAL_QUESTION sources: the statement block, a blank line and the
+    final question paragraph). The final question names what is asked (e.g. which quantity a word problem wants), which
+    GFP-S drops. Defined for the sources statement_block covers; anything else raises ValueError."""
     statement_block(item)                                  # same sources and shape checks as GFP-S
     head, sep, _ = item["prompt"].partition("\nOptions:")
     if not sep:

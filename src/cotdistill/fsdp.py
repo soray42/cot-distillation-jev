@@ -199,9 +199,9 @@ def split_update(tokenizer, upd: list, max_len: int, micro_bs: int, token_budget
     is a sum over sequences, so the split does not change it); if every micro-batch is a single sequence, the short
     ranks get a pad micro-batch (the update's shortest sequence at weight 0: zero loss and zero gradient). Dealing:
     by padded tokens, largest first, in snake order over the ranks (0, 1, 1, 0, 0, 1, ...)."""
-    from .student import special_prefix, token_budget_batches
+    from .student import special_prefix, text_ids, token_budget_batches
     n_pre = len(special_prefix(tokenizer))
-    lens = [min(max_len, n_pre + len(tokenizer.encode(e.text, add_special_tokens=False))) for e in upd]
+    lens = [min(max_len, n_pre + len(text_ids(tokenizer, e.text))) for e in upd]
     if token_budget:
         groups = token_budget_batches(lens, token_budget, max_seqs)
     else:

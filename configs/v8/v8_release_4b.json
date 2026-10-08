@@ -1,0 +1,256 @@
+{
+ "name": "v8_release_4b",
+ "tier": "lab",
+ "seed": 0,
+ "out": "data/student_v8",
+ "description": "Candidate 4B release mixture for GFP-S (Tree Forcing, --tree-view statements): breadth (BR-40k, answer-only), the math slice of MS (numgen with the exact Tree Forcing trees of data/student_numgen_tf where the problem is in it, depth <= 4; depth 5-6 and GSM8K-socratic answer-only; no standalone node rows), gold-proof logic (FLD, BoardgameQA, RuleTaker; gold / solver proof trees), rule (program trees), v3sl (K&K solver trees; ShARC, ARC, JustLogic, FOLIO and the policy families answer-only: teacher-written trees). Tier lab: nothing is dropped for its licence class; summary.json counts the lab_only rows (SA / UNK) a release tier would drop.",
+ "plan": "scripts/build_v8.py; GFP-S eligibility: treeplan.FINAL_QUESTION / statement_block and the tree provenance of each source",
+ "gfps": {
+  "view": "statements",
+  "sources": [
+   "knights_knaves",
+   "numgen",
+   "goldproof/fld",
+   "goldproof/boardgameqa",
+   "goldproof/ruletaker",
+   "rule"
+  ],
+  "answer_only": {
+   "justlogic": "statement block defined; teacher-written tree (p_cot only, not program-checked); 1.9% of nodes restate the judged statement",
+   "folio": "statement block defined; teacher-written tree; 4.8% of nodes restate the judged statement (e.g. 'Is Carlos Reyes an Olympian?')",
+   "sharc": "statement block defined; teacher-written tree",
+   "returns": "statement block defined; teacher-written tree",
+   "expense": "statement block defined; teacher-written tree",
+   "subscription": "statement block defined; teacher-written tree",
+   "arc_challenge": "no clean cut: the question is the whole problem; teacher-written tree",
+   "arc_easy": "no clean cut: the question is the whole problem; teacher-written tree",
+   "gsm8k_soc": "no clean cut: one free-text paragraph whose last sentence can carry premises (program-checked step nodes otherwise)",
+   "numgen (depth 5-6)": "items not in data/student_numgen_tf keep their final question only (their data/student_numgen nodes are G3 probes, not a proof tree)",
+   "br40k": "breadth rows, no trees"
+  }
+ },
+ "val": {
+  "mode": "sources"
+ },
+ "dedup": {
+  "near": 0.8,
+  "shingle": 5,
+  "perms": 64,
+  "bands": 16
+ },
+ "sources": [
+  {
+   "name": "kk",
+   "slice": "A",
+   "comment": "K&K with solver proof trees (Tree Forcing data, local fields kept for the local-step probe)",
+   "train": "data/student_v3sl/train.jsonl",
+   "include_source": "^knights_knaves$",
+   "select": {
+    "problems": "all",
+    "rank": "file"
+   },
+   "nodes": "keep",
+   "label": "as_is",
+   "node_basis": "program",
+   "licence": {
+    "from": "v5"
+   },
+   "gates": [
+    "13gram"
+   ],
+   "own_eval": [
+    "kk_",
+    "val_kk",
+    "diag_",
+    "xkk",
+    "val_facts"
+   ],
+   "val": {
+    "file": "data/student_v3sl/val.jsonl"
+   },
+   "own_eval_comment": "val_facts is the v3 val set with stated tree results (diagnostic A10ub): the K&K solver's node phrasing overlaps it in 13-grams; counted, not dropped"
+  },
+  {
+   "name": "numgen",
+   "slice": "M",
+   "comment": "the 5000 numgen problems of MS; trees replaced by the exact Tree Forcing trees (read/parse/derive nodes, program truth) for the 3334 problems in data/student_numgen_tf; MS's N1/N4 node rows left out",
+   "train": "data/student_v7_pilot_math_MS/train.jsonl",
+   "stage": {
+    "from": [
+     "data/student_v7_pilot_math_MS/train.jsonl",
+     "data/student_v7_pilot_math_MS/val.jsonl"
+    ],
+    "v7_source": "numgen",
+    "drop_node_rows": true,
+    "trees_from": [
+     "data/student_numgen_tf/train.jsonl",
+     "data/student_numgen_tf/val.jsonl"
+    ]
+   },
+   "family_key": "frame",
+   "select": {
+    "problems": "all",
+    "rank": "file"
+   },
+   "nodes": "keep",
+   "label": "program",
+   "label_basis": "program",
+   "node_basis": "program",
+   "licence": {
+    "class": "PERM",
+    "text": "own generator (src/cotdistill/numgen.py)"
+   },
+   "gates": [
+    "13gram",
+    "masked"
+   ],
+   "own_eval": [
+    "numgen_",
+    "fa0_"
+   ],
+   "math": true,
+   "gsm_derived": false,
+   "val": {
+    "file": "data/student_v7_pilot_math_MS/val.jsonl"
+   },
+   "own_eval_comment": "fa0_* (failure-attribution Tier 0, scripts/build_fa_tier0.py) are trajectories on new numgen problems of the training frames, never equal to a data/student_numgen problem: numgen template overlap like numgen_*, counted, not dropped"
+  },
+  {
+   "name": "rule",
+   "slice": "R",
+   "comment": "rule-policy cases (src/cotdistill/rulegen.py), program truth for every node",
+   "train": "data/student_rule/train.jsonl",
+   "select": {
+    "problems": "all",
+    "rank": "file"
+   },
+   "nodes": "keep",
+   "label": "as_is",
+   "label_basis": "program",
+   "node_basis": "program",
+   "licence": {
+    "class": "PERM",
+    "text": "own generator (src/cotdistill/rulegen.py)"
+   },
+   "gates": [
+    "13gram"
+   ],
+   "own_eval": [
+    "rule_",
+    "claims_",
+    "chain_"
+   ],
+   "val": {
+    "file": "data/student_rule/val.jsonl"
+   },
+   "own_eval_comment": "chain_* evals are rendered from the same rulegen domains (condition phrases, Request details layout): 13-gram template overlap, counted, not dropped (as G20 / v5 did for claims/rule rows)"
+  },
+  {
+   "name": "goldproof",
+   "slice": "L",
+   "comment": "FLD / BoardgameQA / RuleTaker with gold or solver proof trees, every size tier (lab, release, 4b: all of train.jsonl; no 'where' filter, which would also drop the val rows, which carry no tier); ProofWriter's lab-only file stays out",
+   "train": "data/student_goldproof/train.jsonl",
+   "select": {
+    "problems": "all",
+    "rank": "file"
+   },
+   "nodes": "keep",
+   "label": "gold",
+   "node_basis": "gold_proof",
+   "licence": {
+    "from": "row"
+   },
+   "gates": [
+    "13gram",
+    "masked"
+   ],
+   "val": {
+    "file": "data/student_goldproof/val.jsonl"
+   }
+  },
+  {
+   "name": "v3sl_ao",
+   "slice": "A",
+   "comment": "v3sl without K&K, answer-only (teacher-written trees dropped in train; val keeps them for --eval-subq)",
+   "train": "data/student_v3sl/train.jsonl",
+   "exclude_source": "^knights_knaves$",
+   "select": {
+    "problems": "all",
+    "rank": "file"
+   },
+   "nodes": "drop",
+   "label": "as_is",
+   "licence": {
+    "from": "v5"
+   },
+   "gates": [
+    "13gram"
+   ],
+   "own_eval": [
+    "rule_",
+    "claims_",
+    "policy_",
+    "jl_",
+    "chain_",
+    "sharc_dev",
+    "val_facts"
+   ],
+   "val": {
+    "file": "data/student_v3sl/val.jsonl"
+   }
+  },
+  {
+   "name": "gsm8k_soc",
+   "slice": "M",
+   "comment": "the 880 GSM8K-socratic problems of MS, answer-only (no clean statement block); MS's node rows left out",
+   "train": "data/student_v7_pilot_math_MS/train.jsonl",
+   "stage": {
+    "from": [
+     "data/student_v7_pilot_math_MS/train.jsonl",
+     "data/student_v7_pilot_math_MS/val.jsonl"
+    ],
+    "v7_source": "gsm8k_soc",
+    "drop_node_rows": true
+   },
+   "family_key": "group",
+   "select": {
+    "problems": "all",
+    "rank": "file"
+   },
+   "nodes": "drop",
+   "label": "gold",
+   "label_basis": "gold",
+   "licence": {
+    "from": "row"
+   },
+   "gates": [
+    "13gram",
+    "masked"
+   ],
+   "math": true,
+   "gsm_derived": true,
+   "val": {
+    "file": "data/student_v7_pilot_math_MS/val.jsonl"
+   }
+  },
+  {
+   "name": "br40k",
+   "slice": "B",
+   "comment": "BR-40k breadth rows (built and screened by configs/v7/v7_pilot_br40k.json), answer-only; last in priority, so its cross-source duplicates go",
+   "train": "data/student_v7_pilot_br40k/train.jsonl",
+   "select": {
+    "problems": "all",
+    "rank": "file"
+   },
+   "nodes": "drop",
+   "label": "as_is",
+   "licence": {
+    "from": "row"
+   },
+   "gates": [
+    "13gram",
+    "masked"
+   ]
+  }
+ ]
+}

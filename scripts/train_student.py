@@ -32,7 +32,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from cotdistill.student import (Example, brier_loss, build_examples, build_fact_examples, build_full_tree, build_group,  # noqa: E402
                                 build_stage_examples, evaluate, evaluate_local, evaluate_subq, kl_loss, label_logits,
                                 lm_loss, load_model, logit_softcap, micro_batches, scaffold_fade, special_prefix,
-                                subq_sets)
+                                subq_sets, use_chat_template)
 
 
 # Arguments that do not change the training trajectory: a checkpoint may be resumed with different values.
@@ -42,7 +42,8 @@ RESUME_FREE = {"stop_after_h", "ckpt_every_min", "ckpt_single", "stop_at_step", 
 
 # Training arguments added after checkpoints may have been written: a checkpoint without the key had this value.
 NEW_ARG_DEFAULTS = {"tree_view": "problem", "tree_sources": "", "tree_node_weight": 0.0, "attn_impl": "", "fsdp": False,
-                    "fsdp_optim": None, "tree_mix_p": 0.5, "tree_scaffold": 0.0, "tree_depth_weight": 0.0}
+                    "fsdp_optim": None, "tree_mix_p": 0.5, "tree_scaffold": 0.0, "tree_depth_weight": 0.0,
+                    "chat_template": False}
 
 LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj",
                 "in_proj_qkv", "in_proj_z", "in_proj_a", "in_proj_b", "out_proj"]
@@ -194,6 +195,11 @@ def main() -> None:
     ap.add_argument("--attn-impl", default="", choices=["", "sdpa", "eager", "flex_attention"],
                     help="attention implementation passed to from_pretrained (empty = the transformers default, sdpa). "
                          "Gemma 4: not flash_attention_2, whose kernels stop at head_dim 256 (global layers use 512)")
+    ap.add_argument("--chat-template", action="store_true",
+                    help="train and evaluate every view as one user turn of the model's chat template, thinking off "
+                         "(the text without its 'Answer:' cue + 'Answer with the letter of the correct option only.', "
+                         "as scripts/eval_llm_baseline.py), read out at the assistant turn's first token (bare 'A', "
+                         "not ' A'); off: unchanged")
     ap.add_argument("--eval-bs", type=int, default=8)
     ap.add_argument("--eval-max-len", type=int, default=6144, help="long eval states (JevBench hard) need more room")
     ap.add_argument("--save", action="store_true", help="save the final weights (bf16) to <out>/model")
@@ -279,6 +285,8 @@ def main() -> None:
                              "12B, over the 100 GB quota): no --stop-after-h / --ckpt-every-min / --stop-at-step")
     if args.ckpt_single and not resumable:
         raise SystemExit("--ckpt-single needs --stop-after-h, --ckpt-every-min or --stop-at-step")
+    if args.chat_template and args.rationale_lm:
+        raise SystemExit("--chat-template does not combine with --rationale-lm (the LM continuation is not a chat turn)")
     t_start = time.time()
 
     torch.manual_seed(args.seed)
@@ -302,6 +310,8 @@ def main() -> None:
     tok = transformers.AutoTokenizer.from_pretrained(args.model)
     if tok.pad_token_id is None:
         tok.pad_token = tok.eos_token
+    if args.chat_template:
+        print("chat template: every view rendered as", repr(use_chat_template(tok, args.model)), flush=True)
     dtype = torch.float32 if args.precision == "fp32master" else torch.bfloat16
     model = load_model(args.model, dtype, args.attn_impl or None)
     if fs is None:

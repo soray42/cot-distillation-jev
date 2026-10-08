@@ -41,14 +41,76 @@ class Example:
 
 
 def letter_token_ids(tokenizer, letters: list[str]) -> list[int]:
-    """Token ids of ' A', ' B', ... (the token that follows 'Answer:'); each must be a single token."""
+    """Token ids of ' A', ' B', ... (the token that follows 'Answer:'; under --chat-template the bare 'A', 'B', ...
+    that opens the assistant turn); each must be a single token."""
     ids = []
+    sp = "" if _chat(tokenizer) else " "      # --chat-template: the assistant turn opens with the bare letter
     for L in letters:
-        t = tokenizer.encode(" " + L, add_special_tokens=False)
+        t = tokenizer.encode(sp + L, add_special_tokens=False)
         if len(t) != 1:
-            raise ValueError(f"label ' {L}' is not a single token: {t}")
+            raise ValueError(f"label '{sp}{L}' is not a single token: {t}")
         ids.append(t[0])
     return ids
+
+
+# ---- --chat-template (opt-in; nothing below runs on the default path) ---------------------------------------------
+CHAT_INSTRUCTION = "\n\nAnswer with the letter of the correct option only."     # as scripts/eval_llm_baseline.py
+_NO_THINK_CLOSE = "\n\n</think>\n\n"
+_CHAT: dict[int, tuple] = {}
+
+
+def chat_render(proc, typed: bool = False, bos: str | None = None):
+    """The --chat-template renderer of an Example text: the text without its closing "Answer:" cue, plus
+    CHAT_INSTRUCTION, as one user turn of the model's chat template with thinking off, ending where the assistant's
+    answer starts. For a final question this is exactly scripts/eval_llm_baseline.py's rendering of the prompt. A
+    template that ignores enable_thinking but opens a think block gets it closed empty; a leading BOS string is cut
+    (special_prefix puts the BOS token back). typed: content as typed parts (multimodal processors)."""
+    def render(text: str) -> str:
+        body = text
+        for cue in ("\n\nAnswer:", "\nAnswer:"):
+            if text.endswith(cue):
+                body = text[:-len(cue)]
+                break
+        content = body + CHAT_INSTRUCTION
+        out = proc.apply_chat_template([{"role": "user", "content": [{"type": "text", "text": content}] if typed
+                                         else content}], tokenize=False, add_generation_prompt=True,
+                                       enable_thinking=False)
+        if out.rstrip().endswith("<think>"):
+            out = out.rstrip() + _NO_THINK_CLOSE
+        return out[len(bos):] if bos and out.startswith(bos) else out
+    return render
+
+
+def set_chat_render(tokenizer, render) -> None:
+    """--chat-template: every Example text this tokenizer encodes (text_ids: collate, micro-batch lengths, FSDP split)
+    is rendered by render first, and option letters are read as bare tokens ("A") instead of " A". Keyed by the
+    tokenizer object (kept, so its id cannot be reused), like special_prefix."""
+    _CHAT[id(tokenizer)] = (tokenizer, render)
+
+
+def _chat(tokenizer):
+    hit = _CHAT.get(id(tokenizer))
+    return hit[1] if hit is not None and hit[0] is tokenizer else None
+
+
+def use_chat_template(tokenizer, model_path: str) -> str:
+    """Set the chat renderer for --chat-template, the template loaded as scripts/eval_llm_baseline.py loads it (the
+    model's processor, else the tokenizer). Returns a rendered example for the log."""
+    import transformers
+    try:
+        proc = transformers.AutoProcessor.from_pretrained(model_path)
+    except Exception:
+        proc = tokenizer
+    typed = isinstance(proc, transformers.ProcessorMixin)
+    set_chat_render(tokenizer, chat_render(proc, typed, tokenizer.bos_token if special_prefix(tokenizer) else None))
+    letter_token_ids(tokenizer, ["A", "B", "C", "D", "E"])          # bare letters must be single tokens
+    return _chat(tokenizer)(FINAL_TEMPLATE.format(problem="Question: Is it?\nOptions:\nA) Yes\nB) No"))
+
+
+def text_ids(tokenizer, text: str) -> list[int]:
+    """Token ids of an Example text without special tokens (rendered as a chat turn under --chat-template)."""
+    r = _chat(tokenizer)
+    return tokenizer.encode(r(text) if r else text, add_special_tokens=False)
 
 
 _PREFIX: dict[int, tuple] = {}
@@ -73,7 +135,7 @@ def special_prefix(tokenizer) -> list[int]:
 def encode_tail(tokenizer, text: str, max_len: int) -> list[int]:
     """Token ids of text, cut to its last tokens so that the special prefix plus the text fit max_len."""
     pre = special_prefix(tokenizer)
-    ids = tokenizer.encode(text, add_special_tokens=False)
+    ids = text_ids(tokenizer, text)
     return pre + ids[-max(1, max_len - len(pre)):]
 
 
@@ -786,7 +848,7 @@ def micro_batches(tokenizer, batch: list[Example], max_len: int, micro_bs: int, 
     if not token_budget:
         return [batch[i:i + micro_bs] for i in range(0, len(batch), micro_bs)]
     n_pre = len(special_prefix(tokenizer))
-    lens = [min(max_len, n_pre + len(tokenizer.encode(e.text, add_special_tokens=False))) for e in batch]
+    lens = [min(max_len, n_pre + len(text_ids(tokenizer, e.text))) for e in batch]
     return [[batch[j] for j in b] for b in token_budget_batches(lens, token_budget, max_seqs)]
 
 

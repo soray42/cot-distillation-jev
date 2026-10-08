@@ -17,7 +17,7 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from cotdistill.student import evaluate, evaluate_subq, load_model, subq_sets  # noqa: E402
+from cotdistill.student import evaluate, evaluate_subq, load_model, subq_sets, use_chat_template  # noqa: E402
 
 
 def main() -> None:
@@ -33,6 +33,10 @@ def main() -> None:
                     "to save as hidden_<name>.pt (float16, preds order)")
     ap.add_argument("--eval-subq", default=None, help="student data file whose sub-questions to score, or "
                     "comma-separated name=path entries (predictions in preds_subq[_name].jsonl)")
+    ap.add_argument("--chat-template", action="store_true",
+                    help="read out every item as one user turn of the model's chat template, thinking off, at the "
+                         "assistant turn's first token (bare letters), as train_student.py --chat-template; off: "
+                         "unchanged")
     args = ap.parse_args()
 
     import transformers
@@ -42,6 +46,8 @@ def main() -> None:
     tok = transformers.AutoTokenizer.from_pretrained(args.model)
     if tok.pad_token_id is None:
         tok.pad_token = tok.eos_token
+    if args.chat_template:
+        print("chat template: every item rendered as", repr(use_chat_template(tok, args.model)), flush=True)
     model = load_model(args.model, torch.bfloat16 if dev == "cuda" else torch.float32).to(dev)
     results, cache = {"args": vars(args), "eval": {}}, {}
     for kv in args.eval:
