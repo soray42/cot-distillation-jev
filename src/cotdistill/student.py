@@ -20,7 +20,8 @@ import torch.utils.checkpoint
 from .metrics import calibration  # noqa: F401  (re-exported for scripts)
 from .treeplan import (CTX_VIEWS, LOCAL_HEADER, _descendants, _fact_line, _node_p, ancestors,  # noqa: F401
                        answer_component, depth_split, full_tree_plan, is_local_leaf, local_context, mix_statements,
-                       node_depths, scaffold_fade, scaffold_rng, statement_block, subq_keep, view_leak)
+                       node_depths, problem_no_options, scaffold_fade, scaffold_rng, statement_block, subq_keep,
+                       view_leak)
 
 SUBQ_TEMPLATE = "{problem}\n\nIntermediate question: {question}\nOptions:\nA) {a}\nB) {b}\nAnswer:"
 FINAL_TEMPLATE = "{problem}\n\nAnswer:"
@@ -370,14 +371,15 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
         raise ValueError(f"scaffold_p {scaffold_p}: a probability, for --tree-full plain --tree-view statements (GTF)")
     if depth_weight and mode == "control":
         raise ValueError("--tree-depth-weight needs tree nodes: control questions have no depth")
-    if view not in ("problem", "statements"):
+    if view not in ("problem", "statements", "statements+question"):
         return fin + _local_views(item, mode=mode, view=view, rng=rng, cap=cap, aux_total=aux_total,
                                   subq_target=subq_target, node_format=node_format, eligible_only=eligible_only,
                                   subq_filter=subq_filter, node_weight=node_weight, stats=stats, mix_p=mix_p,
                                   mix_seed=mix_seed, mix_epoch=mix_epoch, depth_weight=depth_weight)
-    if view == "statements" and (mode != "plain" or eligible_only or node_format != "yesno"):
+    if view in ("statements", "statements+question") and (mode != "plain" or eligible_only or node_format != "yesno"):
         raise ValueError("--tree-view statements is implemented for --tree-full plain (yes/no nodes, all nodes)")
-    context = statement_block(item) if view == "statements" else item["prompt"]
+    context = (statement_block(item) if view == "statements" else problem_no_options(item)
+               if view == "statements+question" else item["prompt"])
     wi = item.get("weight", 1.0)
     views = []
     if eligible_only and mode == "control":

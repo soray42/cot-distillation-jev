@@ -1184,3 +1184,44 @@ class TestTrainGTF(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestGFPQ(unittest.TestCase):
+    """--tree-view statements+question (GFPQ): GFP-S views with the final question kept and only the options dropped."""
+
+    def _items(self):
+        import json as _json
+        out = []
+        for path, src in (("data/student_v3sl/val.jsonl", "knights_knaves"), ("data/student_numgen_tf/val.jsonl", "numgen")):
+            p = Path(__file__).resolve().parents[1] / path
+            if not p.exists():
+                continue
+            for line in open(p):
+                it = _json.loads(line)
+                if it.get("source") == src and it.get("subqs"):
+                    out.append(it)
+                    if sum(x.get("source") == src for x in out) >= 3:
+                        break
+        return out
+
+    def test_views_match_gfps_but_keep_question(self):
+        from cotdistill.student import build_full_tree
+        from cotdistill.treeplan import problem_no_options, statement_block
+        items = self._items()
+        if not items:
+            self.skipTest("no local v3sl / numgen_tf data")
+        for it in items:
+            ctx = problem_no_options(it)
+            self.assertNotIn("Options:", ctx)
+            self.assertTrue(it["prompt"].startswith(ctx))
+            self.assertIn(statement_block(it).strip()[-40:], ctx)          # the statements are all there
+            a = build_full_tree(it, mode="plain", view="statements", rng=random.Random(5), cap=0)
+            b = build_full_tree(it, mode="plain", view="statements+question", rng=random.Random(5), cap=0)
+            self.assertEqual(len(a), len(b))
+            self.assertEqual(a[0].text, b[0].text)                          # the final view is unchanged
+            for x, y in zip(a[1:], b[1:]):
+                self.assertEqual((x.target, x.weight), (y.target, y.weight))
+                first_opt = it["prompt"].partition("\nOptions:\n")[2].split("\n")[0]
+                self.assertNotIn(first_opt, y.text)                         # the final's options are dropped
+                self.assertEqual(y.text.count("Options:"), 1)               # only the node's own yes/no options
+                self.assertTrue(len(y.text) > len(x.text))                 # + the question sentence

@@ -221,6 +221,18 @@ def statement_block(item: dict) -> str:
                      "(defined for knights_knaves and numgen; restrict with --tree-sources)")
 
 
+def problem_no_options(item: dict) -> str:
+    """The problem WITHOUT its answer options but WITH its final question (--tree-view statements+question, GFPQ): the
+    prompt before "\nOptions:" (K&K: preamble, statement lines and the question line; numgen: the "Question: ..." line
+    with the answer quantity's question sentence). The final question names what is asked (e.g. which quantity a word
+    problem wants), which GFP-S drops. Defined for the sources statement_block covers; anything else raises ValueError."""
+    statement_block(item)                                  # same sources and shape checks as GFP-S
+    head, sep, _ = item["prompt"].partition("\nOptions:")
+    if not sep:
+        raise ValueError(f"{item.get('item_id')}: prompt has no options block")
+    return head
+
+
 # Views that put the statement block (above) in place of some nodes' local views, in rng lockstep with TFL:
 # "local+ctxparse" (TFLP) for parse nodes and nodes without parents, "mix" (MIX) for a seeded coin's share of all nodes.
 CTX_VIEWS = ("local+ctxparse", "mix")

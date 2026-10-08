@@ -109,7 +109,7 @@ def main() -> None:
     ap.add_argument("--tree-cap", type=int, default=10,
                     help="full-tree groups: at most this many nodes per problem (0 = no cap: every node every epoch)")
     ap.add_argument("--tree-view", default="problem",
-                    choices=["problem", "local", "ancestors", "statements", "local+ctxparse", "mix"],
+                    choices=["problem", "local", "ancestors", "statements", "statements+question", "local+ctxparse", "mix"],
                     help="full-tree groups: how a node is asked. problem = with the original problem (the TF/TFM/GF "
                          "arms); local = Tree Forcing: no problem text, only the preamble and the parents' results "
                          "(--tree-full true) or as many matched non-parent results (matched) or nothing (plain: "
@@ -229,9 +229,9 @@ def main() -> None:
     if tree_opts and not args.tree_full:
         raise SystemExit("--tree-view / --tree-sources / --tree-node-weight / --tree-cap 0 / --tree-scaffold / "
                          "--tree-depth-weight need --tree-full")
-    if args.tree_view != "problem" and not (args.tree_full == "true" and args.tree_view != "statements" or
+    if args.tree_view != "problem" and not (args.tree_full == "true" and args.tree_view not in ("statements", "statements+question") or
                                              args.tree_full in ("matched", "plain") and args.tree_view == "local" or
-                                             args.tree_full == "plain" and args.tree_view == "statements"):
+                                             args.tree_full == "plain" and args.tree_view in ("statements", "statements+question")):
         raise SystemExit(f"--tree-view {args.tree_view} is implemented for --tree-full true (local/ancestors/"
                          "local+ctxparse/mix), matched (local) and plain (local, statements)")
     if args.tree_view != "problem" and (args.tree_eligible_only or args.node_format != "yesno"):
@@ -404,7 +404,7 @@ def main() -> None:
     tree_sources = {x for x in args.tree_sources.split(",") if x} or None
     if tree_sources and not any(it.get("source") in tree_sources for it in train_items):
         raise SystemExit(f"--tree-sources {args.tree_sources}: no item of {args.train} has one of these sources")
-    if args.tree_view in ("statements", "local+ctxparse", "mix"):   # GFP-S, TFLP, MIX: every node-view item needs a
+    if args.tree_view in ("statements", "statements+question", "local+ctxparse", "mix"):   # GFP-S, GFPQ, TFLP, MIX: every
         from cotdistill.treeplan import statement_block                 # statement block (fail before training)
         for it in train_items:
             if tree_sources is None or it.get("source") in tree_sources:
