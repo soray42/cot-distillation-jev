@@ -184,11 +184,11 @@ class TestItems(unittest.TestCase):
 
 class TestStatementBlock(unittest.TestCase):
     def head_treeplan(self):
-        """treeplan.py as committed at HEAD (before the fa_tier0 branch)."""
-        src = subprocess.run(["git", "-C", str(ROOT), "show", "HEAD:src/cotdistill/treeplan.py"], capture_output=True,
+        """treeplan.py as committed at f27b56b, the last commit before the fa_tier0 branch (HEAD has it since ac4f6d8)."""
+        src = subprocess.run(["git", "-C", str(ROOT), "show", "f27b56b:src/cotdistill/treeplan.py"], capture_output=True,
                              text=True)
         if src.returncode != 0:
-            self.skipTest("git HEAD not readable")
+            self.skipTest("git commit f27b56b not readable")
         spec = importlib.util.spec_from_loader("treeplan_head", loader=None)
         mod = importlib.util.module_from_spec(spec)
         mod.__dict__["__package__"] = "cotdistill"
@@ -226,15 +226,16 @@ class TestStatementBlock(unittest.TestCase):
             self.assertEqual(treeplan.statement_block(it), head.statement_block(it))
             self.assertEqual(treeplan.problem_no_options(it), head.problem_no_options(it))
         step, _ = fa.make_items(TRAJ[0], "x", False, random.Random(0))
-        for it in (dict(step, source="justlogic"), {"item_id": "o", "source": None, "prompt": "P\nOptions:\nA) a"},
+        for it in (dict(step, source="no_such_source"), {"item_id": "o", "source": None, "prompt": "P\nOptions:\nA) a"},
                    dict(KK, prompt=KK["prompt"].replace("\n\nQuestion: ", "\n\nAsk: "))):
             for fn in ("statement_block", "problem_no_options"):
                 with self.assertRaises(ValueError) as new:
                     getattr(treeplan, fn)(it)
                 with self.assertRaises(ValueError) as old:
                     getattr(head, fn)(it)
-                self.assertEqual(str(new.exception), str(old.exception))
-        with self.assertRaises(ValueError):                       # HEAD had no fa_tier0 branch
+                if it.get("source") == "knights_knaves":          # shape errors keep their text; the list of
+                    self.assertEqual(str(new.exception), str(old.exception))   # supported sources grew (v8)
+        with self.assertRaises(ValueError):                       # f27b56b had no fa_tier0 branch
             head.statement_block(step)
 
     @unittest.skipUnless(HAVE_TORCH, "needs torch")
