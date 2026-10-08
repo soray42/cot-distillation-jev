@@ -199,6 +199,8 @@ def statement_block(item: dict) -> str:
     - numgen (data/student_numgen*): the prompt's first line without the "Question: " label and without the answer
       quantity's question sentence (program.quantities[answer].question, the last sentence), i.e. the frame intro, the
       operation sentences and the noise sentences in prompt order. The options follow on later lines and are dropped.
+    - fa_tier0 (data/student_fa0, failure attribution): the log (header, task, optional reference answer, the steps)
+      before "\n\nQuestion: ", i.e. without the attribution question and its step / agent options.
     Any other source, or a prompt that does not have this shape, raises ValueError (no clean definition)."""
     src, p, iid = item.get("source"), item.get("prompt", ""), item.get("item_id")
     if src == "knights_knaves":
@@ -217,8 +219,17 @@ def statement_block(item: dict) -> str:
         if not (sep and ask and first.startswith("Question: ") and first.endswith(" " + ask) and "\n" not in first):
             raise ValueError(f"{iid}: numgen prompt is not 'Question: <body> <answer question>' + options")
         return first[len("Question: "):-len(ask) - 1]
+    if src == "fa_tier0":
+        head, sep, tail = p.rpartition("\n\nQuestion: ")
+        if (not sep or "\nOptions:\n" not in tail or "Question:" in head or "\nOptions:" in head
+                or not head.startswith(_FA_HEADER)):
+            raise ValueError(f"{iid}: fa_tier0 prompt is not log + Question + options")
+        return head
     raise ValueError(f"{iid}: --tree-view statements has no statement block for source {src!r} "
                      "(defined for knights_knaves and numgen; restrict with --tree-sources)")
+
+
+_FA_HEADER = "The log below comes from a multi-agent system that failed to solve its task.\n\nTask: "
 
 
 def problem_no_options(item: dict) -> str:
