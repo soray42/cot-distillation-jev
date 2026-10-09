@@ -304,9 +304,12 @@ class TestTrainPack(unittest.TestCase):
     def test_resume_with_packs(self):
         """A planned stop mid-epoch (the remaining updates, Packs included, pickled in the checkpoint) and the resumed
         run end where a straight run ends."""
+        from cotdistill.student import Pack
         common = [*GFPS, "--tree-pack", "4", "--items-per-update", "1", "--seed", "1"]
-        r = self.run_(*common, "--stop-at-step", "4", out="a")
+        r = self.run_(*common, "--stop-at-step", "2", out="a")         # 3 of 5 updates left: at least one K&K group
         self.assertEqual(r.returncode, 3, r.stderr[-2000:])
+        st = torch.load(Path(self.d) / "a/ckpt/state.pt", map_location="cpu", weights_only=False)
+        self.assertTrue(any(isinstance(e, Pack) for u in st["upd_iter"] for e in u))
         r = self.run_(*common, "--ckpt-every-min", "1000", out="a")
         self.assertEqual(r.returncode, 0, r.stderr[-2000:])
         self.assertIn("resumed from", r.stdout)
