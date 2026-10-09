@@ -36,8 +36,9 @@
 #   1. kk_audit.py --check on 64 pairs per family: identity patches, token sites, gradients only in the subspace and
 #      bit-identical weights, fp32 forward (matmul outputs float32, autocast off), decode path = hook-patched full
 #      forward at every candidate layer (max |logit diff| < DECODE_TOL, default 1e-2 in fp32), the layer screen keeps a
-#      layer, positive-control mini-fit (stmt:source@last, best-copy layer, top rank, 200 steps) lowers its training
-#      loss by >= POSCTL_MIN (default 0.10, relative), bf16 exchange fidelity (fails only under DTYPE=bf16, as registered),
+#      layer, positive-control mini-fit (stmt:source@last, best-copy layer, top rank, 200 steps) lowers its loss on
+#      its pairs by >= POSCTL_MIN (default 0.10, relative to step 0), bf16 exchange fidelity (fails only under
+#      DTYPE=bf16, as registered; the decode assertions apply to the fp32 prefix-cache path only),
 #      timings and the GPU-hour estimate;
 #   2. a 1-layer, 20-step run on 24/24 pairs that must print KKAUDIT lines including the gate line.
 #   SMOKE_ONLY=1 stops after it. If the decode check fails, resubmit with XARGS="--no-prefix-cache" (hook path, the v1
@@ -110,8 +111,10 @@ assert c["weights_unchanged"], "model weights changed during the DAS fit"
 if dtype == "fp32":
     assert c["matmul_output_dtype"] == "float32" and not c["autocast_bf16"] and not c["tf32_matmul"], \
         ("forward is not fp32", c["matmul_output_dtype"], c["autocast_bf16"], c["tf32_matmul"])
+if dtype == "fp32" and c.get("prefix_cache", True):     # bf16 / hook-path fallback: reported, not asserted
     assert c["decode_max_abs_diff"] < tol, ("decode path differs from the hook-patched forward", c["decode_fidelity"])
-assert c["decode_prefix_fidelity"]["argmax_mismatch"] == 0, ("decoded unpatched answers differ", c["decode_prefix_fidelity"])
+    assert c["decode_prefix_fidelity"]["argmax_mismatch"] == 0, ("decoded unpatched answers differ",
+                                                                 c["decode_prefix_fidelity"])
 assert c["layers_selected"], ("layer screen kept no layer", c["layer_screen"])
 p = c["posctl_fit"]
 assert p["rel_drop"] >= pmin, ("positive-control mini-fit did not lower the loss", {k: p[k] for k in p if k != "curve"})

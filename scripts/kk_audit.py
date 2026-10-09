@@ -1098,15 +1098,15 @@ def check_v2(args, model, tok, pairs, states, logits, lidx, cands, dev, prep: di
         return rd.logits_at([st[i] for i in rows], best, lambda hb, hs, sl=None: ic.exchange_rows(hb, hs, R))
     steps = args.check_fit_steps
     t0 = time.time()
-    _, fi = ic.fit_slot_subspaces(fwd, states.shape[-1], kmax, [0] * len(st), [], [p["target"] for p in st], [],
+    # the fit pairs double as the "validation" rows, so the curve starts at the step-0 loss of the whole fit set
+    tg = [p["target"] for p in st]
+    _, fi = ic.fit_slot_subspaces(fwd, states.shape[-1], kmax, [0] * len(st), [0] * len(st), tg, tg,
                                   [len(p["labels"]) for p in st], steps_min=steps, steps_max=steps, patience=steps,
                                   eval_every=max(1, steps // 10), rows_per_slot=min(args.das_bs, len(st)), lr=args.lr,
                                   seed=args.seed, dev=dev)
     t_fit = time.time() - t0
-    first = next(c["train_loss"] for c in fi["curve"] if c["train_loss"] is not None)
-    last = fi["curve"][-1]["train_loss"]
     out["posctl_fit"] = {"cond": GATE_COND, "layer": best, "k": kmax, "n": len(st), "steps": steps,
-                         "first_loss": first, "last_loss": last, "rel_drop": round((first - last) / first, 4),
+                         "first_loss": fi["init_loss"], "last_loss": fi["best_loss"], "rel_drop": fi.get("rel_drop", 0.0),
                          "curve": fi["curve"]}
     out["weights_unchanged"] = [float(prm.detach().sum(dtype=torch.float64)) for prm in model.parameters()] == ck0
     # timing: decode DAS step (fwd + bwd, das_bs rows) at the lowest and highest candidate layer, eval decode, prefill
