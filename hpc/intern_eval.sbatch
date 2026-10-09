@@ -26,11 +26,12 @@ for s in jevmc=jevbench_public kk=kk_heldout diag=diag_kk kkdeep=kk_deep bbh=bbh
 done
 for f in $IB/jevbench/easy.jsonl $IB/jevbench/original.jsonl $IB/jevbench/hard.jsonl $IB/typed_decisions/test.jsonl; do
   [ -f "$f" ] || { echo "missing $f"; exit 1; }; done
-run() { echo "=== $1 $2 $(date +%T)"; [ -n "${DRY_RUN:-}" ] && { echo "$PY $REPO/scripts/eval_intern_format.py --model models/$1 --out runs/intern/$1-$2 --perm $2 ${@:3}" | cut -c1-300; return; }
-  $PY "$REPO/scripts/eval_intern_format.py" --model "models/$1" --out "runs/intern/$1-$2" --perm "$2" "${@:3}" || echo "FAILED $1 $2"; }
+run() { local o="runs/intern/$1-${OUTTAG:-$2}"; echo "=== $1 $2 -> $o $(date +%T)"
+  [ -n "${DRY_RUN:-}" ] && { echo "$PY $REPO/scripts/eval_intern_format.py --model models/$1 --out $o --perm $2 ${@:3}" | cut -c1-300; return; }
+  $PY "$REPO/scripts/eval_intern_format.py" --model "models/$1" --out "$o" --perm "$2" "${@:3}" || echo "FAILED $1 $2"; }
 for M in ${MODELS:-Intern-Decision-4B Qwen3.5-4B}; do
   [ -f "models/$M/config.json" ] || { echo "missing models/$M"; continue; }
-  [ -n "${MCONLY:-}" ] && { run "$M" mc $MC; continue; }
+  [ -n "${MCONLY:-}" ] && { OUTTAG=mc run "$M" none $MC; continue; }   # -> runs/intern/<model>-mc
   run "$M" none $NATIVE $MC
   run "$M" reverse $NATIVE
   run "$M" shuffle $NATIVE
