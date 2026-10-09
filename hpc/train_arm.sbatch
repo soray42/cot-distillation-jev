@@ -242,9 +242,9 @@ head -n 20 data/eval/kk_heldout.jsonl > "$SM/eval.jsonl"
 [ -z "$LOCAL_EVAL" ] || grep -m 2 '"local_preamble"' "$LOCAL_EVAL" > "$SM/local.jsonl" || true   # no local fields: empty probe
 [ -z "${CKPTONE:-}" ] || [ -n "${STOPH:-}${CKPTMIN:-}" ] || { echo "CKPTONE needs STOPH or CKPTMIN"; exit 1; }
 for ARM in $ARMS; do
-  if [ -n "${STOPH:-}${CKPTMIN:-}" ] || { [ -n "${TOKBUDGET:-}" ] && [ "$ng" = 1 ]; }; then   # resume (and one-slice
-    arm_config "$ARM"                                                                         # token budgets): full tree
-    [[ " $DX ${XARGS:-} " == *" --tree-full "* ]] || { echo "SMOKE FAILED $ARM: STOPH/CKPTMIN (and TOKBUDGET with NGPU=1) need a full-tree arm"; exit 1; }
+  if [ -n "${STOPH:-}${CKPTMIN:-}" ]; then   # resume needs a full-tree arm (one-slice token budgets work for every arm
+    arm_config "$ARM"                         # since e0ca874)
+    [[ " $DX ${XARGS:-} " == *" --tree-full "* ]] || { echo "SMOKE FAILED $ARM: STOPH/CKPTMIN need a full-tree arm"; exit 1; }
   fi
   SUBQ_EXTRA= le=${LOCAL_EVAL:+$SM/local.jsonl} train "$ARM" "$SM/train.jsonl" "smoke=$SM/eval.jsonl" "$SM/out-$ARM" --epochs 0.5 --micro-bs 2 --grad-accum 2 \
     > "$SM/$ARM.log" 2>&1 || { echo "SMOKE FAILED $ARM"; tail -n 30 "$SM/$ARM.log"; exit 1; }
