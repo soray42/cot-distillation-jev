@@ -2,19 +2,22 @@
 reasoning complexity of an item rather than with its nominal size. CPU only, numpy (no scipy).
 
 Runs are found and grouped as in ladder_readout.py (<ARM>[-tag]-<model>-<data>-s<seed>; K&K = student_v3sl, numeric
-chains = "numgen" in the data name). The comparison is --arm (GFPS, c4 preferred) vs --ref (A2, c12 preferred), paired by
-seed label over their common seeds; every other arm gets its own curve and a single-seed-pair interaction row.
+chains = "numgen" in the data name, PrOntoQA-OOD = "pronto"). The comparison is --arm (GFPS, c4 preferred) vs --ref
+(A2, c12 preferred), paired by seed label over their common seeds; every other arm gets its own curve and a
+single-seed-pair interaction row.
 
 Part 1, effective depth (per arm pooled over seeds and per seed). Difficulty x = people count (kk_deep, 4-20, trained
-4-10) or chain depth (numgen d1-d8, trained d1-d4). Per level accuracy -> non-increasing isotonic fit (PAV, weights =
-items) -> the first x where the fit reaches each threshold (linear interpolation between levels; "<=x_min" if the
-easiest level is already at/below it, ">x_max" if the hardest is still above: censored, the bound is used in the
-bootstrap and the censored share of draws is printed). Secondary: a 2-parameter logistic in x fitted to the level
-means (may extrapolate; flagged). Shift = x(arm) - x(ref) at each threshold. A2-equivalent level of the arm at each
-beyond-training level d: the x where the ref's isotonic curve equals the arm's isotonic accuracy at d (gain = d - that).
-k*: the largest k with arm(d) >= ref(d-k) at every level d with d-k in range (raw level means and isotonic; all d and
-beyond-training d only). Bootstrap: items resampled within each level (the design strata), the same draw for every
-seed of both arms (paired), --boot draws.
+4-10), chain depth (numgen d1-d8, trained d1-d4) or proof depth = hop count (pronto_d1-d8, trained hops 1-4; pronto_wide
+is not on this axis and is left out). Thresholds: K&K .60/.55/.50 (6 options), numeric .50/.45/.40 (5 options), pronto
+.80/.75/.70 (True/False: chance .5, the cue baselines of data/student_pronto_tf/summary.json reach at most .58). Per
+level accuracy -> non-increasing isotonic fit (PAV, weights = items) -> the first x where the fit reaches each threshold
+(linear interpolation between levels; "<=x_min" if the easiest level is already at/below it, ">x_max" if the hardest is
+still above: censored, the bound is used in the bootstrap and the censored share of draws is printed). Secondary: a
+2-parameter logistic in x fitted to the level means (may extrapolate; flagged). Shift = x(arm) - x(ref) at each
+threshold. A2-equivalent level of the arm at each beyond-training level d: the x where the ref's isotonic curve equals
+the arm's isotonic accuracy at d (gain = d - that). k*: the largest k with arm(d) >= ref(d-k) at every level d with d-k
+in range (raw level means and isotonic; all d and beyond-training d only). Bootstrap: items resampled within each level
+(the design strata), the same draw for every seed of both arms (paired), --boot draws.
 
 Part 2, true complexity. Each kk_deep / kk_heldout item is re-solved with the solver that built the training trees
 (teacher_cache/solver_kk_v3f/build_reasoning_trees.py via build_local_kk.load_solver) and cleaned exactly as the
@@ -25,7 +28,9 @@ training trees (build_solver_kk.clean: generic rule and verify nodes dropped, re
 The reconstruction is checked against the stored trees of data/student_v3sl/val.jsonl, and the training K&K trees give
 the reference percentiles for "beyond training complexity" bins. Numeric chains carry their program: size = number of
 operations (= the nominal depth d by construction), level = longest derivation path (< d when fan-in runs in
-parallel), fanin = number of fan-in operations.
+parallel), fanin = number of fan-in operations. PrOntoQA-OOD: the proof depth is the hop count by construction (shortest
+proof = hops, audited by build_pronto_tf.py), so within a level only the context varies: sentences (n_sentences:
+distractor rules and facts), rule negation and query negation (balanced, 100 items per cell and hop).
 Item-level logistic regression, rows = item x run of the pair: correct ~ arm + c + arm:c + seed FE (+ controls), c
 z-scored over the items; the arm:c coefficient (log-odds per SD of c) with a cluster bootstrap over items (all rows of
 a drawn item travel together; drawn within the design strata), percentile 95% CI and two-sided p = 2 min(share <= 0,
@@ -57,10 +62,12 @@ from analyze_e2 import correct, read_preds  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 SOLVER = ROOT / "teacher_cache" / "solver_kk_v3f" / "build_reasoning_trees.py"
-THRESH = {"kk": (0.60, 0.55, 0.50), "numgen": (0.50, 0.45, 0.40)}
-TRAIN_MAX = {"kk": 10, "numgen": 4}                    # largest trained people count / chain depth
-LEVEL_NAME = {"kk": "people", "numgen": "depth"}
+THRESH = {"kk": (0.60, 0.55, 0.50), "numgen": (0.50, 0.45, 0.40), "pronto": (0.80, 0.75, 0.70)}
+TRAIN_MAX = {"kk": 10, "numgen": 4, "pronto": 4}       # largest trained people count / chain depth / hops
+LEVEL_NAME = {"kk": "people", "numgen": "depth", "pronto": "hops"}
 NG_FILE = re.compile(r"^preds_ng_?d(\d+)\.jsonl$")
+PQ_FILE = re.compile(r"^preds_pq_?d(\d+)\.jsonl$")    # pq_d1..pq_d8 (pq_wide is not on the hop axis)
+UNITS_KEY = {"kk": "kkdeep", "numgen": "ng", "pronto": "pq"}
 RIDGE = 1e-4
 
 
@@ -188,6 +195,13 @@ def ng_complexity(items: list[dict]) -> dict[str, dict]:
     return out
 
 
+def pq_complexity(items: list[dict]) -> dict[str, dict]:
+    """item_id -> {depth (= hops = proof depth), sentences, rule_neg, query_neg, width}."""
+    return {it["item_id"]: {"depth": int(it["hops"]), "sentences": int(it["n_sentences"]),
+                            "rule_neg": int(bool(it["rule_neg"])), "query_neg": int(bool(it["query_neg"])),
+                            "width": int(it.get("width") or 0)} for it in items}
+
+
 def read_jsonl(path: Path) -> list[dict]:
     with open(path) as f:
         return [json.loads(line) for line in f if line.strip()]
@@ -214,7 +228,7 @@ def find_runs(patterns: list[str]) -> tuple[list[dict], list]:
 
 
 def run_units(r: dict) -> dict[str, dict[str, int]]:
-    """{set: {item_id: correct}}: kkdeep / kk (K&K), ng (numeric, all depth files)."""
+    """{set: {item_id: correct}}: kkdeep / kk (K&K), ng (numeric, all depth files), pq (pronto, all hop files)."""
     d = Path(r["dir"])
     out = {}
     if r["domain"] == "kk":
@@ -224,10 +238,11 @@ def run_units(r: dict) -> dict[str, dict[str, int]]:
                          if p.get("gold_label") in p["labels"]}
     else:
         u = {}
-        for f in sorted(d.glob("preds_ng*.jsonl")):
-            if NG_FILE.match(f.name):
+        pat, key = (PQ_FILE, "pq") if r["domain"] == "pronto" else (NG_FILE, "ng")
+        for f in sorted(d.glob(f"preds_{key}*.jsonl")):
+            if pat.match(f.name):
                 u.update({p["item_id"]: int(correct(p)) for p in read_preds(f) if p.get("gold_label") in p["labels"]})
-        out["ng"] = u
+        out[key] = u
     return out
 
 
@@ -550,7 +565,7 @@ def section(dom: str, groups: dict, arm: str, ref: str, args, meta_items: dict, 
     L, J = [], {"arm": arm, "ref": ref}
     thetas = THRESH[dom]
     lvl = LEVEL_NAME[dom]
-    key = "kkdeep" if dom == "kk" else "ng"
+    key = UNITS_KEY[dom]
     level_of = {i: (c["people"] if dom == "kk" else c["depth"]) for i, c in comp[key].items()}
     C = Curves(groups, key, level_of, args.boot, args.seed)
     beyond = TRAIN_MAX[dom] + 1
@@ -630,6 +645,22 @@ def section(dom: str, groups: dict, arm: str, ref: str, args, meta_items: dict, 
                  ("tree depth + people FE + arm:shortcut", depth, people, (("shortcut", sc),), ()),
                  ("tree depth + people FE + arm:unseen names", depth, people, (("unseen", un),), ())]
         fe_lpm = people
+    elif dom == "pronto":
+        depth = np.array([cm[i]["depth"] for i in items], dtype=float)
+        sent = np.array([cm[i]["sentences"] for i in items], dtype=float)
+        rneg = np.array([cm[i]["rule_neg"] for i in items], dtype=float)
+        qneg = np.array([cm[i]["query_neg"] for i in items], dtype=float)
+        dz = zs(depth)[0]
+        L += _pq_complexity_md(cm, items)
+        J["complexity_summary"] = _pq_complexity_summary(cm, items)
+        counts = strata_draws(depth.astype(int), args.boot_reg, rng)
+        specs = [("hops = proof depth (nominal, baseline)", depth, None, (), ()),
+                 ("sentences", sent, None, (), ()),
+                 ("sentences + hops FE", sent, depth, (), ()),
+                 ("sentences + hops FE + arm:hops", sent, depth, (("hops_z", dz),), ()),
+                 ("rule negation + hops FE", rneg, depth, (), ()),
+                 ("query negation + hops FE", qneg, depth, (), ())]
+        fe_lpm = depth
     else:
         depth = np.array([cm[i]["depth"] for i in items], dtype=float)
         level = np.array([cm[i]["level"] for i in items], dtype=float)
@@ -659,6 +690,7 @@ def section(dom: str, groups: dict, arm: str, ref: str, args, meta_items: dict, 
     L += T(["c", "SD of c", "arm:c per SD [95% CI]", "arm:c per unit", "arm (log-odds) [95% CI]", "arm:c per seed"],
            rows)
     lp_specs = ([("tree depth", depth), ("tree width", width)] if dom == "kk"
+                else [("sentences", sent), ("rule negation", rneg)] if dom == "pronto"
                 else [("derivation level", level), ("fan-in operations", fanin)])
     J["lpm"] = {}
     parts = []
@@ -784,6 +816,27 @@ def _ng_complexity_md(cm, items) -> list[str]:
     return L
 
 
+def _pq_complexity_summary(cm, items) -> dict:
+    by = defaultdict(list)
+    for i in items:
+        by[cm[i]["depth"]].append(cm[i])
+    return {"per_hops": {d: {"sentences": [float(np.mean([v["sentences"] for v in vs])),
+                                           min(v["sentences"] for v in vs), max(v["sentences"] for v in vs)],
+                             "rule_neg": float(np.mean([v["rule_neg"] for v in vs])),
+                             "query_neg": float(np.mean([v["query_neg"] for v in vs])), "n": len(vs)}
+                         for d, vs in sorted(by.items())}}
+
+
+def _pq_complexity_md(cm, items) -> list[str]:
+    s = _pq_complexity_summary(cm, items)
+    L = ["Per item (pronto_d1-d8): proof depth = hops by construction; within a hop count only the context varies: "
+         "sentences (distractor rules and facts), rule negation and query negation (balanced cells).", ""]
+    L += T(["hops", "items", "sentences mean (min-max)", "rule negation share", "query negation share"],
+           [[d, v["n"], f"{v['sentences'][0]:.1f} ({v['sentences'][1]}-{v['sentences'][2]})", f"{v['rule_neg']:.2f}",
+             f"{v['query_neg']:.2f}"] for d, v in s["per_hops"].items()])
+    return L
+
+
 def main(argv=None) -> dict:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("runs", nargs="+")
@@ -834,6 +887,9 @@ def main(argv=None) -> dict:
             if not extra["train"]:
                 extra["train"] = [dict(v, item_id=i) for i, v in comp["kkdeep"].items() if v["people"] <= 10]
                 L.append("WARNING: no training file; training-range bins use kk_deep items with people <= 10")
+        elif dom == "pronto":
+            items = [it for f in sorted(ev.glob("pronto_d*.jsonl")) for it in read_jsonl(f)]
+            comp = {"pq": pq_complexity(items)}
         else:
             items = [it for f in sorted(ev.glob("numgen_d*.jsonl")) for it in read_jsonl(f)]
             comp = {"ng": ng_complexity(items)}

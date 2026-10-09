@@ -1,9 +1,10 @@
-"""Ladder readout: one command for single- (or multi-) seed arm runs on the two Tree Forcing domains. CPU only, numpy.
+"""Ladder readout: one command for single- (or multi-) seed arm runs on the Tree Forcing domains. CPU only, numpy.
 
 Run dirs are <ARM>[-<tag>]-<model>-<data>-s<seed> (hpc/train_arm.sbatch OUT), any model name; runs are grouped by
 (arm, tag, data) (and by model too when several models are passed). Domain from the data part of the name: "numgen" in
-it -> numeric chains (student_numgen_tf), else K&K (student_v3sl). Arguments are run dirs, globs, or a parent dir whose
-children are run dirs (e.g. results/hpc/<pull>/). Dirs without metrics.json (still running) are listed as skipped.
+it -> numeric chains (student_numgen_tf), "pronto" -> PrOntoQA-OOD (student_pronto_tf), else K&K (student_v3sl).
+Arguments are run dirs, globs, or a parent dir whose children are run dirs (e.g. results/hpc/<pull>/). Dirs without
+metrics.json (still running) are listed as skipped.
 
 K&K, per run: kk_deep accuracy by people bins 4-10 / 11-16 / 17-20 / 11-20 and per people count (group kk/dN or kkx/dN),
   dA = analyze_e2.run_summary(run)["A"] (needs preds_diag), bbh (macro over tasks), jevbench, folio, val, training hours
@@ -11,16 +12,36 @@ K&K, per run: kk_deep accuracy by people bins 4-10 / 11-16 / 17-20 / 11-20 and p
   = the first trajectory point (or the end eval) with diagA >= .40, as epoch @step (tf_readout.curve).
 Numeric chains, per run: accuracy on ng_d1..ng_d8 and ng_ood (eval keys ng_d1 / ng1, ng_ood / ngood), mean over d1-d4
   (in range) and d5-d8 (beyond the training depth), and drop = beyond - in range.
-Both: problem-view node accuracy by node depth (preds_subq, kind "cot", source knights_knaves / numgen, `correct`) with the
-  depth joined by (item_id, question) from data/<data>/val.jsonl subqs' node_depth (also their "opposite" wording) and,
-  for what that misses, preds_local_kk.jsonl of any run of the same domain (the numeric local probe runs on
-  local_deep.jsonl, whose items are not the val items, so it alone would join nothing); bins 0 / 1-3 / 4-7 / 8-12 / >=13,
-  join coverage printed. Local-step probe (eval key local_kk or local_kk_anc, both domains): all, derived_nontrivial,
-  by depth bin.
+PrOntoQA-OOD, per run: as numeric chains with proof depth = hops (eval keys pq_d1..pq_d8, trained on hops 1-4) and
+  pq_wide (hops 1-4 with two extra chain pairs: in-range depth, out-of-range distractor width) in place of ood.
+All: problem-view node accuracy by node depth (preds_subq, kind "cot", source knights_knaves / numgen / pronto,
+  `correct`) with the depth joined by (item_id, question) from data/<data>/val.jsonl subqs' node_depth (also their
+  "opposite" wording) and, for what that misses, preds_local_kk.jsonl of any run of the same domain (the numeric local
+  probe runs on local_deep.jsonl, whose items are not the val items, so it alone would join nothing); bins 0 / 1-3 /
+  4-7 / 8-12 / >=13, join coverage printed. Local-step probe (eval key local_kk or local_kk_anc, every domain): all,
+  derived_nontrivial, by depth bin.
 Contrasts: every arm vs A2 (c12 preferred) and vs GFPS (c4 preferred) of the same domain, on kk 11-20 and dA (K&K) and
-  beyond d5-d8 (numeric): mean difference and paired item-level bootstrap 95% CI (items / diag programs joined by
-  item_id; tf_readout.contrast: paired by seed label, pooled over common seeds; no common seed -> difference of arm means,
-  still item-paired, labelled).
+  beyond d5-d8 (numeric; pronto: beyond hops 5-8 and wide): mean difference and paired item-level bootstrap 95% CI
+  (items / diag programs joined by item_id; tf_readout.contrast: paired by seed label, pooled over common seeds; no
+  common seed -> difference of arm means, still item-paired, labelled).
+LR sweep (appended to every domain section; the tables above are unchanged). The LR is part of the arm name (tag suffix
+  lrN = N e-6, e.g. A2-c12lr3 = A2-c12 at 3e-6; no suffix = the default 1e-5) and is read from metrics.json args.lr
+  (tag only as a fallback; a disagreement is a WARNING). Method = arm + tag without the LR suffix (A2-c12, GFPS-c4,
+  G3-c4kk). Full curve: every method x LR, per seed and mean, validation key + the domain's test metrics (K&K: kk 4-10,
+  11-20, dA, bbh, jevbench, td, gsm8k; numeric: in d1-4, beyond d5-8, ood; pronto: in hops 1-4, beyond 5-8, wide; both
+  + jevbench, td). Selection, by the validation key only (never a test set), fixed in
+  notes/next_round/tree_forcing/lr_check.md before the sweep results: K&K valkk, numeric / pronto val, accuracy of the
+  end-of-training evaluation (the last trajectory point if the run has none), averaged over the --sweep-seeds (default
+  s12) run at every LR of the method, so seeds added later at the selected LR never re-select (no sweep seed at every
+  LR -> the seeds common to every LR, then each LR's own seeds, flagged); ties (1e-9) -> lower NLL of the same key,
+  then the LR nearest 1e-5. Numeric / pronto reuse the method's K&K-selected LR (same model) when it was run there,
+  unless their own val prefers another LR strongly: own best - K&K LR >= .03 on val with a paired item-bootstrap 95% CI
+  above 0 (sweep seeds). Best-vs-best: --best-arm (GFPS, c4 preferred) - --best-ref (A2, c12 preferred) at their
+  selected LRs on every test metric, tf.contrast (paired item bootstrap, pooled over common seeds; bbh as the macro
+  over tasks: item values weighted N / (tasks x task size), so the item mean is the macro mean), next to the same
+  contrast at 1e-5 for both on the same seeds (only the LR differs). Forgetting curve (only when a run's trajectory has
+  a general-ability EVALMID key: bbh500, bbh, jevbench, td, gsm8k): accuracy at the first, 25/50/75% and last trajectory
+  points and the minimum, with epochs.
 
   CUDA_VISIBLE_DEVICES="" OMP_NUM_THREADS=2 python scripts/ladder_readout.py 'results/hpc/l4b/*' --out results/ladder_readout/l4b
 """
@@ -29,6 +50,7 @@ from __future__ import annotations
 import argparse
 import glob
 import json
+import math
 import re
 import sys
 from collections import defaultdict
@@ -44,15 +66,41 @@ from analyze_e2 import correct, diag_table, primary, read_preds, run_summary  # 
 ROOT = Path(__file__).resolve().parents[1]
 ARM_ORDER = ["A2", "G3", "GFPS", "TFL", "GTF", "TFLP", "MIX"]
 REFS = [("A2", "c12"), ("GFPS", "c4")]                  # comparator arm, preferred tag
-DOMAINS = {"kk": "K&K", "numgen": "Numeric chains"}
-NODE_SOURCE = {"kk": "knights_knaves", "numgen": "numgen"}
-ENDPOINTS = {"kk": [("kk11-20", "kk 11-20"), ("dA", "dA")], "numgen": [("ng_beyond", "beyond d5-d8")]}
+DOMAINS = {"kk": "K&K", "numgen": "Numeric chains", "pronto": "PrOntoQA-OOD"}
+NODE_SOURCE = {"kk": "knights_knaves", "numgen": "numgen", "pronto": "pronto"}
+ENDPOINTS = {"kk": [("kk11-20", "kk 11-20"), ("dA", "dA")], "numgen": [("ng_beyond", "beyond d5-d8")],
+             "pronto": [("pq_beyond", "beyond hops 5-8"), ("pq_wide", "wide")]}
 KK_BINS = ["4-10", "11-16", "17-20", "11-20"]
 NODE_BINS = tf.LOCAL_BINS                               # 0 / 1-3 / 4-7 / 8-12 / >=13
 NG_DEPTH = re.compile(r"^ng_?d?(\d+)$")
 NG_OOD = re.compile(r"^ng_?ood$")
+# chain domains: depth sets <p>_d1..d8 (trained on d1-d4) and one extra set (numeric: ood; pronto: wide)
+CHAIN = {"numgen": {"p": "ng", "extra": "ood", "depth": NG_DEPTH, "extra_re": NG_OOD,
+                    "title": "### Per run (accuracy per chain depth; trained on d1-d4; in = mean d1-d4, beyond = mean "
+                             "d5-d8, drop = beyond - in; train h from history, t = last trajectory point)",
+                    "in": "in d1-4", "beyond": "beyond d5-8"},
+         "pronto": {"p": "pq", "extra": "wide", "depth": re.compile(r"^pq_?d?(\d+)$"),
+                    "extra_re": re.compile(r"^pq_?wide$"),
+                    "title": "### Per run (accuracy per proof depth = hops; trained on hops 1-4; in = mean d1-d4, "
+                             "beyond = mean d5-d8, drop = beyond - in; wide = pronto_wide, hops 1-4 with two extra "
+                             "chain pairs; train h from history, t = last trajectory point)",
+                    "in": "in hops 1-4", "beyond": "beyond hops 5-8"}}
 TAIL = re.compile(r"^(?P<head>.+)-(?P<data>student_[A-Za-z0-9_]+)-s(?P<seed>\d+)$")
 TAG_TOKEN = re.compile(r"^[a-z][a-z0-9.]*$")
+# ---- LR sweep (see the docstring and notes/next_round/tree_forcing/lr_check.md; fixed before the sweep results)
+LR_SUFFIX = re.compile(r"lr(\d+)(?=-|$)")               # c12lr3 -> c12 at 3e-6
+LR_DEFAULT = 1e-5                                       # hpc/train_arm.sbatch LR default (no suffix)
+SEL_KEY = {"kk": "valkk", "numgen": "val", "pronto": "val"}
+LR_TESTS = {"kk": [("kk4-10", "kk 4-10"), ("kk11-20", "kk 11-20"), ("dA", "dA"), ("bbh", "bbh"),
+                   ("jevbench", "jevbench"), ("td", "td"), ("gsm8k", "gsm8k")],
+            "numgen": [("ng_in", "in d1-4"), ("ng_beyond", "beyond d5-8"), ("ng_ood", "ood"),
+                       ("jevbench", "jevbench"), ("td", "td")],
+            "pronto": [("pq_in", "in hops 1-4"), ("pq_beyond", "beyond hops 5-8"), ("pq_wide", "wide"),
+                       ("jevbench", "jevbench"), ("td", "td")]}
+STRONG = 0.03                                           # numeric / pronto overrule the K&K LR: >= .03 and CI > 0
+TIE = 1e-9
+FORGET = ("bbh500", "bbh", "jevbench", "td", "gsm8k")  # general-ability EVALMID keys (forgetting curve)
+SWEEP_SEEDS = (12,)                                     # the one-seed LR sweep (--sweep-seeds)
 
 
 # ---------------------------------------------------------------- names, dirs
@@ -92,7 +140,21 @@ def expand(patterns: list[str]) -> list[Path]:
 
 
 def domain_of(data: str) -> str:
-    return "numgen" if "numgen" in data else "kk"
+    return "numgen" if "numgen" in data else "pronto" if "pronto" in data else "kk"
+
+
+def flr(lr: float | None) -> str:
+    """3e-06 -> 3e-6."""
+    return "?" if lr is None else re.sub(r"e([+-])0*(\d)", r"e\1\2", f"{lr:g}")
+
+
+def split_lr(tag: str) -> tuple[str, float | None]:
+    """Tag -> (tag without the LR suffix, LR from the suffix: lrN = N e-6; None without one)."""
+    m = LR_SUFFIX.search(tag)
+    if not m:
+        return tag, None
+    base = (tag[:m.start()] + tag[m.end():]).replace("--", "-").strip("-")
+    return base, float(f"{int(m[1]) * 1e-6:.6g}")
 
 
 # ---------------------------------------------------------------- per run
@@ -122,17 +184,56 @@ def hours(metrics: dict, traj: list) -> tuple[float | None, str]:
     return (max(el) / 3600, "trajectory") if el else (None, "")
 
 
-def ng_sets(d: Path, ev: dict) -> dict:
-    """{depth (int) or "ood": eval name} from metrics eval keys and preds files."""
-    names = set(ev) | {f.name[len("preds_"):-len(".jsonl")] for f in d.glob("preds_ng*.jsonl")}
+def ng_sets(d: Path, ev: dict, spec: dict = CHAIN["numgen"]) -> dict:
+    """{depth (int) or the extra set ("ood" / "wide"): eval name} from metrics eval keys and preds files."""
+    names = set(ev) | {f.name[len("preds_"):-len(".jsonl")] for f in d.glob(f"preds_{spec['p']}*.jsonl")}
     out = {}
     for n in sorted(names):
-        m = NG_DEPTH.match(n)
+        m = spec["depth"].match(n)
         if m:
             out.setdefault(int(m[1]), n)
-        elif NG_OOD.match(n):
-            out.setdefault("ood", n)
+        elif spec["extra_re"].match(n):
+            out.setdefault(spec["extra"], n)
     return out
+
+
+def final_metric(d: Path, ev: dict, traj: list, name: str) -> tuple[float | None, float | None]:
+    """(acc, nll) of eval set `name`: preds_<name>.jsonl accuracy (set_acc) with the end-of-training metrics NLL, else
+    the last trajectory point that has it."""
+    acc, x = set_acc(d, ev, name), ev.get(name)
+    if acc is not None:
+        return acc, x.get("nll") if isinstance(x, dict) else None
+    pts = [p[name] for p in traj or [] if isinstance(p.get(name), dict)]
+    return (pts[-1].get("acc"), pts[-1].get("nll")) if pts else (None, None)
+
+
+def item_units(d: Path, name: str, macro: bool = False) -> dict[str, float]:
+    """item_id -> correct from preds_<name>.jsonl. macro (bbh): weighted N / (tasks x task size), so the plain item
+    mean equals the macro mean over tasks (tasks as set_acc)."""
+    f = d / f"preds_{name}.jsonl"
+    if not f.exists():
+        return {}
+    ps = [p for p in read_preds(f) if p.get("gold_label") in p["labels"]]
+    u = {p["item_id"]: float(correct(p)) for p in ps}
+    if macro and ps:
+        task = {p["item_id"]: (p.get("group") or "").split("/")[0] + "/" + (p.get("group") or "").split("/")[-1]
+                for p in ps}
+        size = defaultdict(int)
+        for t in task.values():
+            size[t] += 1
+        u = {i: c * len(u) / (len(size) * size[task[i]]) for i, c in u.items()}
+    return u
+
+
+def run_lr(metrics: dict, tag: str) -> tuple[float | None, str, str | None]:
+    """(LR, source, warning): metrics.json args.lr, else the tag suffix, else the default."""
+    _, from_tag = split_lr(tag)
+    a = (metrics.get("args") or {}).get("lr")
+    if a is not None:
+        a = float(f"{float(a):.6g}")
+        bad = from_tag is not None and abs(a - from_tag) > 1e-3 * a
+        return a, "args", (f"tag LR {flr(from_tag)} but args.lr {flr(a)}" if bad else None)
+    return (from_tag, "tag", None) if from_tag is not None else (LR_DEFAULT, "default", None)
 
 
 def node_preds(d: Path, source: str) -> list[tuple[str, str, int]]:
@@ -159,7 +260,17 @@ def load_run(d: Path, info: dict) -> dict:
     r.update(local_key=lkey, local=loc, local_n=ln)
     r["_nodes"] = node_preds(d, NODE_SOURCE[dom])
     units: dict[str, dict] = {}
+    # LR sweep fields: LR, the validation key at the end of training, td (all domains), gsm8k (K&K), item units
+    r["lr"], r["lr_src"], r["_lr_warn"] = run_lr(metrics, info["tag"])
+    sel = SEL_KEY[dom]
+    r["sel_acc"], r["sel_nll"] = final_metric(d, ev, traj, sel)
+    r["_traj"] = traj
+    r["td"] = set_acc(d, ev, "td")
+    for k in ("val", "jevbench", "td") + (("valkk", "gsm8k") if dom == "kk" else ()):
+        units[k] = item_units(d, k)
     if dom == "kk":
+        r["valkk"], r["gsm8k"] = set_acc(d, ev, "valkk"), set_acc(d, ev, "gsm8k")
+        units["bbh"] = item_units(d, "bbh", macro=True)
         for k in ("bbh", "folio"):
             r[k] = set_acc(d, ev, k)
         r["dA"] = None
@@ -180,28 +291,32 @@ def load_run(d: Path, info: dict) -> dict:
         r["people_acc"] = {n: sum(v) / len(v) for n, v in sorted(by_n.items())}
         r["people_n"] = {n: len(v) for n, v in sorted(by_n.items())}
         r.update(tf.curve(metrics))
-    else:
-        sets = ng_sets(d, ev)
-        r["ng_names"] = {str(k): v for k, v in sets.items()}
-        r["ng"], per_item = {}, {}
+    else:                                             # chain domains (numeric: ng_*, pronto: pq_*)
+        spec = CHAIN[dom]
+        p, x = spec["p"], spec["extra"]
+        sets = ng_sets(d, ev, spec)
+        r[f"{p}_names"] = {str(k): v for k, v in sets.items()}
+        r[p], per_item = {}, {}
         for k, name in sets.items():
             f = d / f"preds_{name}.jsonl"
             if f.exists():
-                ps = [p for p in read_preds(f) if p.get("gold_label") in p["labels"]]
-                per_item[k] = {f"{name}/{p['item_id']}": float(correct(p)) for p in ps}
-                r["ng"][str(k)] = sum(per_item[k].values()) / len(ps) if ps else None
+                ps = [q for q in read_preds(f) if q.get("gold_label") in q["labels"]]
+                per_item[k] = {f"{name}/{q['item_id']}": float(correct(q)) for q in ps}
+                r[p][str(k)] = sum(per_item[k].values()) / len(ps) if ps else None
             else:
-                r["ng"][str(k)] = set_acc(d, ev, name)
-        r["ng_ood"] = r["ng"].pop("ood", None)
-        for lab, ks in (("ng_in", (1, 2, 3, 4)), ("ng_beyond", (5, 6, 7, 8))):
-            xs = [r["ng"][str(k)] for k in ks if r["ng"].get(str(k)) is not None]
+                r[p][str(k)] = set_acc(d, ev, name)
+        r[f"{p}_{x}"] = r[p].pop(x, None)
+        units[f"{p}_{x}"] = per_item.get(x, {})
+        for lab, ks in ((f"{p}_in", (1, 2, 3, 4)), (f"{p}_beyond", (5, 6, 7, 8))):
+            xs = [r[p][str(k)] for k in ks if r[p].get(str(k)) is not None]
             r[lab] = sum(xs) / len(xs) if xs else None
             r[lab + "_sets"] = len(xs)
             u = {}
             for k in ks:
                 u.update(per_item.get(k, {}))
             units[lab] = u
-        r["ng_drop"] = r["ng_beyond"] - r["ng_in"] if r["ng_in"] is not None and r["ng_beyond"] is not None else None
+        r[f"{p}_drop"] = (r[f"{p}_beyond"] - r[f"{p}_in"] if r[f"{p}_in"] is not None and r[f"{p}_beyond"] is not None
+                          else None)
     r["_units"] = units
     return r
 
@@ -310,6 +425,119 @@ def contrasts(groups: dict, dom: str, boot: int, boot_seed: int) -> list[dict]:
     return out
 
 
+# ---------------------------------------------------------------- LR sweep
+def lr_methods(groups: dict) -> tuple[dict, list[str]]:
+    """-> ({method: {arm, base, lrs: {lr: label}}}, warnings). method = the label with the LR suffix taken off its tag
+    (the /data suffix of a mixed section kept)."""
+    out, warn = {}, []
+    for lab, g in groups.items():
+        r = next(iter(g.values()))
+        core = r["arm"] + (f"-{r['tag']}" if r["tag"] else "")
+        base, _ = split_lr(r["tag"])
+        m = r["arm"] + (f"-{base}" if base else "") + lab[len(core):]
+        warn += [f"{lab} s{s}: {x['_lr_warn']}" for s, x in g.items() if x.get("_lr_warn")]
+        lrs = sorted({x["lr"] for x in g.values()})
+        if len(lrs) > 1:
+            warn.append(f"{lab}: seeds at different LRs ({', '.join(map(flr, lrs))}); listed at {flr(r['lr'])}")
+        meta = out.setdefault(m, {"arm": r["arm"], "base": base, "lrs": {}})
+        if r["lr"] in meta["lrs"]:
+            warn.append(f"{m} at {flr(r['lr'])}: {lab} not used ({meta['lrs'][r['lr']]} is)")
+            continue
+        meta["lrs"][r["lr"]] = lab
+    for meta in out.values():
+        meta["lrs"] = dict(sorted(meta["lrs"].items()))
+    return {m: out[m] for m in sorted(out, key=lambda m: arm_key((out[m]["arm"], m)))}, warn
+
+
+def select_lr(groups: dict, methods: dict, dom: str, kk_choice: dict | None, boot: int, boot_seed: int,
+              sweep: tuple = SWEEP_SEEDS) -> dict:
+    """Per method: the LR chosen on the validation key (module docstring; lr_check.md). Selection seeds = the sweep
+    seeds run at every LR of the method (seeds added later at the chosen LR never re-select); none -> the seeds common
+    to every LR, then each LR's own seeds (flagged)."""
+    key = SEL_KEY[dom]
+    out = {}
+    for m, meta in methods.items():
+        have = {lr: {s for s, r in groups[lab].items() if r.get("sel_acc") is not None}
+                for lr, lab in meta["lrs"].items()}
+        cand = {lr: meta["lrs"][lr] for lr, ss in have.items() if ss}
+        row = {"key": key, "chosen": None, "notes": []}
+        out[m] = row
+        if not cand:
+            row["notes"].append(f"no run has {key}")
+            continue
+        every = set.intersection(*[have[lr] for lr in cand])
+        common = sorted(every & set(sweep)) or sorted(every)
+        seeds = {lr: common or sorted(have[lr]) for lr in cand}
+        score = {lr: float(np.mean([groups[cand[lr]][s]["sel_acc"] for s in seeds[lr]])) for lr in cand}
+        nlls = {lr: [groups[cand[lr]][s]["sel_nll"] for s in seeds[lr]] for lr in cand}
+        nll = {lr: float(np.mean(v)) if all(x is not None for x in v) else math.inf for lr, v in nlls.items()}
+        top = max(score.values())
+        tied = [lr for lr in cand if score[lr] >= top - TIE]
+        own = min(tied, key=lambda lr: (nll[lr], abs(math.log10(lr / LR_DEFAULT)), lr))
+        row.update(sweep_seeds=common, seeds={lr: seeds[lr] for lr in cand}, score=score, nll=nll, own=own,
+                   chosen=own)
+        if len(cand) == 1:
+            row["notes"].append("one LR only")
+        elif not common:
+            row["notes"].append("no seed at every LR: each LR's own seeds")
+        elif not every & set(sweep):
+            row["notes"].append(f"no sweep seed ({'/'.join(f's{x}' for x in sweep)}) at every LR: common seeds")
+        if len(tied) > 1:
+            row["notes"].append(f"{key} tie: lower NLL, then nearest 1e-5")
+        if dom == "kk":
+            continue
+        k_lr = (kk_choice or {}).get(m)
+        row["kk_lr"] = k_lr
+        if k_lr is None:
+            row["notes"].append("no K&K selection for this method: own val")
+        elif k_lr not in cand:
+            row["notes"].append(f"K&K LR {flr(k_lr)} not run here: own val")
+        elif k_lr == own:
+            row["notes"].append("own val agrees with K&K")
+        else:
+            c = tf.contrast(groups, cand[own], cand[k_lr], key, boot, boot_seed,
+                            seeds_allowed=set(common) if common else None)
+            strong = "mean" in c and c["mean"] >= STRONG - TIE and c["ci"][0] > 0
+            row["overrule"] = {k: v for k, v in c.items() if k != "seed_label_only"}
+            row["chosen"] = own if strong else k_lr
+            row["notes"].append(f"own val prefers {flr(own)} "
+                                + ("strongly: own val" if strong else "not strongly: K&K LR"))
+    return out
+
+
+def pick_method(methods: dict, groups: dict, arm: str, tag: str) -> str | None:
+    c = [m for m, meta in methods.items() if meta["arm"] == arm]
+    if not c:
+        return None
+    return max(c, key=lambda m: (methods[m]["base"] == tag,
+                                 sum(len(groups[lab]) for lab in methods[m]["lrs"].values()), m))
+
+
+def best_vs_best(groups: dict, methods: dict, sel: dict, dom: str, arm: tuple, ref: tuple, boot: int,
+                 boot_seed: int) -> dict:
+    """arm - ref at each one's selected LR (and at 1e-5 for both, on the same seeds) on every test metric of the
+    domain."""
+    a, b = pick_method(methods, groups, *arm), pick_method(methods, groups, *ref)
+    res = {"arm": a or arm[0], "ref": b or ref[0]}
+    if a is None or b is None or sel[a]["chosen"] is None or sel[b]["chosen"] is None:
+        res["missing"] = [x for x, y in ((arm[0], a), (ref[0], b)) if y is None or sel[y]["chosen"] is None]
+        return res
+    la, lb = methods[a]["lrs"][sel[a]["chosen"]], methods[b]["lrs"][sel[b]["chosen"]]
+    da, db = methods[a]["lrs"].get(LR_DEFAULT), methods[b]["lrs"].get(LR_DEFAULT)
+    res.update(arm_lr=sel[a]["chosen"], ref_lr=sel[b]["chosen"], arm_label=la, ref_label=lb, endpoints={})
+    for ep, _ in LR_TESTS[dom]:
+        c = {k: v for k, v in tf.contrast(groups, la, lb, ep, boot, boot_seed).items() if k != "seed_label_only"}
+        ss = c["seeds"] if c.get("paired") else None
+        means = {lab: _mean([r for s, r in groups[lab].items() if ss is None or s in ss], ep) for lab in (la, lb)}
+        e = {"best": c, "means": means}
+        if da and db and (da, db) != (la, lb):          # the same seeds at 1e-5 for both: only the LR differs
+            e["default"] = {k: v for k, v in tf.contrast(groups, da, db, ep, boot, boot_seed,
+                                                         seeds_allowed=set(ss) if ss else None).items()
+                            if k != "seed_label_only"}
+        res["endpoints"][ep] = e
+    return res
+
+
 # ---------------------------------------------------------------- output
 f3, _table = tf.f3, tf._table
 
@@ -388,20 +616,21 @@ def section_md(sec, groups, cons, cover) -> list[str]:
                                                  for n in ns]))
             L.append("items per count: " + ", ".join(f"d{n} {allr[0]['people_n'].get(n, 0)}" for n in ns))
     else:
-        ds = sorted({int(k) for r in allr for k in r["ng"]})
-        L.append("### Per run (accuracy per chain depth; trained on d1-d4; in = mean d1-d4, beyond = mean d5-d8, "
-                 "drop = beyond - in; train h from history, t = last trajectory point)")
-        L += _table(["arm", "seed"] + [f"d{k}" for k in ds] + ["ood", "in d1-4", "beyond d5-8", "drop", "val",
+        spec = CHAIN[dom]
+        p, x = spec["p"], spec["extra"]
+        ds = sorted({int(k) for r in allr for k in r[p]})
+        L.append(spec["title"])
+        L += _table(["arm", "seed"] + [f"d{k}" for k in ds] + [x, spec["in"], spec["beyond"], "drop", "val",
                                                                "jevbench", "train h"],
-                    _rows(groups, lambda r: [f3(r["ng"].get(str(k))) for k in ds] + [
-                        f3(r["ng_ood"]), f3(r["ng_in"]), f3(r["ng_beyond"]), f3(r["ng_drop"], True), f3(r["val"]),
-                        f3(r["jevbench"]), fh(r)],
-                        lambda v: [f3(_mean([r["ng"] for r in v], str(k))) for k in ds] + [
-                            f3(_mean(v, "ng_ood")), f3(_mean(v, "ng_in")), f3(_mean(v, "ng_beyond")),
-                            f3(_mean(v, "ng_drop"), True), f3(_mean(v, "val")), f3(_mean(v, "jevbench")),
+                    _rows(groups, lambda r: [f3(r[p].get(str(k))) for k in ds] + [
+                        f3(r[f"{p}_{x}"]), f3(r[f"{p}_in"]), f3(r[f"{p}_beyond"]), f3(r[f"{p}_drop"], True),
+                        f3(r["val"]), f3(r["jevbench"]), fh(r)],
+                        lambda v: [f3(_mean([r[p] for r in v], str(k))) for k in ds] + [
+                            f3(_mean(v, f"{p}_{x}")), f3(_mean(v, f"{p}_in")), f3(_mean(v, f"{p}_beyond")),
+                            f3(_mean(v, f"{p}_drop"), True), f3(_mean(v, "val")), f3(_mean(v, "jevbench")),
                             fhm(v)]))
-        short = [r["label"] + f" s{r['seed']}" for r in allr if r["ng_in"] is not None and
-                 (r["ng_in_sets"] < 4 or r["ng_beyond_sets"] < 4)]
+        short = [r["label"] + f" s{r['seed']}" for r in allr if r[f"{p}_in"] is not None and
+                 (r[f"{p}_in_sets"] < 4 or r[f"{p}_beyond_sets"] < 4)]
         if short:
             L.append("note: fewer than 4 depth sets in a mean for " + ", ".join(short))
     L += ["", f"### Problem-view node accuracy by node depth (preds_subq, kind cot, source {NODE_SOURCE[dom]})"]
@@ -443,6 +672,102 @@ def section_md(sec, groups, cons, cover) -> list[str]:
     return L + [""]
 
 
+def forget_md(groups, methods) -> list[str]:
+    """Mid-training general ability per run (trajectory keys FORGET); [] when no run has one."""
+    rows = []
+    for m, meta in methods.items():
+        for lr, lab in meta["lrs"].items():
+            for s, r in groups[lab].items():
+                for k in FORGET:
+                    pts = [(p.get("epoch"), p[k]["acc"]) for p in r["_traj"] if isinstance(p.get(k), dict)]
+                    if not pts:
+                        continue
+                    at = lambda e, a: f"{a:.3f} @{e:.2f}" if isinstance(e, (int, float)) else f"{a:.3f}"  # noqa: E731
+                    picks = [pts[int(f * (len(pts) - 1) + 0.5)] for f in (0, 0.25, 0.5, 0.75, 1)]
+                    lo = min(pts, key=lambda x: x[1])
+                    rows.append([m, flr(lr), f"s{s}", k] + [at(*x) for x in picks] + [at(*lo), len(pts)])
+    if not rows:
+        return []
+    return (["### Forgetting curve (general-ability EVALMID keys in trajectory.json; accuracy @epoch; mid sets are "
+             "cut to 600 items by stride)", ""]
+            + _table(["method", "LR", "seed", "set", "first", "25%", "50%", "75%", "last", "min", "points"], rows)
+            + [""])
+
+
+def lr_md(dom, groups, methods, sel, bvb, warn, sweep=SWEEP_SEEDS) -> list[str]:
+    """The LR-sweep block appended to a domain section (### headings only, so every section above stays a prefix)."""
+    key, tests = SEL_KEY[dom], LR_TESTS[dom]
+    L = ["### LR sweep: full curve (method x LR)", "",
+         "Method = arm + tag without the LR suffix; LR from metrics.json args.lr (tag suffix lrN = N e-6 only as a "
+         f"fallback). Per seed and mean over the seeds at that LR; * = selected LR; {key} = selection key (end of "
+         "training); train h as above."]
+    L += [f"LR WARNING: {w}" for w in warn] + [""]
+    rows = []
+    for m, meta in methods.items():
+        for lr, lab in meta["lrs"].items():
+            g = groups[lab]
+            lrc = flr(lr) + (" *" if sel[m]["chosen"] == lr else "")
+            rows += [[m, lrc, lab, f"s{s}", f3(r["sel_acc"])] + [f3(r.get(ep)) for ep, _ in tests] + [fh(r)]
+                     for s, r in g.items()]
+            if len(g) > 1:
+                v = list(g.values())
+                rows.append([f"**{m}**", lrc, lab, f"mean n={len(g)}", f3(_mean(v, "sel_acc"))]
+                            + [f3(_mean(v, ep)) for ep, _ in tests] + [fhm(v)])
+    L += _table(["method", "LR", "run label", "seed", key] + [h for _, h in tests] + ["train h"], rows)
+    rule = (f"Rule (fixed before the sweep, notes/next_round/tree_forcing/lr_check.md): highest end-of-training {key} "
+            f"accuracy on the sweep seed(s) {'/'.join(f's{x}' for x in sweep)} run at every LR of the method (seeds "
+            "added at the selected LR never re-select); ties -> lower NLL, then the LR nearest 1e-5. Test sets are "
+            "never used.")
+    if dom != "kk":
+        rule += (f" {DOMAINS[dom]} reuses the method's K&K-selected LR unless its own val prefers another LR by >= "
+                 f"{STRONG:.2f} with a paired item-bootstrap 95% CI above 0.")
+    L += ["", "### LR selection (validation only)", "", rule, ""]
+    head = ["method", "LRs run (seeds)", "sweep seeds", f"{key} per LR (sweep seeds)", "own best"]
+    if dom != "kk":
+        head += ["K&K-selected", f"own best - K&K LR on {key} [95% CI]"]
+    rows = []
+    for m, meta in methods.items():
+        s = sel[m]
+        runs_c = ", ".join(f"{flr(lr)} ({'/'.join(f's{x}' for x in groups[lab])})" for lr, lab in meta["lrs"].items())
+        if "own" not in s:
+            rows.append([m, runs_c, "-", "-", "-"] + (["-", "-"] if dom != "kk" else []) + ["-", "; ".join(s["notes"])])
+            continue
+        sc = ", ".join(f"{flr(lr)} {v:.3f}"
+                       + ("" if s["sweep_seeds"] else f" ({'/'.join(f's{x}' for x in s['seeds'][lr])})")
+                       for lr, v in s["score"].items())
+        row = [m, runs_c, "/".join(f"s{x}" for x in s["sweep_seeds"]) or "none", sc, flr(s["own"])]
+        if dom != "kk":
+            row += ["-" if s.get("kk_lr") is None else flr(s["kk_lr"]), fcon(s.get("overrule"))]
+        rows.append(row + [flr(s["chosen"]), "; ".join(s["notes"]) or "-"])
+    L += _table(head + ["selected", "note"], rows)
+    L += [""] + forget_md(groups, methods)
+    if "missing" in bvb:
+        L += [f"### Best-vs-best: no {' / '.join(bvb['missing'])} run with {key}", ""]
+        return L
+    a, b = bvb["arm"], bvb["ref"]
+    ha, hb = f"{a} @{flr(bvb['arm_lr'])}", f"{b} @{flr(bvb['ref_lr'])}"
+    L += [f"### Best-vs-best: {ha} - {hb} (each at its selected LR; paired item-level bootstrap 95% CI, pooled over "
+          "common seeds; means over the contrast's seeds; bbh = macro over tasks)", ""]
+    rows = []
+    for ep, h in tests:
+        e = bvb["endpoints"][ep]
+        c = e["best"]
+        dflt = "-" if "default" not in e else fcon(e["default"])
+        rows.append([h, f3(e["means"][bvb["ref_label"]]), f3(e["means"][bvb["arm_label"]]), fcon(c), fseeds(c), dflt])
+    L += _table(["endpoint", hb, ha, f"{a.split('-')[0]} - {b.split('-')[0]} [95% CI] n", "seeds",
+                 "same seeds at 1e-5 / 1e-5"], rows)
+    return L + [""]
+
+
+def _lr_json(x):
+    """LR floats (as values and dict keys) -> '3e-6' strings for the JSON."""
+    if isinstance(x, dict):
+        return {(flr(k) if isinstance(k, float) else k): _lr_json(v) for k, v in x.items()}
+    if isinstance(x, list):
+        return [_lr_json(v) for v in x]
+    return None if isinstance(x, float) and math.isinf(x) else x
+
+
 def main(argv=None) -> dict:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("runs", nargs="+", help="run dirs, globs (quote them) or parent dirs of run dirs")
@@ -450,7 +775,13 @@ def main(argv=None) -> dict:
     ap.add_argument("--boot", type=int, default=10000, help="pooled bootstrap draws")
     ap.add_argument("--boot-seed", type=int, default=2000, help="draws for each per-seed CI")
     ap.add_argument("--out", default="", help="also write <out>.md and <out>.json (a .md/.json suffix is dropped)")
+    ap.add_argument("--best-arm", default="GFPS:c4", help="best-vs-best arm, ARM[:preferred tag without LR suffix]")
+    ap.add_argument("--best-ref", default="A2:c12", help="best-vs-best reference, ARM[:preferred tag]")
+    ap.add_argument("--sweep-seeds", default=",".join(map(str, SWEEP_SEEDS)),
+                    help="seeds of the one-seed LR sweep: the LR is selected on these only (lr_check.md)")
     args = ap.parse_args(argv)
+    sweep = tuple(int(x) for x in args.sweep_seeds.split(",") if x)
+    best_arm, best_ref = tuple(args.best_arm.partition(":")[::2]), tuple(args.best_ref.partition(":")[::2])
     runs, skipped = [], []
     for d in expand(args.runs):
         if not d.is_dir():
@@ -485,6 +816,7 @@ def main(argv=None) -> dict:
         L.append(f"skipped {len(skipped)}: " + "; ".join(f"{Path(p).name} ({why})" for p, why in skipped))
     L += [f"WARNING: {w}" for w in warn] + [""]
     out = {"sections": {}, "skipped": skipped, "warnings": warn}
+    kk_choice = {}                                    # model (or None) -> {method: K&K-selected LR}
     for dom in DOMAINS:
         secs = [s for s in sections if s[0] == dom]
         if not secs:
@@ -502,10 +834,20 @@ def main(argv=None) -> dict:
                      if nn else "no nodes")
             cons = contrasts(groups, dom, args.boot, args.boot_seed)
             L += section_md(sec, groups, cons, cover)
+            methods, lwarn = lr_methods(groups)
+            sel = select_lr(groups, methods, dom, kk_choice.get(sec[1]), args.boot, args.boot_seed, sweep)
+            if dom == "kk":
+                kk_choice[sec[1]] = {m: s["chosen"] for m, s in sel.items() if s["chosen"] is not None}
+            bvb = best_vs_best(groups, methods, sel, dom, best_arm, best_ref, args.boot, args.boot_seed)
+            L += lr_md(dom, groups, methods, sel, bvb, lwarn, sweep)
             out["sections"][f"{dom}" + (f"/{sec[1]}" if sec[1] else "")] = {
                 "runs": {lab: {s: {k: v for k, v in r.items() if not k.startswith("_")} for s, r in g.items()}
                          for lab, g in groups.items()},
-                "depth_join": cover, "contrasts": cons}
+                "depth_join": cover, "contrasts": cons,
+                "lr_sweep": {"methods": {m: dict(meta, lrs={flr(lr): lab for lr, lab in meta["lrs"].items()})
+                                         for m, meta in methods.items()},
+                             "selection": {m: _lr_json(s) for m, s in sel.items()}, "best_vs_best": _lr_json(bvb),
+                             "warnings": lwarn}}
     print("\n".join(L))
     if args.out:
         p = Path(re.sub(r"\.(md|json)$", "", args.out))

@@ -1,5 +1,7 @@
+import importlib.util
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -19,6 +21,30 @@ import depth_readout as dr  # noqa: E402
 
 M = "Qwen3.5-4B"
 HAVE_SOLVER = dr.SOLVER.exists()
+BASE = {"depth_readout": "9f9d99b", "ladder_readout": "73b3097"}   # last commits before the pronto domain
+
+
+def load_base(tmp: Path):
+    """depth_readout at BASE bound to ladder_readout at BASE (None if git cannot read them)."""
+    mods = {}
+    saved = sys.modules.get("ladder_readout")
+    try:
+        for name in ("ladder_readout", "depth_readout"):
+            src = subprocess.run(["git", "-C", str(ROOT), "show", f"{BASE[name]}:scripts/{name}.py"],
+                                 capture_output=True, text=True)
+            if src.returncode:
+                return None
+            f = tmp / f"{name}_base.py"
+            f.write_text(src.stdout)
+            spec = importlib.util.spec_from_file_location(f"{name}_base", f)
+            mods[name] = importlib.util.module_from_spec(spec)
+            sys.modules["ladder_readout"] = mods["ladder_readout"]     # the base depth_readout imports it by name
+            spec.loader.exec_module(mods[name])
+            mods[name].ROOT = ROOT
+    finally:
+        if saved is not None:
+            sys.modules["ladder_readout"] = saved
+    return mods["depth_readout"]
 
 
 def pred(item_id, group, ok, n=5):
@@ -137,6 +163,86 @@ class EndToEnd(unittest.TestCase):
             self.assertEqual(sh["kstar"]["iso_all"], 2)
             self.assertIn("size = operations = nominal depth (baseline)", sec["interaction"])
             self.assertEqual(sec["complexity_summary"]["per_depth"][3]["size_eq_depth"], 1.0)
+
+    @staticmethod
+    def numgen_fixture(tmp: Path) -> tuple[Path, Path]:
+        ev = tmp / "eval"
+        n = 40
+        for d in range(1, 9):
+            write(ev / f"numgen_d{d}.jsonl", [{"item_id": f"numgen-d{d}-{j:05d}", "depth": d, "fanin": j % 2,
+                                               "program": chain_program(d, j % 2 == 1)} for j in range(n)])
+        runs = tmp / "runs"
+        for arm, lab in (("ref", "A2-c12"), ("arm", "GFPS-c4"), ("ref", "A2-c12lr3")):
+            for s in ((12, 13) if lab != "A2-c12lr3" else (12,)):
+                d0 = runs / f"{lab}-{M}-student_numgen_tf-s{s}"
+                d0.mkdir(parents=True)
+                (d0 / "metrics.json").write_text(json.dumps({"args": {"model": f"/m/{M}"}, "eval": {}}))
+                for d in range(1, 9):
+                    write(d0 / f"preds_ng_d{d}.jsonl",
+                          [pred(f"numgen-d{d}-{j:05d}", f"numgen/d{d}", p_ok(arm, d, j, n)) for j in range(n)])
+        return ev, runs
+
+    def test_pronto_shift_and_models(self):
+        """PrOntoQA-OOD: x = hops, trained <= 4; the arm's curve is the ref's shifted two hops right (accuracy from
+        1.0 down to .5 = chance): shift 2 at .80 / .75 / .70, A2-equivalent gain 2, k* 2; pronto_wide left out."""
+        def ok(arm, d, j, n):
+            acc = {"ref": lambda x: max(0.5, 1.05 - 0.075 * x), "arm": lambda x: max(0.5, 1.05 - 0.075 * (x - 2))}[arm]
+            return j < round(min(1.0, acc(d)) * n)
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            ev = tmp / "eval"
+            n = 80
+            for d in range(1, 9):
+                write(ev / f"pronto_d{d}.jsonl", [{"item_id": f"pronto-d{d}-{j:05d}", "hops": d, "width": 0,
+                                                   "n_sentences": 6 * d + j % 7, "rule_neg": j % 2 == 0,
+                                                   "query_neg": (j // 2) % 2 == 0} for j in range(n)])
+            write(ev / "pronto_wide.jsonl", [{"item_id": "pronto-wide-d1-00000", "hops": 1, "width": 2,
+                                              "n_sentences": 30, "rule_neg": False, "query_neg": False}])
+            runs = tmp / "runs"
+            for arm, lab in (("ref", "A2-c12"), ("arm", "GFPS-c4"), ("arm", "TFL-c4")):
+                for s in (12, 13):
+                    d0 = runs / f"{lab}-{M}-student_pronto_tf-s{s}"
+                    d0.mkdir(parents=True)
+                    (d0 / "metrics.json").write_text(json.dumps({"args": {"model": f"/m/{M}"}, "eval": {}}))
+                    for d in range(1, 9):
+                        write(d0 / f"preds_pq_d{d}.jsonl",
+                              [pred(f"pronto-d{d}-{j:05d}", f"pronto/d{d}", ok(arm, d, j, n), 2) for j in range(n)])
+                    write(d0 / "preds_pq_wide.jsonl", [pred("pronto-wide-d1-00000", "pronto/wide", False, 2)])
+            with redirect_stdout(StringIO()) as buf:
+                out = dr.main([str(runs), "--eval-dir", str(ev), "--boot", "50", "--boot-reg", "20",
+                               "--boot-other", "10"])
+            md = buf.getvalue()
+            sec = out["sections"]["pronto"]
+            sh = sec["shift"]["pooled"]
+            for th in ("0.80", "0.75", "0.70"):
+                self.assertAlmostEqual(sh[th]["shift"], 2.0, places=6)
+            self.assertAlmostEqual(sh["equiv"][5]["gain"], 2.0, places=6)
+            self.assertEqual(sh["kstar"]["iso_all"], 2)
+            self.assertEqual(len(sec["complexity_items"]["pq"]), 8 * n)       # the wide item is not on the hop axis
+            self.assertEqual(sec["complexity_summary"]["per_hops"][3]["rule_neg"], 0.5)
+            self.assertIn("sentences + hops FE", sec["interaction"])
+            self.assertIn("TFL-c4", sec["other_arms"])
+            self.assertIn("## PrOntoQA-OOD", md)
+            self.assertIn("(x = hops; levels 1-8, trained <= 4;", md)
+
+    def test_numgen_output_unchanged(self):
+        """The base commit and this one give the same markdown and JSON on numeric-chain runs (LR-tagged arm
+        included)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            base = load_base(tmp)
+            if base is None:
+                self.skipTest("base commits not readable")
+            ev, runs = self.numgen_fixture(tmp)
+            res = {}
+            for nm, mod in (("base", base), ("new", dr)):
+                with redirect_stdout(StringIO()):
+                    res[nm] = mod.main([str(runs), "--eval-dir", str(ev), "--boot", "40", "--boot-reg", "15",
+                                        "--boot-other", "8", "--out", str(tmp / nm / "x")])
+            self.assertEqual((tmp / "base" / "x.md").read_text(), (tmp / "new" / "x.md").read_text())
+            jb, jn = (json.loads((tmp / nm / "x.json").read_text()) for nm in ("base", "new"))
+            jb.pop("args"), jn.pop("args")
+            self.assertEqual(jb, jn)
 
     @unittest.skipUnless(HAVE_SOLVER, "K&K solver (teacher_cache) absent")
     def test_kk_complexity_generated_items(self):
