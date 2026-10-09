@@ -3,7 +3,9 @@
 Every question (the final decision and each sub-question) is its own sequence that repeats the
 problem text; hybrid linear-attention models (Qwen3.5) ignore attention masks, so we do not pack
 questions with a block-causal mask. Sequences are right-padded; the readout is the next-token
-distribution at the last real token, restricted to the option-letter tokens.
+distribution at the last real token, restricted to the option-letter tokens. The opt-in --tree-pack (Pack) reads
+several node questions of one problem in one plain causal pass instead: later questions see the earlier questions,
+never an answer.
 """
 from __future__ import annotations
 
@@ -819,7 +821,112 @@ def text_parts(model):
     return body, head
 
 
+# ---- --tree-pack (opt-in; nothing below runs on the default path) ------------------------------------------------------
+PACK_CUE = "\n\nIntermediate question: "
+
+
+@dataclass
+class Pack:
+    """--tree-pack: several GFP-S node views of one problem read in ONE causal pass. parts[0] is the first view's own
+    text (statement block + its question, options and "Answer:" cue, exactly its unpacked text); each further part is
+    a further view's question chunk (PACK_CUE + question + options + "Answer:"), so a later question sees the block and
+    the earlier QUESTIONS, never an answer. nodes[k] is view k as built for GFP-S (labels, target, weight, kind,
+    item_id; its own text is not read): the readout of part k is the next-token distribution at the last token of
+    part k (its "Answer:" cue), restricted to the option letters, as for the unpacked view. Parts are tokenized one by
+    one and concatenated (pack_ids), so a cue's last token is the unpacked one (no merge with the next chunk)."""
+    parts: list[str]
+    nodes: list[Example]
+    item_id: str
+    kind: str = "pack"
+
+    @property
+    def text(self) -> str:
+        return "".join(self.parts)
+
+
+def readouts(batch: list) -> list:
+    """The examples whose letter logits label_logits returns, in order: each Pack's node views in its place (batch
+    itself when it has no Pack)."""
+    if not any(isinstance(e, Pack) for e in batch):
+        return batch
+    return [n for e in batch for n in (e.nodes if isinstance(e, Pack) else [e])]
+
+
+def pack_ids(tokenizer, p: Pack) -> tuple[list[int], list[int]]:
+    """A Pack's token ids (the special prefix, then each part tokenized on its own) and its readout positions (the last
+    token of every part)."""
+    ids, pos = list(special_prefix(tokenizer)), []
+    for part in p.parts:
+        ids += text_ids(tokenizer, part)
+        pos.append(len(ids) - 1)
+    return ids, pos
+
+
+def pack_rng(seed: int, epoch: int, item_id) -> random.Random:
+    """--tree-pack: the node order of one problem's packs in one epoch, from its own generator (str key through sha512,
+    as treeplan.scaffold_rng), never the training rng, so a packed run draws GFP-S's nodes, option orders and targets."""
+    return random.Random(f"pack|{seed}|{epoch}|{item_id}")
+
+
+def pack_views(group: list[Example], tokenizer, block: str, *, max_len: int, max_nodes: int, rng: random.Random,
+               stats: dict | None = None) -> list:
+    """--tree-pack: a GFP-S full-tree group ([final] + node views, each view = block + PACK_CUE + its question) with its
+    node views packed. The views are shuffled by rng (pack_rng) and filled greedily into Packs of at most max_nodes
+    views and max_len tokens (special prefix included); every Pack re-reads the block. A Pack of one view stays the
+    plain view, and so does a view whose own text exceeds max_len (collate cuts it as in GFP-S). Weights and targets
+    are the views' own, so the update loss sums the same per-node terms as GFP-S; the other examples (the final
+    question) come first, unchanged. stats counts pack_seqs, pack_nodes, pack_single and pack_long."""
+    head = block + PACK_CUE
+    nodes = [e for e in group if e.kind == "subq"]
+    out = [e for e in group if e.kind != "subq"]
+    for e in nodes:
+        if not e.text.startswith(head):
+            raise ValueError(f"{e.item_id}: --tree-pack needs GFP-S views (statement block + question)")
+    order = nodes[:]
+    rng.shuffle(order)
+    st = stats if stats is not None else {}
+    bump = lambda k, n=1: st.__setitem__(k, st.get(k, 0) + n)
+    for k in ("pack_seqs", "pack_nodes", "pack_single", "pack_long"):
+        bump(k, 0)
+    n_pre = len(special_prefix(tokenizer))
+    cur: list[Example] = []
+    size = 0
+
+    def flush():
+        if len(cur) == 1:
+            out.append(cur[0])
+            bump("pack_single")
+        elif cur:
+            out.append(Pack([cur[0].text] + [e.text[len(block):] for e in cur[1:]], list(cur), cur[0].item_id))
+            bump("pack_seqs")
+            bump("pack_nodes", len(cur))
+    for e in order:
+        if cur and len(cur) < max_nodes:
+            n = len(text_ids(tokenizer, e.text[len(block):]))
+            if size + n <= max_len:
+                cur.append(e)
+                size += n
+                continue
+        flush()
+        cur, size = [e], n_pre + len(text_ids(tokenizer, e.text))
+        if size > max_len:                  # too long even alone: the plain view, cut by collate as in GFP-S
+            out.append(e)
+            bump("pack_long")
+            cur, size = [], 0
+    flush()
+    return out
+
+
+def seq_len(tokenizer, e, max_len: int) -> int:
+    """Token length of an example as collate builds it (a Pack is never cut: pack_views keeps it within max_len)."""
+    if isinstance(e, Pack):
+        return len(pack_ids(tokenizer, e)[0])
+    return min(max_len, len(special_prefix(tokenizer)) + len(text_ids(tokenizer, e.text)))
+
+
 def collate(tokenizer, batch: list[Example], max_len: int, device) -> dict:
+    if any(isinstance(e, Pack) for e in batch):     # --tree-pack: rows/pos index every readout (readouts(batch))
+        return _collate_packs(tokenizer, batch, max_len, device)
     enc = [encode_tail(tokenizer, e.text, max_len) for e in batch]  # keep the question end (and a BOS if any)
     L = max(len(x) for x in enc)
     pad = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
@@ -830,6 +937,33 @@ def collate(tokenizer, batch: list[Example], max_len: int, device) -> dict:
         mask[i, :len(x)] = 1
     return {"input_ids": ids.to(device), "attention_mask": mask.to(device),
             "last": torch.tensor([len(x) - 1 for x in enc], device=device)}
+
+
+def _collate_packs(tokenizer, batch: list, max_len: int, device) -> dict:
+    """collate for a batch with Packs: the same right-padded rows (plain examples cut as encode_tail cuts them), plus
+    rows/pos, the row and position of every readout in readouts(batch) order."""
+    enc, rows, pos = [], [], []
+    for i, e in enumerate(batch):
+        if isinstance(e, Pack):
+            x, ps = pack_ids(tokenizer, e)
+            if len(x) > max_len:
+                raise ValueError(f"{e.item_id}: a pack of {len(x)} tokens exceeds max_len {max_len}")
+        else:
+            x = encode_tail(tokenizer, e.text, max_len)
+            ps = [len(x) - 1]
+        enc.append(x)
+        rows += [i] * len(ps)
+        pos += ps
+    L = max(len(x) for x in enc)
+    pad = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
+    ids = torch.full((len(enc), L), pad, dtype=torch.long)
+    mask = torch.zeros((len(enc), L), dtype=torch.long)
+    for i, x in enumerate(enc):
+        ids[i, :len(x)] = torch.tensor(x)
+        mask[i, :len(x)] = 1
+    return {"input_ids": ids.to(device), "attention_mask": mask.to(device),
+            "last": torch.tensor([len(x) - 1 for x in enc], device=device),
+            "rows": torch.tensor(rows, device=device), "pos": torch.tensor(pos, device=device)}
 
 
 def token_budget_batches(lengths: list[int], budget: int, max_seqs: int = 16) -> list[list[int]]:
@@ -847,21 +981,27 @@ def token_budget_batches(lengths: list[int], budget: int, max_seqs: int = 16) ->
 
 
 def micro_batches(tokenizer, batch: list[Example], max_len: int, micro_bs: int, token_budget: int = 0,
-                  max_seqs: int = 16) -> list[list[Example]]:
+                  max_seqs: int = 16, padded: list | None = None) -> list[list[Example]]:
     """One update's micro-batches: consecutive chunks of micro_bs, or with token_budget the length-sorted split of
-    token_budget_batches (lengths counted as collate truncates them)."""
+    token_budget_batches (lengths counted as collate truncates them; padded, if a list, receives each micro-batch's
+    padded token count)."""
     if not token_budget:
         return [batch[i:i + micro_bs] for i in range(0, len(batch), micro_bs)]
     n_pre = len(special_prefix(tokenizer))
-    lens = [min(max_len, n_pre + len(text_ids(tokenizer, e.text))) for e in batch]
-    return [[batch[j] for j in b] for b in token_budget_batches(lens, token_budget, max_seqs)]
+    lens = [seq_len(tokenizer, e, max_len) if isinstance(e, Pack) else
+            min(max_len, n_pre + len(text_ids(tokenizer, e.text))) for e in batch]
+    groups = token_budget_batches(lens, token_budget, max_seqs)
+    if padded is not None:
+        padded.extend(len(b) * max(lens[j] for j in b) for b in groups)
+    return [[batch[j] for j in b] for b in groups]
 
 
 def label_logits(model, tokenizer, batch: list[Example], max_len: int, label_ids_cache: dict,
                  hidden_out: list | None = None, layers: list[int] | None = None) -> list[torch.Tensor]:
     """Logits over each example's option letters at the readout position (optionally also appends each
     example's readout hidden state, detached, to hidden_out; with layers, a [len(layers) + 1, hidden] stack of the
-    readout position's states after those decoder layers plus the final readout state)."""
+    readout position's states after those decoder layers plus the final readout state). A Pack (--tree-pack) gives one
+    entry per node view, in readouts(batch) order."""
     if getattr(model, "cotd_readout", False):    # FSDP2 root (cotdistill.fsdp.Readout): this function runs in its forward
         return model.readout(tokenizer, batch, max_len, label_ids_cache, hidden_out, layers)
     body, head = text_parts(model)
@@ -871,11 +1011,13 @@ def label_logits(model, tokenizer, batch: list[Example], max_len: int, label_ids
     res = body(input_ids=b["input_ids"], attention_mask=b["attention_mask"], output_hidden_states=want_layers,
                use_cache=False)
     hidden = res.last_hidden_state
-    rows = torch.arange(hidden.shape[0], device=dev)
-    h = hidden[rows, b["last"]]
+    rows, last = torch.arange(hidden.shape[0], device=dev), b["last"]
+    if "pos" in b:                               # --tree-pack: every node view's "Answer:" cue of each pack
+        rows, last, batch = b["rows"], b["pos"], readouts(batch)
+    h = hidden[rows, last]
     if hidden_out is not None:
         if want_layers:
-            per = [res.hidden_states[l][rows, b["last"]] for l in layers] + [h]
+            per = [res.hidden_states[l][rows, last] for l in layers] + [h]
             hidden_out.extend(torch.stack(per, 1).detach().float().cpu())
         else:
             hidden_out.extend(h.detach().float().cpu())

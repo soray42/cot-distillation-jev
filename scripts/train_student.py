@@ -31,8 +31,8 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from cotdistill.student import (Example, brier_loss, build_examples, build_fact_examples, build_full_tree, build_group,  # noqa: E402
                                 build_stage_examples, evaluate, evaluate_local, evaluate_subq, kl_loss, label_logits,
-                                lm_loss, load_model, logit_softcap, micro_batches, scaffold_fade, special_prefix,
-                                subq_sets, use_chat_template)
+                                lm_loss, load_model, logit_softcap, micro_batches, pack_rng, pack_views, readouts,
+                                scaffold_fade, special_prefix, subq_sets, use_chat_template)
 
 
 # Arguments that do not change the training trajectory: a checkpoint may be resumed with different values.
@@ -43,7 +43,7 @@ RESUME_FREE = {"stop_after_h", "ckpt_every_min", "ckpt_single", "stop_at_step", 
 # Training arguments added after checkpoints may have been written: a checkpoint without the key had this value.
 NEW_ARG_DEFAULTS = {"tree_view": "problem", "tree_sources": "", "tree_node_weight": 0.0, "attn_impl": "", "fsdp": False,
                     "fsdp_optim": None, "tree_mix_p": 0.5, "tree_scaffold": 0.0, "tree_depth_weight": 0.0,
-                    "chat_template": False}
+                    "chat_template": False, "tree_pack": 0}
 
 LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj",
                 "in_proj_qkv", "in_proj_z", "in_proj_a", "in_proj_b", "out_proj"]
@@ -134,6 +134,13 @@ def main() -> None:
     ap.add_argument("--tree-depth-weight", type=float, default=0.0,
                     help="full-tree groups: split each problem's node-view weight (the same total) in proportion to "
                          "(1 + node depth)^G instead of evenly; 0 = off (GTF uses 1)")
+    ap.add_argument("--tree-pack", type=int, default=0,
+                    help="GFPSP (--tree-full plain --tree-view statements only): read up to N >= 2 node views of a "
+                         "problem in one sequence (statement block, then each node question with its options and "
+                         "'Answer:' cue, no answers), read out at every cue; nodes in a seeded order per seed, epoch and "
+                         "problem (not the training rng: same nodes, option orders, targets and weights as GFPS); a new "
+                         "pack (re-reading the block) when N or --max-len is reached; the final question stays its own "
+                         "sequence; 0 = off")
     ap.add_argument("--tree-sources", default="",
                     help="full-tree groups: comma list of item sources that get node views; other items train their "
                          "final question only (every view mode); empty = all sources")
@@ -166,8 +173,10 @@ def main() -> None:
                     help="adamw8bit = bitsandbytes (round-to-nearest bf16 writes); adamw8bit-sr = torchao AdamW8bit "
                          "with bf16 stochastic rounding (needs --precision bf16 and torchao; adamw8bit_sr = the same)")
     ap.add_argument("--token-budget", "--mb-tokens", type=int, default=0,
-                    help="full-tree loop: length-sorted micro-batches of at most N padded tokens (and at most "
-                         "--token-budget-seqs sequences) instead of --micro-bs; same gradient per update; 0 = off")
+                    help="length-sorted micro-batches of at most N padded tokens (and at most --token-budget-seqs "
+                         "sequences) instead of --micro-bs chunks; same gradient per update; 0 = off. Full-tree loop: an "
+                         "update is a problem group. Other loops: an update is still the --micro-bs x --grad-accum "
+                         "examples of the fixed loop (same refills), only regrouped by length (not with --rationale-lm)")
     ap.add_argument("--token-budget-seqs", type=int, default=16, help="--token-budget: sequences per micro-batch cap")
     ap.add_argument("--stop-after-h", type=float, default=0.0,
                     help="full-tree loop: at the first update boundary after H hours (counted from this process's "
@@ -231,10 +240,14 @@ def main() -> None:
     ap.add_argument("--log-every", type=int, default=20)
     args = ap.parse_args()
     tree_opts = (args.tree_view != "problem" or args.tree_sources or args.tree_node_weight or args.tree_cap == 0 or
-                 args.tree_scaffold or args.tree_depth_weight)
+                 args.tree_scaffold or args.tree_depth_weight or args.tree_pack)
     if tree_opts and not args.tree_full:
         raise SystemExit("--tree-view / --tree-sources / --tree-node-weight / --tree-cap 0 / --tree-scaffold / "
-                         "--tree-depth-weight need --tree-full")
+                         "--tree-depth-weight / --tree-pack need --tree-full")
+    if args.tree_pack and (args.tree_pack < 2 or (args.tree_full, args.tree_view) != ("plain", "statements") or
+                           args.tree_scaffold or args.fsdp or args.chat_template):
+        raise SystemExit(f"--tree-pack {args.tree_pack}: at least 2 views per pack, for --tree-full plain --tree-view "
+                         "statements (GFPS) without --tree-scaffold, --fsdp or --chat-template")
     if args.tree_view != "problem" and not (args.tree_full == "true" and args.tree_view not in ("statements", "statements+question") or
                                              args.tree_full in ("matched", "plain") and args.tree_view == "local" or
                                              args.tree_full == "plain" and args.tree_view in ("statements", "statements+question")):
@@ -264,9 +277,11 @@ def main() -> None:
     if args.optim == "adamw8bit-sr" and args.precision != "bf16":
         raise SystemExit("--optim adamw8bit-sr rounds bf16 weights stochastically; it needs --precision bf16")
     resumable = bool(args.stop_after_h or args.ckpt_every_min or args.stop_at_step)
-    if (resumable or args.token_budget and not args.fsdp) and not args.tree_full:
-        raise SystemExit("--token-budget / --stop-after-h / --ckpt-every-min / --stop-at-step are implemented for the "
-                         "full-tree loop only (--tree-full; --token-budget also with --fsdp)")
+    if resumable and not args.tree_full:
+        raise SystemExit("--stop-after-h / --ckpt-every-min / --stop-at-step are implemented for the full-tree loop "
+                         "only (--tree-full)")
+    if args.token_budget and args.rationale_lm and not args.tree_full:
+        raise SystemExit("--token-budget does not combine with --rationale-lm (LM continuations are not regrouped)")
     if args.fsdp_optim and not args.fsdp:
         raise SystemExit("--fsdp-optim needs --fsdp")
     if args.fsdp:
@@ -458,6 +473,9 @@ def main() -> None:
                                 sources=tree_sources, node_weight=args.tree_node_weight, stats=st,
                                 mix_p=args.tree_mix_p, mix_seed=args.seed, mix_epoch=ep, scaffold_p=p_sc,
                                 depth_weight=args.tree_depth_weight)
+            if g and args.tree_pack and any(e.kind == "subq" for e in g):   # GFPSP: the GFPS views, packed
+                g = pack_views(g, tok, statement_block(it), max_len=args.max_len, max_nodes=args.tree_pack,
+                               rng=pack_rng(args.seed, ep, it["item_id"]), stats=st)
             if g:
                 groups.append(g)
                 ps.append(p_sc)
@@ -740,17 +758,18 @@ def main() -> None:
                 # micro_bs chunks, or length-sorted micro-batches of at most token_budget padded tokens
                 mbs = micro_batches(tok, upd, args.max_len, args.micro_bs, args.token_budget, args.token_budget_seqs)
                 for mb in mbs:
+                    rd = readouts(mb)                  # --tree-pack: one entry per node view of a pack; else mb
                     with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
                         z = label_logits(model, tok, mb, args.max_len, cache)
-                        loss = kl_loss(z, mb, args.label_smoothing) * len(mb) / norm
+                        loss = kl_loss(z, rd, args.label_smoothing) * len(rd) / norm
                         if args.lambda_brier:          # as in the grouped loop (was silently ignored in full-tree arms)
-                            loss = loss + args.lambda_brier * brier_loss(z, mb) * len(mb) / norm
+                            loss = loss + args.lambda_brier * brier_loss(z, rd) * len(rd) / norm
                     loss.backward()
                     upd_loss += loss.item()
                     seen_tok += sum(min(args.max_len, len(e.text) // 3) for e in mb)
                     if tree_opts:                      # Tree Forcing arms: the loss split by kind (detached, no gradient)
                         with torch.no_grad():
-                            for zz, e in zip(z, mb):
+                            for zz, e in zip(z, rd):
                                 ce = kl_loss([zz.detach().float()], [dataclasses.replace(e, weight=1.0)],
                                              args.label_smoothing).item()
                                 split[e.kind if e.kind in split else "subq"] += e.weight * ce / norm
@@ -773,6 +792,8 @@ def main() -> None:
                     row.update(fsdp_row(fu))
                 elif args.token_budget:
                     row["fwd"] = len(mbs)
+                if args.tree_pack:
+                    row["reads"] = len(readouts(upd))
                 if tree_opts:      # this update's loss by kind (weighted; the two sum to loss without Brier), its
                     # mean unweighted node CE, and the pre-clip gradient norms of the updates since the last row
                     row.update(loss_final=split["final"], loss_node=split["subq"],
@@ -823,6 +844,42 @@ def main() -> None:
                     row = {"step": step, "loss": fu["loss"], "lr": float(sched.get_last_lr()[0]), "s_per_step": dt / step,
                            "approx_tok_per_s": seen_tok / dt, "peak_gib": mem, "gnorm": fu["gnorm"]}
                     row.update(fsdp_row(fu))
+                    history.append(row)
+                    print(json.dumps(row), flush=True)
+                if step in eval_steps:
+                    mid_eval(step)
+                continue
+            if args.token_budget:        # one GPU: the update of the fixed loop below (grad_accum refills of micro_bs,
+                upd = []                 # so the same sequences in the same updates), regrouped by length
+                for _ in range(args.grad_accum):
+                    if len(ex_iter) < args.micro_bs:
+                        ex_iter += make()
+                    batch, ex_iter = ex_iter[:args.micro_bs], ex_iter[args.micro_bs:]
+                    upd += batch
+                norm, upd_loss, padded = args.micro_bs * args.grad_accum, 0.0, []   # = len(batch) x grad_accum below
+                mbs = micro_batches(tok, upd, args.max_len, args.micro_bs, args.token_budget, args.token_budget_seqs,
+                                    padded=padded)
+                for mb in mbs:
+                    with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
+                        z = label_logits(model, tok, mb, args.max_len, cache)
+                        loss = kl_loss(z, mb, args.label_smoothing) * len(mb) / norm
+                        if args.lambda_brier:
+                            loss = loss + args.lambda_brier * brier_loss(z, mb) * len(mb) / norm
+                    loss.backward()
+                    upd_loss += loss.item()
+                seen_tok += sum(min(args.max_len, len(e.text) // 3) for e in upd)
+                micro += args.grad_accum
+                torch.nn.utils.clip_grad_norm_(params, 1.0)
+                opt.step()
+                sched.step()
+                opt.zero_grad(set_to_none=True)
+                step += 1
+                if step % args.log_every == 0 or step == total_steps:
+                    dt = time.time() - t0
+                    mem = torch.cuda.max_memory_allocated() / 2**30 if dev == "cuda" else 0.0
+                    row = {"step": step, "loss": upd_loss, "lr": float(sched.get_last_lr()[0]), "s_per_step": dt / step,
+                           "approx_tok_per_s": seen_tok / dt, "peak_gib": mem, "upd_loss": upd_loss, "fwd": len(mbs),
+                           "pad_tok": sum(padded)}
                     history.append(row)
                     print(json.dumps(row), flush=True)
                 if step in eval_steps:

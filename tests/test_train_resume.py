@@ -1,7 +1,9 @@
 """CPU tests for the 4B training infrastructure in scripts/train_student.py: token-budget micro-batches (same update
 as fixed micro-batches), checkpoint/resume (bit-identical continuation, exit code 3) and the torchao optimizer path
 (plumbing only, through a stub; the real torchao state round trip is an HPC smoke item, hpc/mem4b.sbatch)."""
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import random
@@ -140,6 +142,113 @@ class TestTokenBudgetTraining(unittest.TestCase):
             self.assertGreater(max((wa[k] - w0[k]).abs().max().item() for k in wa), 1e-4)  # the weights did move
 
 
+def run_inproc(argv):
+    """scripts/train_student.py main() in this process (CPU), recording each training micro-batch the script reads out
+    (its label_logits calls: text, weight, target, kind of every example) and each update boundary with the pre-clip
+    gradient norm (clip_grad_norm_ runs once per update). Returns [(micro-batches, gnorm), ...], one entry per update."""
+    from cotdistill.student import readouts
+    spec = importlib.util.spec_from_file_location("train_student_inproc", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    events, cur = [], []
+    ll, clip, cuda, argv0 = mod.label_logits, torch.nn.utils.clip_grad_norm_, torch.cuda.is_available, sys.argv
+
+    def rec_ll(model, tok, batch, *a, **k):         # (--tree-pack: a Pack's node views)
+        cur.append([(e.text, e.weight, tuple(e.target), e.kind) for e in readouts(batch)])
+        return ll(model, tok, batch, *a, **k)
+
+    def rec_clip(params, max_norm, *a, **k):
+        g = clip(params, max_norm, *a, **k)
+        events.append((list(cur), float(g)))
+        cur.clear()
+        return g
+    mod.label_logits = rec_ll
+    torch.nn.utils.clip_grad_norm_, torch.cuda.is_available = rec_clip, (lambda: False)
+    try:
+        sys.argv = [SCRIPT, *argv]
+        with contextlib.redirect_stdout(io.StringIO()):
+            mod.main()
+    finally:
+        torch.nn.utils.clip_grad_norm_, torch.cuda.is_available, sys.argv = clip, cuda, argv0
+    return events
+
+
+@unittest.skipUnless(HAVE, "needs torch + transformers")
+class TestTokenBudgetPlainLoops(unittest.TestCase):
+    """--token-budget on one GPU outside the full-tree loop (A2/A3, grouped G3): every update holds the same examples as
+    the fixed micro_bs x grad_accum loop, regrouped by length, with the same loss normalisation."""
+
+    def test_update_gradient_matches_fixed_loop(self):
+        """The fixed loop's update gradient (per micro-batch (kl x len(cls) [+ Brier x len(cls)]) / len(batch) /
+        grad_accum) vs sum over token-budget micro-batches of (kl + Brier) x len(mb) / (micro_bs x grad_accum), fp32,
+        with label smoothing, item weights and truncation. Without the len(mb) factor the gradients differ."""
+        from cotdistill.student import brier_loss, build_examples, kl_loss, label_logits, micro_batches
+        tok, model = ts.tiny()
+        rng = random.Random(0)
+        upd = [e for j, it in enumerate(items(6)) for e in build_examples(
+            dict(it, weight=1.0 + 0.25 * j), final="teacher", subq="cot", subq_target="cot", lambda_sub=1.0, rng=rng,
+            subq_k=1, permute_final=0.5)]
+        mbs_, ga = 3, len(upd) // 3
+        upd = upd[:mbs_ * ga]
+        cache = {}
+
+        def grad(mbs, max_len, fixed=False, by_len=True):
+            model.zero_grad(set_to_none=True)
+            for mb in mbs:
+                z = label_logits(model, tok, mb, max_len, cache)
+                tot = (kl_loss(z, mb, 0.1) + 0.5 * brier_loss(z, mb)) * len(mb)
+                loss = tot / len(mb) / ga if fixed else tot / (len(mb) if not by_len else 1) / (mbs_ * ga)
+                loss.backward()
+            return {n: p.grad.clone() for n, p in model.named_parameters() if p.grad is not None}
+
+        def close(g, h):
+            return all((g[k] - h[k]).abs().max().item() <= 1e-5 * max(g[k].abs().max().item(), 1e-8) for k in g)
+
+        for max_len in (128, 20):
+            ref = grad(micro_batches(tok, upd, max_len, mbs_), max_len, fixed=True)
+            for budget, cap in ((300, 16), (90, 4), (1, 16)):
+                pad = []
+                split = micro_batches(tok, upd, max_len, mbs_, budget, cap, padded=pad)
+                self.assertEqual(len(pad), len(split))
+                self.assertEqual(sorted(id(e) for mb in split for e in mb), sorted(id(e) for e in upd))
+                self.assertTrue(close(ref, grad(split, max_len)), (max_len, budget, cap))
+            self.assertFalse(close(ref, grad(micro_batches(tok, upd, max_len, mbs_, 90, 4), max_len, by_len=False)))
+
+    def test_same_updates_in_the_script(self):
+        """Arms A2, A3 (+ Brier, label smoothing) and G3 through main(): per update the same multiset of examples
+        (text, weight, target, kind) as the fixed loop, across pass boundaries, a different grouping, and the same
+        pre-clip gradient norm and update loss (fp32); the trained models give the same predictions."""
+        arms = {"A2": ["--final", "teacher", "--subq", "none", "--micro-bs", "2", "--grad-accum", "2"],
+                "A3": ["--final", "teacher", "--subq", "cot", "--subq-k", "2", "--micro-bs", "2", "--grad-accum", "3",
+                       "--lambda-brier", "0.5", "--label-smoothing", "0.1", "--permute-final", "0.5"],
+                "G3": ["--final", "teacher", "--subq", "cot", "--grouped-aux", "2", "--aux-kind", "cot",
+                       "--aux-weight", "0.5", "--items-per-update", "2", "--micro-bs", "2"]}
+        with tempfile.TemporaryDirectory() as d:
+            setup_dir(d, 7)
+            for arm, extra in arms.items():
+                common = ["--model", d + "/m", "--train", d + "/t.jsonl", "--eval", "v=" + d + "/t.jsonl",
+                          "--epochs", "2", "--lr", "1e-3", "--precision", "fp32master", "--max-len", "128",
+                          "--no-grad-ckpt", "--log-every", "1", "--seed", "1", *extra]
+                fixed = run_inproc([*common, "--log-update-loss", "--out", f"{d}/{arm}-f"])
+                budget = run_inproc([*common, "--token-budget", "120", "--out", f"{d}/{arm}-b"])
+                self.assertEqual(len(fixed), len(budget), arm)
+                self.assertGreaterEqual(len(fixed), 3, arm)
+                regrouped = 0
+                for (fa, ga), (fb, gb) in zip(fixed, budget):
+                    flat = lambda mbs: sorted(x for mb in mbs for x in mb)
+                    self.assertEqual(flat(fa), flat(fb), arm)                       # the same examples per update
+                    regrouped += [len(mb) for mb in fa] != [len(mb) for mb in fb]
+                    self.assertAlmostEqual(ga, gb, delta=1e-4 * max(ga, 1e-6))      # the same gradient
+                self.assertGreater(regrouped, 0, arm)
+                ma, mb_ = (json.loads(Path(f"{d}/{arm}-{x}/metrics.json").read_text()) for x in ("f", "b"))
+                for ra, rb in zip(ma["history"], mb_["history"]):
+                    self.assertAlmostEqual(ra["upd_loss"], rb["loss"], delta=1e-6)
+                    self.assertEqual(rb["upd_loss"], rb["loss"])
+                    self.assertGreater(rb["pad_tok"], 0)
+                    self.assertNotIn("fwd", ra)                                     # fixed-loop rows unchanged
+                self.assertAlmostEqual(ma["eval"]["v"]["nll"], mb_["eval"]["v"]["nll"], delta=1e-5)
+
+
 @unittest.skipUnless(HAVE, "needs torch + transformers")
 class TestResume(unittest.TestCase):
     def test_resumed_run_is_identical(self):
@@ -226,11 +335,15 @@ class TestResume(unittest.TestCase):
             r = run(d, "--precision", "fp32master", "--optim", "adamw8bit-sr", "--out", d + "/o")
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("needs --precision bf16", r.stderr)
-            r = subprocess.run([sys.executable, SCRIPT, "--model", d + "/m", "--train", d + "/t.jsonl",
-                                "--token-budget", "300", "--out", d + "/o"], capture_output=True, text=True,
-                               timeout=300, env={**os.environ, "CUDA_VISIBLE_DEVICES": ""})
+            plain = lambda *a: subprocess.run([sys.executable, SCRIPT, "--model", d + "/m", "--train", d + "/t.jsonl",
+                                               *a, "--out", d + "/o"], capture_output=True, text=True, timeout=300,
+                                              env={**os.environ, "CUDA_VISIBLE_DEVICES": "", "OMP_NUM_THREADS": "2"})
+            r = plain("--stop-at-step", "1")                       # resume: full-tree loop only
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("full-tree loop only", r.stderr)
+            r = plain("--token-budget", "300", "--rationale-lm")    # token budgets: every loop, but no LM examples
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("does not combine with --rationale-lm", r.stderr)
             if importlib.util.find_spec("torchao") is None:
                 r = run(d, "--precision", "bf16", "--optim", "adamw8bit-sr", "--out", d + "/o")
                 self.assertNotEqual(r.returncode, 0)
