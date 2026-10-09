@@ -430,11 +430,12 @@ def main() -> None:
     if tree_sources and not any(it.get("source") in tree_sources for it in train_items):
         raise SystemExit(f"--tree-sources {args.tree_sources}: no item of {args.train} has one of these sources")
     if args.tree_view in ("statements", "statements+question", "local+ctxparse", "mix"):   # GFP-S, GFPQ, TFLP, MIX: every
-        from cotdistill.treeplan import statement_block                 # statement block (fail before training)
-        for it in train_items:
+        from cotdistill.treeplan import problem_no_options, statement_block   # view must build (fail before training);
+        view_fn = problem_no_options if args.tree_view == "statements+question" else statement_block   # GFPQ needs
+        for it in train_items:                                              # only the problem without its options
             if tree_sources is None or it.get("source") in tree_sources:
                 try:
-                    statement_block(it)
+                    view_fn(it)
                 except ValueError as e:
                     raise SystemExit(f"--tree-view {args.tree_view}: {e}")
     tree_stats: dict = {}
