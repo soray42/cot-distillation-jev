@@ -22,7 +22,8 @@ Nodes (each a yes/no question with an exact truth; p_cot = truth, node_depth = t
   number word / question number gets no edge and the flag parents_uncertain / ambiguous_q). Only Yes nodes are parents.
 Not built (counted in summary.json):
   - the gold step (the final question in disguise) and any step whose value equals the gold, and every step downstream
-    of such a step (its probe would pin the gold), and steps after the gold step;
+    of such a step (its probe would pin the gold: a parent edge, or an operand equal to such a step's result that
+    parse_problem left unlinked as uncertain), and steps after the gold step;
   - steps whose sub-question text is shared with another step of a different value (the Socratic annotation reuses a
     sub-question for a partial result, e.g. "How many floors does the Chrysler Building have?" for 11 and then 23), or
     equals the problem's final question sentence (normalised) while its value is not the gold: such a Yes node would
@@ -177,6 +178,15 @@ def slip_values(p: dict, j: int) -> list[float]:
     return sorted(out)
 
 
+def reads_blocked(steps: list[dict], j: int, blocked: set) -> bool:
+    """Whether an operand of step j equals the result of an earlier blocked step (gold-valued or downstream of one),
+    whether or not parse_problem linked it (an operand that is also a unit constant, number word or question number
+    gets no edge but may still be that result)."""
+    S = soc()
+    vals = [steps[k]["value"] for k in blocked if k < j]
+    return any(S.matches(abs(float(c.value)), v) for c in S.constants(steps[j]["tree"]) for v in vals)
+
+
 def wrong_value(v: float, gold: float, slips: list, others: list, rng: random.Random) -> tuple[float, str] | None:
     up = rng.random() < 0.5
     for side in (up, not up):
@@ -192,14 +202,19 @@ def wrong_value(v: float, gold: float, slips: list, others: list, rng: random.Ra
 def tf_nodes(p: dict, rng: random.Random, st: collections.Counter) -> list[dict]:
     """The yes/no nodes of one parsed problem (build_gsm8k_socratic.parse_problem, status ok)."""
     steps, gs, gold = p["steps"], p["gold_step"], p["gold"]
-    close = soc().close
+    S = soc()
     fin = norm(final_sentence(p["question"]))
-    blocked = {gs} | {j for j, s in enumerate(steps) if close(s["value"], gold)}
+    blocked = {gs} | {j for j, s in enumerate(steps) if S.close(s["value"], gold)}
     st["blocked_gold_valued"] += len(blocked) - 1
-    for j in range(len(steps)):                                   # downstream of a blocked step: blocked too
-        if j not in blocked and ancestors(steps, j) & blocked and j < gs:
+    for j in range(gs):                                           # downstream of a blocked step: blocked too
+        if j in blocked:
+            continue
+        if ancestors(steps, j) & blocked:
             blocked.add(j)
             st["blocked_downstream_of_gold_valued"] += 1
+        elif reads_blocked(steps, j, blocked):                     # an uncertain edge (no parent link) to one
+            blocked.add(j)
+            st["blocked_uncertain_edge_to_gold_valued"] += 1
     by_text = collections.defaultdict(set)
     for s in steps:
         by_text[norm(s["subq"])].add(round(s["value"], 6))
@@ -440,6 +455,9 @@ def build(args) -> None:
                 fails.append(f"{r['item_id']}: gold / step count differs from the raw solution")
                 continue
             t = convert(r, p, random.Random(f"{args.seed}/{r['problem_id']}"), st)
+            gv = {k for k, s_ in enumerate(p["steps"]) if S.close(s_["value"], p["gold"])}
+            if any(reads_blocked(p["steps"], n["step"] - 1, gv) for n in t["subqs"]):
+                fails.append(f"{r['item_id']}: a node's step reads a gold-valued step's result")
             diff = {k for k in set(t) | set(r) if t.get(k) != r.get(k)}
             if not diff <= CHANGED:
                 fails.append(f"{r['item_id']}: fields changed beyond the tree fields: {sorted(diff - CHANGED)}")

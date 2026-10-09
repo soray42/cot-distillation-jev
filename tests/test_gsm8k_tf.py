@@ -26,7 +26,8 @@ sys.path.insert(0, str(ROOT / "tests"))
 from cotdistill.treeplan import GSM8K_TF, gsm8k_question_cut, problem_no_options, statement_block  # noqa: E402
 
 DATA = Path(os.environ.get("COTD_DATA_DIR") or ROOT / "data")
-BASE_REF = "2509b67"          # the commit before the gsm8k_tf branch (pinned: HEAD would compare the branch with itself)
+BASE_REF = "2509b67"          # the commit before the gsm8k_tf branch (pinned: HEAD would compare the branch with itself;
+#                               move the pin when another source's branch of treeplan.py changes)
 
 try:
     import numpy  # noqa: F401
@@ -245,6 +246,14 @@ class TestBuilderUnits(unittest.TestCase):
         self.assertEqual(nodes, [])
         self.assertEqual(st["blocked_gold_valued"], 2)
         self.assertEqual(st["blocked_downstream_of_gold_valued"], 1)
+        # an uncertain edge (12 is a unit constant: no parent link) to a gold-valued step still blocks
+        q6 = "Sam has 3 bags with 4 apples each. He buys 5 more apples and then gives 5 apples away. How many now?"
+        a6 = ("How many apples are in the bags? ** 3 * 4 = <<3*4=12>>12\n"
+              "How many apples after buying? ** 12 + 5 = <<12+5=17>>17\n"
+              "How many apples does he have now? ** 17 - 5 = <<17-5=12>>12\n#### 12")
+        p, nodes, st = self.nodes(q6, a6)
+        self.assertIn("parents_uncertain", p["steps"][1]["flags"])
+        self.assertEqual((nodes, st["blocked_uncertain_edge_to_gold_valued"]), ([], 1))
         # a sub-question reused for a partial result, and one that restates the final question
         a2 = A.replace(S2, S1)
         _, nodes, st = self.nodes(Q, a2)
