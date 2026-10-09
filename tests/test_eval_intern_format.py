@@ -39,6 +39,10 @@ class TestRender(unittest.TestCase):
         sh = eif.permute(q, "shuffle", "k")
         self.assertEqual(sorted(sh["criteria"]), sorted(q["criteria"]))
         self.assertEqual(sh, eif.permute(q, "shuffle", "k"))
+        r2 = eif.from_mc({"item_id": "y", "prompt": "not ( True ) is\n\nOptions:\nA) True\nB) False", "labels": ["A", "B"],
+                          "gold_label": "B"})
+        self.assertEqual((r2["state"], r2["questions"]["decision"]["instructions"]), ("not ( True ) is", "Choose the correct option."))
+        self.assertEqual(r2["targets"]["decision"]["label"], "False")
         n = {"type": "noul", "instructions": "?"}
         self.assertIs(eif.permute(n, "reverse", "k"), n)
 

@@ -93,19 +93,29 @@ def permute(q: dict, how: str, key: str) -> dict:
 _MC = re.compile(r"\n\nQuestion: (.*?)\nOptions:\n(.*)$", re.S)
 
 
+_OPTS = re.compile(r"\n+Options:\n(.*)$", re.S)
+
+
 def from_mc(it: dict) -> dict:
+    """Our MC item as one choice field. With "\n\nQuestion: q" before the options, the state is the text before it
+    and q the instruction; without (BBH, GSM8K-MC, numeric chains: the question ends the text), the whole text before
+    "Options:" is the state and the instruction is generic."""
     m = _MC.search(it["prompt"])
-    if not m:
-        raise ValueError(f"{it.get('item_id')}: not a 'Question: ... Options:' prompt")
-    state = it["prompt"][:m.start()]
+    if m:
+        state, instr, block = it["prompt"][:m.start()], m.group(1).strip(), m.group(2)
+    else:
+        m = _OPTS.search(it["prompt"])
+        if not m:
+            raise ValueError(f"{it.get('item_id')}: no 'Options:' block")
+        state, instr, block = it["prompt"][:m.start()], "Choose the correct option.", m.group(1)
     opts = {}
-    for line in m.group(2).split("\n"):
-        lab, _, text = line.partition(") ")
+    for line in block.split("\n"):
+        lab, _, text = (line[1:] if line.startswith("(") else line).partition(") ")   # "A) x" or "(A) x"
         if lab in it["labels"]:
             text = text.strip()
             opts[lab] = text if text not in opts.values() else f"{text} ({lab})"
     crit = {opts[l]: opts[l] for l in it["labels"]}
-    q = {"type": "choice", "instructions": m.group(1).strip(), "criteria": crit}
+    q = {"type": "choice", "instructions": instr, "criteria": crit}
     return {"id": it["item_id"], "group": it.get("group"), "state": state, "questions": {"decision": q},
             "targets": {"decision": {"label": opts[it["gold_label"]]}}}
 

@@ -28,8 +28,9 @@ for f in $IB/jevbench/easy.jsonl $IB/jevbench/original.jsonl $IB/jevbench/hard.j
   [ -f "$f" ] || { echo "missing $f"; exit 1; }; done
 run() { echo "=== $1 $2 $(date +%T)"; [ -n "${DRY_RUN:-}" ] && { echo "$PY $REPO/scripts/eval_intern_format.py --model models/$1 --out runs/intern/$1-$2 --perm $2 ${@:3}" | cut -c1-300; return; }
   $PY "$REPO/scripts/eval_intern_format.py" --model "models/$1" --out "runs/intern/$1-$2" --perm "$2" "${@:3}" || echo "FAILED $1 $2"; }
-for M in Intern-Decision-4B Qwen3.5-4B; do
+for M in ${MODELS:-Intern-Decision-4B Qwen3.5-4B}; do
   [ -f "models/$M/config.json" ] || { echo "missing models/$M"; continue; }
+  [ -n "${MCONLY:-}" ] && { run "$M" mc $MC; continue; }
   run "$M" none $NATIVE $MC
   run "$M" reverse $NATIVE
   run "$M" shuffle $NATIVE
