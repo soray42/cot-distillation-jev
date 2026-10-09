@@ -118,6 +118,8 @@ NEW = {
     "goldproof/ruletaker": ("Context: Bob is green. If something is green then it is nice.\n\nStatement: Bob is nice.",
                             "Question: Does the statement follow from the context? What is not explicitly stated as true "
                             "is considered false.", "A) not entailment\nB) entailment"),
+    "pronto": ("The following facts and rules describe a fictional world.\n\nEvery wumpus is a yumpus. Yumpuses are not "
+               "sour. Wren is a wumpus.", "Question: True or false: Wren is sour.", "A) True\nB) False"),
 }
 
 
@@ -147,7 +149,8 @@ OLD_FILES = ["student_v3sl/train.jsonl", "student_v3sl/val.jsonl", "student_v3s/
              "eval/kk_heldout.jsonl", "eval/val_kk.jsonl", "eval/kk_deep.jsonl", "eval/diag_kk.jsonl"] + \
             [f"eval/numgen_d{d}.jsonl" for d in range(1, 9)] + ["eval/numgen_ood.jsonl"]
 NEW_FILES = ["student_v3sl/train.jsonl", "student_v3sl/val.jsonl", "student_goldproof/train.jsonl",
-             "student_goldproof/val.jsonl", "student_rule/train.jsonl", "student_rule/val.jsonl"]
+             "student_goldproof/val.jsonl", "student_rule/train.jsonl", "student_rule/val.jsonl",
+             "student_pronto_tf/val.jsonl", "student_pronto_tf/local_deep.jsonl"]
 
 
 class TestOldSourcesUnchanged(unittest.TestCase):

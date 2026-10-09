@@ -207,6 +207,7 @@ FINAL_QUESTION = {
     "goldproof/boardgameqa": r"Question: Based on the game state and the rules and preferences, [^\n]+\?",
     "goldproof/ruletaker": r"Question: Does the statement follow from the context\? What is not explicitly stated as "
                            r"true is considered false\.",
+    "pronto": r"Question: True or false: [A-Z][a-z]+ is (?:not )?[a-z]+\.",       # PrOntoQA-OOD (pronto.py): the query
 }
 
 
