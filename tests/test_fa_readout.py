@@ -122,6 +122,23 @@ class TestStats(unittest.TestCase):
         self.assertLess(acc["position"], 0.5)
 
 
+class TestRuns(unittest.TestCase):
+    def test_parse_run_and_dropped(self):
+        r = R.parse_run("GFPS-fa1c2-Qwen3.5-0.8B-Base-student_fa1b-s12")
+        self.assertEqual((r["arm"], r["tag"], r["model"], r["data"], r["seed"]),
+                         ("GFPS", "fa1c2", "Qwen3.5-0.8B-Base", "student_fa1b", 12))
+        self.assertEqual(R.parse_run("A2-x-s3")["arm"], "A2")
+        with tempfile.TemporaryDirectory(dir=ROOT, prefix=".fa_readout_test_") as d:
+            (Path(d) / "summary.json").write_text(json.dumps({"debias": {"dropped": ["wwpro/macnet"]}}))
+            train = str((Path(d) / "train_all.jsonl").relative_to(ROOT))
+            self.assertEqual(R.dropped_for({"args": {"train": train}}, ["x/y"]), ["wwpro/macnet", "x/y"])
+        self.assertEqual(R.dropped_for(None, []), [])
+        p = R.resolve("val", {}, "fa1-val-00000", "student_fa0")
+        self.assertEqual(p, ROOT / ("data/student_fa0/val.jsonl" if (ROOT / "data/student_fa0/val.jsonl").exists()
+                                    else "data/student_fa1/val.jsonl"))
+        self.assertEqual(R.resolve("ww_hc", R.eval_map(Path("."), None), "x"), ROOT / "data/eval/ww_hc_agent.jsonl")
+
+
 @unittest.skipUnless(len(list(FA0.glob("*/preds_ww_step.jsonl"))) >= 2, "results/hpc/fa0 runs not present")
 class TestTier0Runs(unittest.TestCase):
     def test_readout(self):

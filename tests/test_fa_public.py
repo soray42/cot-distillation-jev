@@ -581,5 +581,94 @@ class TestBuiltData(unittest.TestCase):
         self.assertEqual(hits, [])
 
 
+# ------------------------------------------------------------------------------------------------- length debias
+FA1_COMMIT = "e00ab58"      # the Tier-1 builder before --debias-length: option-off outputs must stay byte-identical
+
+
+def leak_rec(i: int, sub: str, p_short: float, rng: random.Random, origin: str = "wwpro") -> dict:
+    """A trajectory whose decisive step is planted as by far the shortest with probability p_short."""
+    n = rng.randint(3, 9)
+    d = rng.randrange(n)
+    lens = [rng.randint(400, 1200) for _ in range(n)]
+    if rng.random() < p_short:
+        lens[d] = rng.randint(60, 120)
+    steps = [(("Alpha", "Beta")[k % 2], "x" * lens[k]) for k in range(n)]
+    return fp._rec(f"{sub}{i}", origin, sub, "b", f"task {sub} number {i}", "1", steps, d, ("Alpha", "Beta")[d % 2])
+
+
+class TestDebias(unittest.TestCase):
+    def test_planted_leak(self):
+        import types
+        B = load_script("build_fa_public")
+        rng = random.Random(0)
+        pool = ([leak_rec(i, "mathchat", 0.3, rng) for i in range(300)] + [leak_rec(i, "debate", 0.0, rng)
+                                                                            for i in range(200)]
+                + [leak_rec(i, "macnet", 1.0, rng) for i in range(150)] + [leak_rec(i, "dylan", 1.0, rng)
+                                                                            for i in range(20)]
+                + [leak_rec(i, "alg", 1.0, rng, "stepfinder") for i in range(60)])
+        rng.shuffle(pool)
+        args = types.SimpleNamespace(debias_length="wwpro", debias_tau=0.01, debias_min_share=1 / 3, debias_min_n=40,
+                                     debias_folds=5, debias_rounds=8, seed=0, cap_max=3000)
+        out, rep = B.debias_length(pool, args)
+        g = rep["groups"]
+        self.assertEqual(rep["dropped"], ["wwpro/macnet"])
+        self.assertEqual(g["wwpro/dylan"]["status"], "too_small")
+        self.assertGreater(g["wwpro/debate"]["kept"], 0.85 * 200)
+        mc = g["wwpro/mathchat"]
+        self.assertEqual(mc["status"], "selected")
+        self.assertGreater(mc["probe_before"]["surface"] - mc["probe_before"]["structure"], 0.15)
+        self.assertLessEqual(mc["probe_after"]["surface"] - mc["probe_after"]["structure"], 0.01)
+        self.assertGreater(mc["before"]["decisive_shortest"], 0.4)
+        self.assertLess(mc["after"]["decisive_shortest"], 0.3)
+        self.assertGreater(mc["kept"], 300 / 3)
+        self.assertEqual([r for r in out if r["origin"] == "stepfinder"],
+                         [r for r in pool if r["origin"] == "stepfinder"])          # other origins untouched
+        self.assertEqual(out, [r for r in pool if r in out])                       # pool order kept
+        self.assertFalse(any(r["subset"] == "macnet" for r in out))
+        out2, rep2 = B.debias_length(pool, args)                                   # deterministic
+        self.assertEqual([r["uid"] for r in out2], [r["uid"] for r in out])
+
+    def test_off_byte_identical_and_on_build(self):
+        src = subprocess.run(["git", "-C", str(ROOT), "show", f"{FA1_COMMIT}:scripts/build_fa_public.py"],
+                             capture_output=True, text=True)
+        if src.returncode != 0:
+            self.skipTest(f"git commit {FA1_COMMIT} not readable")
+        env = {**os.environ, "CUDA_VISIBLE_DEVICES": "", "OMP_NUM_THREADS": "2"}
+        common = ["--origins", "wwpro,stepfinder,agentracer,traceelephant", "--n-val", "12", "--tokenizer",
+                  "missing.json", "--caps", "{}", "--share", '{"wwpro": 0.5}']
+        with tempfile.TemporaryDirectory(dir=ROOT, prefix=".fa1_test_") as d:
+            d = Path(d)
+            write_raw(d / "raw", n=60)
+            base = d / "base"                    # e00ab58's script; its ROOT is base/ (outputs must lie under it)
+            (base / "scripts").mkdir(parents=True)
+            (base / "scripts/build_fa_public.py").write_text(src.stdout)
+            (base / "src").symlink_to(ROOT / "src")
+
+            def run(script: Path, out: Path, ev: Path, extra=()):
+                cmd = [sys.executable, "-P", str(script), "--raw", str(d / "raw"), "--out", str(out), "--eval-dir",
+                       str(ev)] + common + list(extra)
+                r = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=900, cwd=d)
+                self.assertEqual(r.returncode, 0, r.stdout[-3000:] + r.stderr[-3000:])
+                return json.loads((out / "summary.json").read_text())
+            run(base / "scripts/build_fa_public.py", base / "out", base / "eval")
+            s_off = run(ROOT / "scripts/build_fa_public.py", d / "out", d / "eval")
+            names = sorted(p.name for p in (base / "out").glob("*.jsonl")) + sorted(
+                p.name for p in (base / "eval").glob("*.jsonl"))
+            self.assertEqual(len(names), 4 + 9)
+            for sub in ("out", "eval"):
+                for p in sorted((base / sub).glob("*.jsonl")):
+                    self.assertEqual(p.read_bytes(), (d / sub / p.name).read_bytes(), f"{sub}/{p.name}")
+            self.assertNotIn("debias", s_off)
+            self.assertIn("length_probe", s_off)
+            s_on = run(ROOT / "scripts/build_fa_public.py", d / "out_b", d / "eval_b",
+                       ["--stage", "build", "--norm", str(d / "out/norm"), "--debias-length", "wwpro,agentracer",
+                        "--compare-eval", str((d / "eval").relative_to(ROOT))])
+            self.assertEqual(s_on["audit"]["failures"], 0)
+            self.assertEqual(s_on["debias"]["origins"], ["agentracer", "wwpro"])
+            self.assertTrue(s_on["debias"]["groups"])
+            self.assertEqual(set(s_on["eval_vs_compare"]["same_md5"].values()), {True})   # test sets untouched
+            self.assertFalse((d / "out_b/norm").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

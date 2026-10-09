@@ -25,6 +25,19 @@ AssistantBench id) is removed; val = about --n-val trajectories by task (no task
 caps with equal quotas over relative-position deciles where a source is subsampled. Every step of a trajectory is cut
 to the same per-trajectory cap (at most --cap-max characters), the largest whose step prompt with the reference line
 fits --budget Qwen3.5 tokens (prompt + "\\n\\nAnswer:").
+
+Length debias (off by default; off = the e00ab58 outputs byte for byte, tests/test_fa_public.py TestDebias): injected
+steps of Who&When Pro, AFTraj and AgenTracer differ in length from the agents' own steps (the injector's text is shorter
+in mathchat / macnet / dylan / smolagents, longer in AFTraj), so step length predicts the gold step beyond position.
+--debias-length wwpro,aftraj,agentracer removes that tell from the pool after dedup and before val / train are drawn
+(debias_length: within-group probes, rejection rounds, groups that cannot be fixed dropped from train and val); test
+sets are untouched, so the eval files stay the same (--compare-eval data/eval checks it):
+
+  cd <scratch> && CUDA_VISIBLE_DEVICES= OMP_NUM_THREADS=2 ~/.venvs/sev/bin/python -P -E \\
+      ~/projects/jev/scripts/build_fa_public.py --stage build --norm data/student_fa1/norm --out data/student_fa1b \\
+      --eval-dir data/student_fa1b/eval_check --compare-eval data/eval --debias-length wwpro,aftraj,agentracer
+  -> summary.json debias (per group: probes before / after, rounds, kept, dropped) and length_probe (both modes:
+     probes fit on train applied to val / tests, within-train CV, per-group fitted probes)
 """
 from __future__ import annotations
 
@@ -68,7 +81,7 @@ def md5(path: Path) -> str:
 # ------------------------------------------------------------------------------------------------- stage normalize
 def stage_normalize(args) -> None:
     raw = ROOT / args.raw
-    out = ROOT / args.out / "norm"
+    out = ROOT / args.norm if args.norm else ROOT / args.out / "norm"
     out.mkdir(parents=True, exist_ok=True)
     counts: collections.Counter = collections.Counter()
     readers = {
@@ -275,6 +288,8 @@ def step_features(r: dict, cap: int, level: str):
         if level == "surface":
             f += [math.log1p(lens[i]) / 8, rk[i], lens[i] == max(lens), lens[i] == min(lens),
                   r["steps"][i]["agent"] != (r["steps"][i - 1]["agent"] if i else None)]
+        elif level == "structure":                      # position + speaker change: surface without the lengths
+            f += [r["steps"][i]["agent"] != (r["steps"][i - 1]["agent"] if i else None)]
         rows.append(np.array(f, dtype=float))
     return np.stack(rows)
 
@@ -306,10 +321,264 @@ def probe(train: list[dict], evals: dict, caps: dict, seed: int, n_fit: int = 30
     return out
 
 
+# ------------------------------------------------------------------------------------------------- length debias
+LEVELS = ("position", "structure", "surface")
+DEBIAS_FOLD_SEEDS = (1, 2)
+
+
+def debias_group(r: dict) -> str:
+    """Selection unit: Who&When Pro framework; AFTraj / AgenTracer domain and provenance (injected / diagnosed, kept in
+    the record's benchmark field); else origin/subset."""
+    key = f"{r['origin']}/{r['subset']}"
+    return key + f"/{r['benchmark']}" if r["origin"] in ("aftraj", "agentracer") else key
+
+
+def tensor(recs: list[dict], cap, level: str):
+    """Padded step features (N, max steps, F) float32, mask, gold index; cap an int or a uid -> cap dict."""
+    import numpy as np
+    m = max(len(r["steps"]) for r in recs)
+    rows = [step_features(r, cap[r["uid"]] if isinstance(cap, dict) else cap, level) for r in recs]
+    X = np.zeros((len(recs), m, rows[0].shape[1]), dtype=np.float32)
+    mask = np.zeros((len(recs), m), dtype=bool)
+    for j, f in enumerate(rows):
+        X[j, :len(f)] = f
+        mask[j, :len(f)] = True
+    return X, mask, np.array([r["dec"] for r in recs])
+
+
+def clogit_probs(X, mask, w):
+    import numpy as np
+    z = np.where(mask, X @ w, -np.inf)
+    z = z - z.max(1, keepdims=True)
+    p = np.exp(z)
+    return p / p.sum(1, keepdims=True)
+
+
+def fit_clogit_v(X, mask, y, iters: int = 30, lam: float = 1e-3):
+    """The objective of fit_clogit (mean conditional-logit NLL + lam/2 |w|^2) over padded trajectories, minimised
+    by damped Newton steps (exact optimum, about 10x faster than its 300 gradient steps; padding has p = 0)."""
+    import numpy as np
+    n, f = len(y), X.shape[2]
+    rows = np.arange(n)
+    Xy = X[rows, y].astype(np.float64)
+
+    def objective(w):
+        P = clogit_probs(X, mask, w)
+        return -np.log(np.maximum(P[rows, y], 1e-300)).mean() + lam / 2 * w @ w, P
+
+    w = np.zeros(f)
+    val, P = objective(w)
+    for _ in range(iters):
+        Xp = np.einsum("nm,nmf->nf", P, X, dtype=np.float64)
+        g = (Xp - Xy).mean(0) + lam * w
+        H = np.einsum("nm,nmf,nmg->fg", P, X, X, dtype=np.float64) / n - Xp.T @ Xp / n + lam * np.eye(f)
+        step = np.linalg.solve(H, g)
+        t = 1.0
+        while True:
+            w2 = w - t * step
+            v2, P2 = objective(w2)
+            if v2 <= val - 1e-4 * t * (g @ step) or t < 1e-6:
+                break
+            t /= 2
+        done = val - v2 < 1e-9
+        w, val, P = w2, v2, P2
+        if done:
+            break
+    return w
+
+
+def cv_probe(T: dict, idx, tasks: list[str], fold_seed, folds: int, levels=LEVELS) -> tuple[dict, dict]:
+    """Within-group cross-validated probes on the records idx of a group (T: level -> tensor of the whole group);
+    folds by task (fa_public.norm_task), so the trajectories of one task never sit in train and test of a fold.
+    Returns accuracy per level and the held-out probability of the gold step per level (idx order)."""
+    import numpy as np
+    fold = np.array([fp.stable_hash("debias-fold", fold_seed, tasks[i]) % folds for i in idx])
+    acc, pg = {}, {}
+    for lev in levels:
+        X, mask, y = (a[idx] for a in T[lev])
+        p = np.zeros(len(idx))
+        hit = 0
+        for k in range(folds):
+            te = fold == k
+            if not te.any() or te.all():
+                continue
+            P = clogit_probs(X[te], mask[te], fit_clogit_v(X[~te], mask[~te], y[~te]))
+            hit += int((P.argmax(1) == y[te]).sum())
+            p[te] = P[np.arange(int(te.sum())), y[te]]
+        acc[lev] = hit / max(1, len(idx))
+        pg[lev] = p
+    return acc, pg
+
+
+def cv_mean(T, idx, tasks, folds, levels=LEVELS) -> dict:
+    """cv_probe accuracy averaged over DEBIAS_FOLD_SEEDS (CV noise of one fold assignment is about +-2 points)."""
+    runs = [cv_probe(T, idx, tasks, s, folds, levels)[0] for s in DEBIAS_FOLD_SEEDS]
+    return {lev: round(sum(r[lev] for r in runs) / len(runs), 4) for lev in levels}
+
+
+def length_stats(recs: list[dict], cap: int) -> dict:
+    """Where the decisive step sits by length (cut at cap) and position: shortest / longest shares against their
+    chance (mean 1/n), mean length-rank quantile of the decisive step (0 shortest .. 1 longest; null .5), last-step
+    share, relative-position deciles."""
+    if not recs:
+        return {"n": 0}
+    sh = lo = ch = q = last = 0.0
+    for r in recs:
+        lens = [min(len(s["text"].strip()), cap) for s in r["steps"]]
+        d, n = lens[r["dec"]], len(lens)
+        sh += d == min(lens)
+        lo += d == max(lens)
+        ch += 1 / n
+        q += (sum(x < d for x in lens) + 0.5 * (sum(x == d for x in lens) - 1)) / max(1, n - 1)
+        last += r["dec"] == n - 1
+    k = len(recs)
+    return {"n": k, "decisive_shortest": round(sh / k, 3), "decisive_longest": round(lo / k, 3),
+            "chance_1_over_n": round(ch / k, 3), "decisive_length_rank_q": round(q / k, 3),
+            "decisive_last": round(last / k, 3),
+            "decisive_rel_decile": hist(rel_bin(r["dec"], len(r["steps"])) for r in recs)}
+
+
+def debias_length(pool: list[dict], args) -> tuple[list[dict], dict]:
+    """Remove the step-length tell of injected sources from the pool (before val / train are drawn; test sets are
+    never touched). Per group (debias_group) of the origins in --debias-length, rendered lengths approximated by
+    min(len, --cap-max):
+      1. within-group CV (5 folds by task, averaged over 2 fold assignments) of three conditional-logit probes:
+         position, structure (position + speaker change), surface (structure + length: log length, length rank,
+         longest, shortest). gap = surface - structure is what the lengths add.
+      2. gap <= --debias-tau: keep the group. Else rejection rounds towards "length carries no information": with
+         cross-fitted held-out probabilities of the gold step under both probes (fit on the current kept set), keep a
+         trajectory iff u < min(1, p_structure(gold) / p_surface(gold)) (u a stable hash of the uid and the round).
+         One round turns P(decisive | position, speaker, length) towards P(decisive | position, speaker) only where
+         a trajectory could have had its decisive step elsewhere; trajectories whose length pattern always marks the
+         gold (an injected step much shorter than any other) keep a share of about p_structure each round, so the
+         rounds repeat (AFLite-like) until the re-measured gap is <= tau (at most --debias-rounds).
+      3. the kept set falls under max(--debias-min-n, --debias-min-share x n) first: the group cannot be fixed and is
+         dropped from train and val (it stays in its test file; listed in debias.dropped).
+    Groups under --debias-min-n trajectories are kept as they are (too small to measure)."""
+    import numpy as np
+    origins = {o for o in args.debias_length.split(",") if o}
+    by = collections.defaultdict(list)
+    for r in pool:
+        if r["origin"] in origins:
+            by[debias_group(r)].append(r)
+    keep: set = set()
+    report: dict = {"origins": sorted(origins), "tau": args.debias_tau, "min_share": args.debias_min_share,
+                    "min_n": args.debias_min_n, "folds": args.debias_folds, "fold_seeds": list(DEBIAS_FOLD_SEEDS),
+                    "rounds": args.debias_rounds, "length_cap": args.cap_max, "groups": {}, "dropped": []}
+    for g in sorted(by):
+        rs = by[g]
+        n = len(rs)
+        ent: dict = {"n": n, "before": length_stats(rs, args.cap_max)}
+        if n < args.debias_min_n:
+            ent.update(status="too_small", kept=n)
+            keep |= {(r["origin"], r["uid"]) for r in rs}
+            report["groups"][g] = ent
+            continue
+        T = {lev: tensor(rs, args.cap_max, lev) for lev in LEVELS}
+        tasks = [fp.norm_task(r["task"]) for r in rs]
+        every = np.arange(n)
+        ent["probe_before"] = cv_mean(T, every, tasks, args.debias_folds)
+        gap0 = ent["probe_before"]["surface"] - ent["probe_before"]["structure"]
+        chosen = None
+        if gap0 <= args.debias_tau:
+            chosen = (None, every, ent["probe_before"])
+        else:
+            u_of = lambda r, k: fp.stable_hash(args.seed, "debias", k, r["origin"], r["uid"]) / 16 ** 12  # noqa: E731
+            need = max(args.debias_min_n, math.ceil(args.debias_min_share * n))
+            idx, trace = every, []
+            for k in range(args.debias_rounds):
+                _, pg = cv_probe(T, idx, tasks, 0, args.debias_folds, ("structure", "surface"))
+                ratio = pg["structure"] / np.maximum(pg["surface"], 1e-9)
+                u = np.array([u_of(rs[i], k) for i in idx])
+                idx = idx[u < np.minimum(1.0, ratio)]
+                if len(idx) < need:
+                    trace.append({"round": k + 1, "kept": int(len(idx))})
+                    break
+                a = cv_mean(T, idx, tasks, args.debias_folds, ("structure", "surface"))
+                trace.append({"round": k + 1, "kept": int(len(idx)), "gap": round(a["surface"] - a["structure"], 4)})
+                if a["surface"] - a["structure"] <= args.debias_tau:
+                    chosen = (k + 1, idx, None)
+                    break
+            ent["trace"] = trace
+        if chosen is None:
+            ent.update(status="dropped", kept=0)
+            report["dropped"].append(g)
+        else:
+            rounds, idx, after = chosen
+            sel = [rs[i] for i in idx]
+            ent.update(status="kept_all" if rounds is None else "selected", rounds=rounds, kept=len(sel),
+                       kept_share=round(len(sel) / n, 3),
+                       probe_after=after or cv_mean(T, idx, tasks, args.debias_folds),
+                       after=length_stats(sel, args.cap_max))
+            keep |= {(r["origin"], r["uid"]) for r in sel}
+        del T
+        report["groups"][g] = ent
+        print("debias", g, {k: v for k, v in ent.items() if k in ("n", "status", "rounds", "kept", "probe_before",
+                                                                 "probe_after")}, f"rss {rss_mb()} MB", flush=True)
+    out = [r for r in pool if r["origin"] not in origins or (r["origin"], r["uid"]) in keep]
+    report["pool_before"], report["pool_after"] = len(pool), len(out)
+    return out, report
+
+
+def probe_report(train: list[dict], evals: dict, caps: dict, folds: int) -> dict:
+    """Probes at the rendered lengths (the fitted per-trajectory caps), three levels (position, structure,
+    surface): (a) fit on all of train (fit_clogit_v), accuracy on every eval set (val, tests and their groups);
+    (b) within-train CV per debias_group (folds by task, one fold assignment)."""
+    import numpy as np
+    out: dict = {"fit_on_train": {}, "train_cv": {}}
+    T = {lev: tensor(train, caps, lev) for lev in LEVELS}
+    w = {lev: fit_clogit_v(*T[lev]) for lev in LEVELS}
+    del T
+    for name, rs in evals.items():
+        if not rs:
+            continue
+        e = {"n": len(rs)}
+        for lev in LEVELS:
+            X, mask, y = tensor(rs, caps, lev)
+            e[lev] = round(float((clogit_probs(X, mask, w[lev]).argmax(1) == y).mean()), 3)
+        out["fit_on_train"][name] = e
+    by = collections.defaultdict(list)
+    for r in train:
+        by[debias_group(r)].append(r)
+    for g, rs in sorted(by.items()):
+        if len(rs) < 2 * folds:
+            continue
+        T = {lev: tensor(rs, caps, lev) for lev in LEVELS}
+        acc, _ = cv_probe(T, np.arange(len(rs)), [fp.norm_task(r["task"]) for r in rs], 0, folds)
+        out["train_cv"][g] = {"n": len(rs)} | {k: round(v, 3) for k, v in acc.items()}
+    # (c) per group: probes fit on the group's train trajectories, applied to the group's trajectories of every
+    # top-level eval set (a model reads the framework off the log, so its fair position prior is per group); pooled
+    # per origin over the groups that have train data (groups without train data, e.g. dropped ones, are listed)
+    hits: dict = collections.defaultdict(lambda: collections.Counter())
+    out["fit_by_group"] = {}
+    for g, rs in sorted(by.items()):
+        if len(rs) < 2 * folds:
+            continue
+        w = {lev: fit_clogit_v(*tensor(rs, caps, lev)) for lev in LEVELS}
+        for name, es in evals.items():
+            sel = [r for r in es if "/" not in name and debias_group(r) == g]
+            if not sel:
+                continue
+            e = {"n": len(sel)}
+            for lev in LEVELS:
+                X, mask, y = tensor(sel, caps, lev)
+                e[lev] = int((clogit_probs(X, mask, w[lev]).argmax(1) == y).sum())
+                hits[f"{name}/{g.split('/')[0]}"][lev] += e[lev]
+            hits[f"{name}/{g.split('/')[0]}"]["n"] += len(sel)
+            out["fit_by_group"][f"{name}/{g}"] = {"n": len(sel)} | {lev: round(e[lev] / len(sel), 3) for lev in LEVELS}
+    out["fit_by_group_pooled"] = {k: {"n": c["n"]} | {lev: round(c[lev] / c["n"], 3) for lev in LEVELS}
+                                  for k, c in sorted(hits.items())}
+    out["fit_by_group_uncovered"] = {name: dict(collections.Counter(
+        debias_group(r) for r in es if debias_group(r) not in by or len(by[debias_group(r)]) < 2 * folds))
+        for name, es in evals.items() if "/" not in name}
+    return out
+
+
 def stage_build(args) -> None:
-    norm = ROOT / args.out / "norm"
+    norm = ROOT / args.norm if args.norm else ROOT / args.out / "norm"
     out, ev = ROOT / args.out, ROOT / args.eval_dir
     ev.mkdir(parents=True, exist_ok=True)
+    out.mkdir(parents=True, exist_ok=True)
     counts: collections.Counter = collections.Counter()
     tok = Tok(args.tokenizer)
     origins = [o for o in ORIGINS if (norm / f"{o}.jsonl").exists()]
@@ -374,6 +643,10 @@ def stage_build(args) -> None:
     pool = keep
     counts["pool/after_dedup"] = len(pool)
     print("dedup", dict(sorted(dedup.items())), f"rss {rss_mb()} MB", flush=True)
+    debias = None
+    if args.debias_length:                              # off: nothing below runs and nothing is consumed
+        pool, debias = debias_length(pool, args)
+        counts["pool/after_debias"] = len(pool)
     # ---- val (by task group), then per-source caps on what is left
     caps_cfg, share = json.loads(args.caps), json.loads(args.share)
 
@@ -432,6 +705,7 @@ def stage_build(args) -> None:
                           "train": describe(train), "val": describe(val),
                           "tests": {o: describe(rs) for o, rs in tests.items()}}, indent=1))
         return
+    del recs, pool, per, rest, by_k, keep, idx            # records no split uses (peak RSS); outputs unaffected
     # ---- caps, items
     allrecs = {"train": train, "val": val} | {f"test_{o}": rs for o, rs in tests.items()}
     cap_stats: dict = {}
@@ -523,6 +797,17 @@ def stage_build(args) -> None:
         f"val/{o}": [r for r in val if r["origin"] == o] for o in origins} | {
         f"test_wwpro/{fw}": [r for r in tests.get("wwpro", []) if r["subset"] == fw]
         for fw in sorted({r["subset"] for r in tests.get("wwpro", [])})}, caps, args.seed)
+    sets = {"val": val} | {name: rs for name, rs in allrecs.items() if name.startswith("test_")}
+    summary["length_probe"] = probe_report(train, sets | {
+        f"{name}/{g}": [r for r in rs if debias_group(r) == g] for name, rs in sets.items()
+        for g in sorted({debias_group(r) for r in rs})}, caps, args.debias_folds)
+    if debias is not None:
+        summary["debias"] = debias
+    if args.compare_eval:
+        ref = ROOT / args.compare_eval
+        summary["eval_vs_compare"] = {"dir": args.compare_eval, "same_md5": {
+            Path(p).name: (md5(ROOT / p) == md5(ref / Path(p).name)) if (ref / Path(p).name).exists() else None
+            for p in files if (ROOT / p).parent.resolve() == ev.resolve()}}
     summary["tokens"] = token_stats(files, tok)
     summary["audit"] = {"failures": len(fails), "examples": fails[:10]}
     for p in files:
@@ -601,6 +886,19 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--tokenizer", default=TOKENIZER)
     ap.add_argument("--dry", action="store_true", help="build: stop after the splits and print their statistics")
+    ap.add_argument("--norm", default=None, help="normalized records: written by normalize, read by build "
+                                                 "(default <out>/norm)")
+    ap.add_argument("--debias-length", default="",
+                    help="comma list of origins whose step-length tell is removed from the pool by within-group "
+                         "rejection sampling, unfixable groups dropped from train / val (debias_length); "
+                         "off by default, e.g. wwpro,aftraj,agentracer")
+    ap.add_argument("--debias-tau", type=float, default=0.01, help="largest accepted CV gap surface - structure")
+    ap.add_argument("--debias-min-share", type=float, default=1 / 3, help="smaller kept share: group dropped")
+    ap.add_argument("--debias-min-n", type=int, default=40, help="smaller kept set: group dropped; smaller group: kept")
+    ap.add_argument("--debias-folds", type=int, default=5)
+    ap.add_argument("--debias-rounds", type=int, default=8, help="most rejection rounds before a group is dropped")
+    ap.add_argument("--compare-eval", default=None,
+                    help="record whether every eval file written equals the same-named file of this dir (md5)")
     args = ap.parse_args()
     if not fp.precut_ok(args.cap_max):
         raise SystemExit(f"--cap-max {args.cap_max} > PRECUT {fp.PRECUT}")
@@ -613,7 +911,7 @@ def main() -> None:
             if args.stage == "normalize":
                 raise
             cmd = ["python3", "-P", "-E", str(Path(__file__).resolve()), "--stage", "normalize", "--raw", args.raw,
-                   "--out", args.out, "--origins", args.origins]
+                   "--out", args.out, "--origins", args.origins] + (["--norm", args.norm] if args.norm else [])
             print("normalize in a subprocess:", " ".join(cmd), flush=True)
             subprocess.run(cmd, check=True, cwd=os.environ.get("TMPDIR", "/tmp"))
     if args.stage in ("build", "all"):

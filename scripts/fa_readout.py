@@ -67,8 +67,7 @@ DEFAULT_EVAL = {
     "teag": "data/eval/fa1_traceelephant_test_agent.jsonl",
     "fa1v": "data/student_fa1/val.jsonl", "fa1va": "data/student_fa1/val_agent.jsonl",
 }
-VAL_BY_PREFIX = {"fa0-val": "data/student_fa0/val.jsonl", "fa1-val": "data/student_fa1/val.jsonl",
-                 "fa1b-val": "data/student_fa1b/val.jsonl"}
+VAL_BY_PREFIX = {"fa0-val": "data/student_fa0/val.jsonl", "fa1-val": "data/student_fa1/val.jsonl"}
 RUN_RE = re.compile(r"^(?P<arm>[^-]+)-(?P<tag>[^-]+)-(?P<model>.+)-(?P<data>student_[^-]+)-s(?P<seed>\d+)$")
 REL_BINS = [(-1.01, -0.5, "< -.5"), (-0.5, -0.2, "-.5..-.2"), (-0.2, -1e-9, "-.2..0"), (-1e-9, 1e-9, "0"),
             (1e-9, 0.2, "0..+.2"), (0.2, 0.5, "+.2..+.5"), (0.5, 1.01, "> +.5")]
@@ -372,11 +371,15 @@ def eval_map(run: Path, metrics: dict | None) -> dict[str, str]:
     return m
 
 
-def resolve(name: str, emap: dict, preds_first_id: str) -> Path | None:
+def resolve(name: str, emap: dict, preds_first_id: str, data: str = "") -> Path | None:
+    """Eval file of a preds file: metrics.json args.eval, DEFAULT_EVAL, and for "val" without metrics.json the run's
+    own data dir (data/<data token of the run name>/val.jsonl; fa1 and fa1b share item ids), else by id prefix."""
     path = emap.get(name)
     if path is None and name == "val":
+        if data and (ROOT / "data" / data / "val.jsonl").exists():
+            path = f"data/{data}/val.jsonl"
         for pre, p in VAL_BY_PREFIX.items():
-            if preds_first_id.startswith(pre + "-"):
+            if path is None and preds_first_id.startswith(pre + "-"):
                 path = p
     if path is None:
         return None
@@ -481,7 +484,7 @@ def analyse(args) -> dict:
             preds = read_preds(pf)
             if not preds:
                 continue
-            path = resolve(name, emap, next(iter(preds)))
+            path = resolve(name, emap, next(iter(preds)), r.get("data", ""))
             if path is None or not path.exists() or not is_fa_file(path):
                 if name in final:
                     other[r["name"]][name] = final[name].get("acc")
