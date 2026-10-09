@@ -42,11 +42,16 @@ class Example:
 
 def letter_token_ids(tokenizer, letters: list[str]) -> list[int]:
     """Token ids of ' A', ' B', ... (the token that follows 'Answer:'; under --chat-template the bare 'A', 'B', ...
-    that opens the assistant turn); each must be a single token."""
+    that opens the assistant turn); each must be a single token. A label whose spaced form is not one token but whose
+    bare form is (Qwen splits ' 0' into ' ' + '0': the digit labels 0-9 of option lists beyond A-Z, a-z) is read as the
+    bare token."""
     ids = []
     sp = "" if _chat(tokenizer) else " "      # --chat-template: the assistant turn opens with the bare letter
     for L in letters:
         t = tokenizer.encode(sp + L, add_special_tokens=False)
+        if len(t) != 1 and sp:
+            bare = tokenizer.encode(L, add_special_tokens=False)
+            t = bare if len(bare) == 1 else t
         if len(t) != 1:
             raise ValueError(f"label '{sp}{L}' is not a single token: {t}")
         ids.append(t[0])
@@ -167,7 +172,7 @@ def _soft(p_yes: float, yes_first: bool, eps: float = 1e-4) -> list[float]:
     return [p, 1 - p] if yes_first else [1 - p, p]
 
 
-_OPT_LINE = re.compile(r"^([A-Z])\) (.*)$")
+_OPT_LINE = re.compile(r"^([A-Za-z0-9])\) (.*)$")     # option symbols A-Z, a-z, 0-9 (lists of up to 62 options)
 
 
 def permute_options(prompt: str, labels: list[str], target: list[float], gold: int | None,

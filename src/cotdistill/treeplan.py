@@ -219,6 +219,9 @@ def statement_block(item: dict) -> str:
       operation sentences and the noise sentences in prompt order. The options follow on later lines and are dropped.
     - fa_tier0 (data/student_fa0, failure attribution): the log (header, task, optional reference answer, the steps)
       before "\n\nQuestion: ", i.e. without the attribution question and its step / agent options.
+    - fa_public (data/student_fa1, public failure-attribution logs): the log before the step or agent question (exact
+      text, the last occurrence) and its options; the log may contain "Question:" (tasks of MC benchmarks) but never a
+      line opening with "Options:" (fa_public.sanitize).
     - the sources of FINAL_QUESTION: the prompt before its last paragraph, which must be that source's final question
       (the only "Options:" block follows it; no earlier paragraph opens with "Question: ").
     Any other source, or a prompt that does not have this shape, raises ValueError (no clean definition)."""
@@ -245,6 +248,14 @@ def statement_block(item: dict) -> str:
                 or not head.startswith(_FA_HEADER)):
             raise ValueError(f"{iid}: fa_tier0 prompt is not log + Question + options")
         return head
+    if src == "fa_public":
+        for q in (_FA_Q_STEP, _FA_Q_AGENT):
+            head, sep, tail = p.rpartition("\n\n" + q + "\nOptions:\n")
+            if sep:
+                break
+        if not sep or not tail or "\n\n" in tail or "\nOptions:" in head or not head.startswith(_FA_HEADER):
+            raise ValueError(f"{iid}: fa_public prompt is not log + the step or agent question + options")
+        return head
     if src in FINAL_QUESTION:
         head, sep, opts = p.partition("\nOptions:\n")
         body, cut, last = head.rpartition("\n\n")
@@ -254,11 +265,14 @@ def statement_block(item: dict) -> str:
                              "paragraph + options")
         return body
     raise ValueError(f"{iid}: --tree-view statements has no statement block for source {src!r} "
-                     "(defined for knights_knaves, numgen, fa_tier0 and treeplan.FINAL_QUESTION; restrict with "
-                     "--tree-sources)")
+                     "(defined for knights_knaves, numgen, fa_tier0, fa_public and treeplan.FINAL_QUESTION; restrict "
+                     "with --tree-sources)")
 
 
 _FA_HEADER = "The log below comes from a multi-agent system that failed to solve its task.\n\nTask: "
+_FA_Q_STEP = ("Question: Which step contains the decisive error, i.e. the earliest mistake whose correction would have "
+              "let the system solve the task?")
+_FA_Q_AGENT = "Question: Which agent made the decisive error that caused the failure?"
 
 
 def problem_no_options(item: dict) -> str:
