@@ -569,7 +569,7 @@ def section(dom: str, groups: dict, arm: str, ref: str, args, meta_items: dict, 
             J["crossings"][f"{lab}/{vname}"] = res
             rows.append([lab, vname] + [f"{fx(res[f'{t:.2f}'])}" for t in thetas]
                         + [" / ".join(fl(res[f"{t:.2f}"]) for t in thetas), f"{res['logistic']['max_abs_resid']:.3f}"])
-    L += T(["arm", "seeds"] + [f"x @ {t:.2f}" for t in thetas] + ["logistic x", "logistic max |resid|"], rows)
+    L += T(["arm", "seeds"] + [f"x @ {t:.2f}" for t in thetas] + ["logistic x", "logistic max abs resid"], rows)
     L += ["", f"#### Shift {arm} - {ref} (horizontal, in {lvl}; positive = {arm} reaches the threshold later)", ""]
     common = sorted(set(groups[arm]) & set(groups[ref]))
     J["shift"] = {}
@@ -588,6 +588,8 @@ def section(dom: str, groups: dict, arm: str, ref: str, args, meta_items: dict, 
              f"{e['gain']:+.1f} [{e['gain_ci'][0]:+.1f},{e['gain_ci'][1]:+.1f}]"
              + (f" (ref<=min {e['censored_low']:.1%})" if e["censored_low"] else "")]
             for d, e in pooled["equiv"].items()])
+    L += ["", "(The per-level gains inherit the flat segments of the isotonic fits, e.g. levels pooled into one PAV block "
+          "share one accuracy and one equivalent; the threshold shifts above are the headline numbers.)"]
     ks = pooled["kstar"]
     L += ["", f"#### \"{arm} at d >= {ref} at d-k\" (pooled; raw level means)", "",
           f"k* (largest k holding at every d): raw all d {fk(ks['raw_all'])}, raw d >= {beyond} "
