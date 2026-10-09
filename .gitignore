@@ -9,6 +9,7 @@ env/
 
 # ---- Docs, notes & planning (kept local, not committed) ----
 *.md
+!README.md
 research/
 notes/
 docs/
