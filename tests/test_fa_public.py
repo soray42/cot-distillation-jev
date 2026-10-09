@@ -345,7 +345,8 @@ class TestStatementBlock(unittest.TestCase):
                                            "the cat eat the food?",
                   "goldproof/ruletaker": "Question: Does the statement follow from the context? What is not "
                                          "explicitly stated as true is considered false."}
-        self.assertEqual(set(finals), set(treeplan.FINAL_QUESTION))
+        # pronto came after e7bc9f4 (its own check of the other entries: tests/test_pronto_tf.py)
+        self.assertEqual(set(finals), set(treeplan.FINAL_QUESTION) - {"pronto"})
         for src, q in finals.items():
             items.append({"item_id": src, "source": src, "prompt": f"Fact one.\nFact two.\n\n{q}\nOptions:\nA) x\nB) y"})
         return items
