@@ -727,3 +727,102 @@ def audit_item(item: dict) -> list[str]:
 
 def stable_hash(*parts) -> int:
     return int(hashlib.md5("|".join(map(str, parts)).encode()).hexdigest()[:12], 16)
+
+
+# ------------------------------------------------------------------------------------------------- cleaning (--clean)
+# Version v1 (notes/next_round/failure_attribution/label_audit.md; the n-gram probe scripts/fa_ngram_probe.py):
+#   text rules   injector-produced strings rewritten in every step, the task and the reference answer of every record of
+#                their scope (pool and test alike, gold step or not), so no rule string survives anywhere
+#   meta leak    agentracer / aftraj trajectories whose original text narrates the injection (the agent discusses the
+#                injected instruction or its boilerplate): not attribution items; dropped from train / val and from the
+#                cleaned test files
+#   group drops  (origin/subset[/benchmark] as debias_group) dropped from train / val, kept in the test files
+#                (CLEAN_DROP_GROUPS: mislabelled or lexically separable groups, with the evidence)
+#   flags        agentracer coding test records carry "label_unreliable" (the labelled step is the agent's logged input
+#                prompt in 56% of the trajectories; shifting it to the next output step was checked on 24 items and
+#                recovered a visibly erroneous step in 10)
+TEXT_RULES = (
+    # (name, scope: origins or origin/subset keys, pattern, replacement)
+    ("attacked_filename", ("*",), re.compile(r"_attacked_solution", re.I), "_solution"),
+    ("i_am_at_step", ("*",), re.compile(r"\bI am at step \d+\b[^.!?\n]*[.!?]?[ \t]*", re.I), ""),
+    ("system_override", ("*",), re.compile(r"\b(?:mandatory\s+)?system\s+override(\s+instructions?)?\b", re.I),
+     lambda m: "instructions" if m.group(1) else "instruction"),
+    # Who&When Pro smolagents: replayed steps keep the original model's ```python fences, the injected and live steps
+    # use <code> tags (the parsed code follows as "Code:\n```py" in both)
+    ("code_fence_python", ("wwpro/smolagents",), re.compile(r"```python\b"), "```py"),
+    ("code_tags", ("wwpro/smolagents",), re.compile(r"</?code>|<end_code>"), ""),
+)
+META_ORIGINS = ("agentracer", "aftraj")
+META = re.compile(
+    r"inject(?:ed|ion)?\s+(?:error|instruction|information|requirement|content)|error[ -]injection|stealth(?:y|ily)|"
+    r"system\s+override|mandatory\s+(?:\w+\s+){0,2}(?:requirement|override|instruction)|implementation requirement|"
+    r"exactly as specified|(?:verify|correct) (?:the )?injected|\bI am at step \d+", re.I)
+CLEAN_DROP_GROUPS = {
+    "agentracer/coding/coding": "labels: the labelled step is the logged input prompt in 56%; next-step shift visibly "
+                                "erroneous in 10 / 24 checked",
+    "wwpro/debate": "an agent already wrong before the injected turn in 57% of MC traces; n-gram probe +41 points",
+    "wwpro/dylan": "an agent already wrong before the injected turn in 57% of MC traces; single phrase 'answer' (-) "
+                   "+24 points held-out",
+    "agentracer/agentic/Injection Error": "injected think boilerplate ('as specified', 'required', 'implement') "
+                                         "+18 points held-out after the meta-leak drop",
+    "aftraj/agentic/injected": "single phrase 'Thought: I need' (-) +20 points held-out (n 88)",
+    "agentracer/math/math": "labels: after the meta-leak drop 6 / 8 checked items have no error at the labelled step "
+                            "(a correct step labelled, or the error in another step) and 12% end with the reference "
+                            "answer (the injection did not take)",
+}
+LABEL_FLAGS = {"agentracer/coding/coding": "label_unreliable"}
+
+
+def clean_group(rec: dict) -> str:
+    """build_fa_public.debias_group: origin/subset, with the benchmark (provenance) for aftraj and agentracer."""
+    key = f"{rec['origin']}/{rec['subset']}"
+    return key + f"/{rec['benchmark']}" if rec["origin"] in ("aftraj", "agentracer") else key
+
+
+def _in_scope(scope: tuple, rec: dict) -> bool:
+    return "*" in scope or rec["origin"] in scope or f"{rec['origin']}/{rec['subset']}" in scope
+
+
+def meta_leak(rec: dict) -> bool:
+    """The original text narrates the injection (META in a step or the task; agentracer and aftraj only)."""
+    if rec["origin"] not in META_ORIGINS:
+        return False
+    return bool(META.search(rec["task"])) or any(META.search(s["text"]) for s in rec["steps"])
+
+
+def clean_text(rec: dict, counts=None) -> dict:
+    """A copy of rec with every TEXT_RULES rule of its scope applied to every step, the task and the answer; counts
+    (a Counter) gets rule -> number of strings changed. Agent names, labels and step count are unchanged."""
+    out = dict(rec)
+
+    def sub(text):
+        if not text:
+            return text
+        for name, scope, pat, rep in TEXT_RULES:
+            if _in_scope(scope, rec):
+                text, k = pat.subn(rep, text)
+                if k and counts is not None:
+                    counts[name] += k
+        return text
+    out["steps"] = [dict(s, text=sub(s["text"])) for s in rec["steps"]]
+    out["task"] = sub(rec["task"])
+    out["answer"] = sub(rec.get("answer"))
+    return out
+
+
+def clean_record(rec: dict, version: str, drop_groups=None, counts=None) -> tuple[dict, str | None]:
+    """(cleaned record, drop reason or None). Reasons: "meta_leak" (drop everywhere) and "group:<key>" (drop from train
+    / val only; test records keep their place). Label flags of LABEL_FLAGS are added to the record's flags."""
+    if version != "v1":
+        raise ValueError(f"unknown clean version {version!r}")
+    groups = CLEAN_DROP_GROUPS if drop_groups is None else drop_groups
+    leak = meta_leak(rec)
+    out = clean_text(rec, counts)
+    g = clean_group(rec)
+    if g in LABEL_FLAGS and LABEL_FLAGS[g] not in out["flags"]:
+        out["flags"] = list(out["flags"]) + [LABEL_FLAGS[g]]
+    if leak:
+        return out, "meta_leak"
+    if g in groups:
+        return out, f"group:{g}"
+    return out, None

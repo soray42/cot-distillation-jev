@@ -38,6 +38,23 @@ sets are untouched, so the eval files stay the same (--compare-eval data/eval ch
       --eval-dir data/student_fa1b/eval_check --compare-eval data/eval --debias-length wwpro,aftraj,agentracer
   -> summary.json debias (per group: probes before / after, rounds, kept, dropped) and length_probe (both modes:
      probes fit on train applied to val / tests, within-train CV, per-group fitted probes)
+
+Cleaning (off by default; off = the e00ab58 / 4a79d36 outputs byte for byte, tests/test_fa_public.py TestClean):
+--clean v1 (fa_public.clean_record; label_audit.md and the n-gram probe scripts/fa_ngram_probe.py) runs after dedup and
+before the length debias, on the pool and on the test records: injector-produced strings rewritten in every step
+(fa_public.TEXT_RULES: the "_attacked_solution" file names, "I am at step N ..." sentences, "system override",
+smolagents' replay / live code-fence formats); agentracer / aftraj trajectories that narrate the injection
+(fa_public.META) dropped from train / val and from the cleaned test files; --clean-drop-groups (default
+fa_public.CLEAN_DROP_GROUPS: AgenTracer coding and math, WW-Pro debate / dylan, AgenTracer agentic Injection Error, AFTraj
+agentic injected) dropped from train / val and kept in the test files (AgenTracer coding test records flagged
+label_unreliable).
+Test files are written with --eval-suffix (default _c under --clean) and kept only where they differ from the
+unsuffixed file of --compare-eval (default --eval-dir), so the original eval files are never overwritten and an
+unchanged test set keeps its original file (summary.json clean.eval_files says which file to use):
+
+  cd <scratch> && CUDA_VISIBLE_DEVICES= OMP_NUM_THREADS=2 ~/.venvs/sev/bin/python -P -E \\
+      ~/projects/jev/scripts/build_fa_public.py --stage build --norm data/student_fa1/norm --out data/student_fa1c \\
+      --debias-length wwpro,aftraj,agentracer --clean v1
 """
 from __future__ import annotations
 
@@ -574,6 +591,60 @@ def probe_report(train: list[dict], evals: dict, caps: dict, folds: int) -> dict
     return out
 
 
+def clean_sets(pool: list[dict], tests: dict, args) -> tuple[list[dict], dict, dict]:
+    """--clean: fa_public.clean_record on every pool and test record (after dedup, before the length debias). Pool
+    records with a drop reason leave the pool; test records leave their test set only for "meta_leak" (group drops
+    are train / val only). Returns the pool, the test sets and the report (rules, per-group counts, dropped groups for
+    fa_readout's dagger, test uids dropped or kept although their group left train)."""
+    if args.clean_drop_groups is None:
+        drop = dict(fp.CLEAN_DROP_GROUPS)
+    else:
+        drop = {g: fp.CLEAN_DROP_GROUPS.get(g, "--clean-drop-groups") for g in args.clean_drop_groups.split(",") if g}
+    rep: dict = {"version": args.clean, "text_rules": [
+        {"name": n, "scope": list(sc), "pattern": pat.pattern, "replacement": rp if isinstance(rp, str) else
+         "instruction(s)"} for n, sc, pat, rp in fp.TEXT_RULES],
+        "meta_regex": fp.META.pattern, "meta_origins": list(fp.META_ORIGINS), "drop_groups": drop,
+        "label_flags": fp.LABEL_FLAGS, "pool": {}, "test": {}, "substitutions": {}}
+    subs: dict = collections.defaultdict(collections.Counter)
+    per: dict = collections.defaultdict(collections.Counter)
+    out = []
+    for r in pool:
+        c: collections.Counter = collections.Counter()
+        r2, why = fp.clean_record(r, args.clean, drop, c)
+        g = fp.clean_group(r)
+        subs[f"pool/{g}"].update(c)
+        per[g]["n"] += 1
+        if why:
+            per[g][why.split(":")[0]] += 1
+        else:
+            per[g]["kept"] += 1
+            out.append(r2)
+    rep["pool"] = {g: dict(c) for g, c in sorted(per.items())}
+    rep["dropped"] = sorted(g for g, c in per.items() if not c["kept"])
+    new_tests: dict = {}
+    for o, rs in tests.items():
+        keep, info = [], collections.defaultdict(list)
+        for r in rs:
+            c = collections.Counter()
+            r2, why = fp.clean_record(r, args.clean, drop, c)
+            g = fp.clean_group(r)
+            subs[f"test_{o}/{g}"].update(c)
+            if why == "meta_leak":
+                info["dropped_meta_leak"].append(r["uid"])
+                continue
+            if why:
+                info["kept_group_dropped_from_train"].append(r["uid"])
+            if r2["flags"] != r["flags"]:
+                info["flagged_" + "_".join(sorted(set(r2["flags"]) - set(r["flags"])))].append(r["uid"])
+            keep.append(r2)
+        new_tests[o] = keep
+        rep["test"][o] = {"n_before": len(rs), "n_after": len(keep)} | {k: {"n": len(v), "uids": sorted(v)}
+                                                                         for k, v in sorted(info.items())}
+    rep["substitutions"] = {k: dict(v) for k, v in sorted(subs.items()) if v}
+    print("clean", {g: dict(c) for g, c in sorted(per.items())}, f"rss {rss_mb()} MB", flush=True)
+    return out, new_tests, rep
+
+
 def stage_build(args) -> None:
     norm = ROOT / args.norm if args.norm else ROOT / args.out / "norm"
     out, ev = ROOT / args.out, ROOT / args.eval_dir
@@ -643,6 +714,11 @@ def stage_build(args) -> None:
     pool = keep
     counts["pool/after_dedup"] = len(pool)
     print("dedup", dict(sorted(dedup.items())), f"rss {rss_mb()} MB", flush=True)
+    test_order = {o: {u: k for k, u in enumerate(sorted(r["uid"] for r in rs))} for o, rs in tests.items()}
+    clean = None
+    if args.clean:                                      # off: nothing below runs and nothing is consumed
+        pool, tests, clean = clean_sets(pool, tests, args)
+        counts["pool/after_clean"] = len(pool)
     debias = None
     if args.debias_length:                              # off: nothing below runs and nothing is consumed
         pool, debias = debias_length(pool, args)
@@ -743,11 +819,12 @@ def stage_build(args) -> None:
                 agents.append(a)
         write(out / f"{split}.jsonl", steps)
         write(out / f"{split}_agent.jsonl", agents)
+    sfx = args.eval_suffix
     for o, rs in tests.items():
         rs = sorted(rs, key=lambda r: r["uid"])
         steps, gts, agents = [], [], []
-        for k, r in enumerate(rs):
-            iid = f"fa1-{o}-test-{k:05d}"
+        for r in rs:
+            iid = f"fa1-{o}-test-{test_order[o][r['uid']]:05d}"          # the id of the uncleaned set
             s, a = fp.make_items(r, iid, f"fa1/{o}", cap=caps[r["uid"]], with_gt=False,
                                  rng=random.Random(f"fa1|{args.seed}|{r['uid']}|items"))
             bad = fp.audit_item(s)
@@ -763,9 +840,22 @@ def stage_build(args) -> None:
                 gts.append(g)
             if a:
                 agents.append(a)
-        write(ev / f"fa1_{o}_test.jsonl", steps)
-        write(ev / f"fa1_{o}_test_gt.jsonl", gts)
-        write(ev / f"fa1_{o}_test_agent.jsonl", agents)
+        write(ev / f"fa1_{o}_test{sfx}.jsonl", steps)
+        write(ev / f"fa1_{o}_test_gt{sfx}.jsonl", gts)
+        write(ev / f"fa1_{o}_test_agent{sfx}.jsonl", agents)
+    if sfx:                       # suffixed eval files are kept only where they differ from the unsuffixed reference
+        ref_dir = ROOT / (args.compare_eval or args.eval_dir)
+        decided = {}
+        for p in [p for p in files if (ROOT / p).parent.resolve() == ev.resolve()]:
+            ref = ref_dir / (Path(p).name[:-len(sfx + ".jsonl")] + ".jsonl")
+            if ref.exists() and md5(ROOT / p) == md5(ref):
+                (ROOT / p).unlink()
+                del files[p]
+                decided[Path(p).name] = f"unchanged: use {ref.relative_to(ROOT) if ref.is_relative_to(ROOT) else ref}"
+            else:
+                decided[Path(p).name] = "written" if ref.exists() else "written (no reference file)"
+        if clean is not None:
+            clean["eval_files"] = decided
     print("written", files, f"rss {rss_mb()} MB", flush=True)
     # ---- statistics
     summary: dict = {"args": vars(args), "library": "src/cotdistill/fa_public.py", "source": fp.SOURCE,
@@ -803,7 +893,9 @@ def stage_build(args) -> None:
         for g in sorted({debias_group(r) for r in rs})}, caps, args.debias_folds)
     if debias is not None:
         summary["debias"] = debias
-    if args.compare_eval:
+    if clean is not None:
+        summary["clean"] = clean
+    if args.compare_eval and not sfx:
         ref = ROOT / args.compare_eval
         summary["eval_vs_compare"] = {"dir": args.compare_eval, "same_md5": {
             Path(p).name: (md5(ROOT / p) == md5(ref / Path(p).name)) if (ref / Path(p).name).exists() else None
@@ -898,8 +990,21 @@ def main() -> None:
     ap.add_argument("--debias-folds", type=int, default=5)
     ap.add_argument("--debias-rounds", type=int, default=8, help="most rejection rounds before a group is dropped")
     ap.add_argument("--compare-eval", default=None,
-                    help="record whether every eval file written equals the same-named file of this dir (md5)")
+                    help="record whether every eval file written equals the same-named file of this dir (md5); with "
+                         "--eval-suffix the reference dir of the suffixed files")
+    ap.add_argument("--clean", default="", choices=("", "v1"),
+                    help="label / artefact cleaning (fa_public.clean_record; off by default): v1")
+    ap.add_argument("--clean-drop-groups", default=None,
+                    help="comma list of groups (origin/subset[/benchmark]) dropped from train / val under --clean "
+                         "(default fa_public.CLEAN_DROP_GROUPS)")
+    ap.add_argument("--eval-suffix", default=None,
+                    help="suffix of the test files written (default '' and, under --clean, _c); suffixed files equal "
+                         "to the unsuffixed reference (--compare-eval, else --eval-dir) are removed again")
     args = ap.parse_args()
+    if args.eval_suffix is None:
+        args.eval_suffix = "_c" if args.clean else ""
+    if args.clean and not args.eval_suffix:
+        raise SystemExit("--clean writes cleaned test files: give a non-empty --eval-suffix (the originals stay)")
     if not fp.precut_ok(args.cap_max):
         raise SystemExit(f"--cap-max {args.cap_max} > PRECUT {fp.PRECUT}")
     if args.stage in ("normalize", "all"):

@@ -9,8 +9,8 @@ from metrics.json args.eval, else DEFAULT_EVAL; "val" without metrics.json is re
               the first maximum); accuracy is checked against metrics.json eval.<name>.acc when present.
   breakdown   per group key: fa.origin/fa.subset (Who&When Pro framework, AgenTracer / AFTraj domain), with
               fa.benchmark appended for aftraj and agentracer (injected / diagnosed provenance); else the item group.
-              Keys that a run's training data dropped (debias.dropped in the summary.json next to its --train file,
-              or --dropped) are flagged.
+              Keys that a run's training data dropped (debias.dropped and clean.dropped in the summary.json next to
+              its --train file, or --dropped) are flagged.
   rel. error  step items: (predicted - gold step) / (n - 1), binned, with the early / exact / late shares.
   baselines   step files: chance (mean 1/n, expected), always first step, always step 1, always last step, best
               constant index (fit on the file: oracle), best constant relative position round(r (n-1)) on a 0.05 grid
@@ -66,6 +66,11 @@ DEFAULT_EVAL = {
     "te": "data/eval/fa1_traceelephant_test.jsonl", "tegt": "data/eval/fa1_traceelephant_test_gt.jsonl",
     "teag": "data/eval/fa1_traceelephant_test_agent.jsonl",
     "fa1v": "data/student_fa1/val.jsonl", "fa1va": "data/student_fa1/val_agent.jsonl",
+    # cleaned test files (build_fa_public.py --clean v1; written only where cleaning changed the file)
+    "wwproc": "data/eval/fa1_wwpro_test_c.jsonl", "wwprocgt": "data/eval/fa1_wwpro_test_gt_c.jsonl",
+    "agtrc": "data/eval/fa1_agentracer_test_c.jsonl", "agtrcgt": "data/eval/fa1_agentracer_test_gt_c.jsonl",
+    "agtrcag": "data/eval/fa1_agentracer_test_agent_c.jsonl",
+    "fa1cv": "data/student_fa1c/val.jsonl", "fa1cva": "data/student_fa1c/val_agent.jsonl",
 }
 VAL_BY_PREFIX = {"fa0-val": "data/student_fa0/val.jsonl", "fa1-val": "data/student_fa1/val.jsonl"}
 RUN_RE = re.compile(r"^(?P<arm>[^-]+)-(?P<tag>[^-]+)-(?P<model>.+)-(?P<data>student_[^-]+)-s(?P<seed>\d+)$")
@@ -395,7 +400,8 @@ def dropped_for(metrics: dict | None, extra: list[str]) -> list[str]:
             s = ROOT / Path(t).parent / "summary.json"
             if s.exists():
                 try:
-                    out += json.loads(s.read_text()).get("debias", {}).get("dropped", [])
+                    summ = json.loads(s.read_text())
+                    out += (summ.get("debias") or {}).get("dropped", []) + (summ.get("clean") or {}).get("dropped", [])
                 except (ValueError, OSError):
                     pass
     return sorted(set(out))
@@ -641,7 +647,7 @@ def report(res: dict) -> str:
                 L.append(f"| {k} | {v['n']} | " + " | ".join(cells) + " |")
             if any(v["runs"][r]["dropped_from_train"] for v in f["breakdown"].values() for r in rn):
                 L.append("")
-                L.append("† group dropped from this run's training data (length-leak debias).")
+                L.append("† group dropped from this run's training data (length-leak debias or --clean).")
         if f["kind"] == "step" and f["runs"]:
             L.append("")
             L.append("Relative position error (pred − gold) / (n − 1):")

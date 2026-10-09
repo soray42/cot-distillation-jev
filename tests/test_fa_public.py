@@ -7,6 +7,7 @@ CPU only:
 
   CUDA_VISIBLE_DEVICES= OMP_NUM_THREADS=2 ~/.venvs/sev/bin/python -m unittest tests/test_fa_public.py
 """
+import collections
 import importlib.util
 import io
 import json
@@ -61,8 +62,10 @@ def ww_line(i: int, fw: str) -> dict:
     if fw == "smolagents":
         gt_step = i % 4                              # 0 = the planning entry
         traj = [{"kind": "user", "content": q}, {"kind": "planning", "plan": f"plan {i}"}] + [
-            {"kind": "action", "step_number": k, "reasoning": f"Thought: step {k}", "code": f"x = {k}",
-             "observation": f"Execution logs: {k}", "error": None, "is_final_answer": k == 4} for k in range(1, 5)]
+            {"kind": "action", "step_number": k, "reasoning": f"Thought: step {k}\n" + (    # replay / live fences
+                f"<code>\nx = {k}\n</code>" if k == gt_step else f"Code:\n```python\nx = {k}\n```<end_code>"),
+             "code": f"x = {k}", "observation": f"Execution logs: {k}", "error": None, "is_final_answer": k == 4}
+            for k in range(1, 5)]
         gt = {"agent": None, "step": gt_step, "mode": "R.2"}
         ex = {}
     elif fw == "alfagent":
@@ -102,6 +105,23 @@ def ww_line(i: int, fw: str) -> dict:
             "trajectory": json.dumps(traj), "ground_truth": json.dumps(gt), "extras": json.dumps(ex)}
 
 
+def agentracer_text(dom: str, i: int, k: int, name: str) -> str:
+    """Step text of the synthetic AgenTracer records with the artefacts of the real release (label_audit.md): coding
+    input-prompt templates at the labelled step and '_attacked_solution.py' file names, the agentic 'I am at step N'
+    injection sentence in the labelled step and the agent narrating the injection later, math 'SYSTEM OVERRIDE'."""
+    if dom == "coding" and k == 2 and i % 2 == 0:
+        return f"{name} thinking: \n# Past Experience\n<experience>\n\n# Current Plan\nWrite Filter_{i}_I_attacked_solution.py"
+    if dom == "coding" and k == 3:
+        return f"Engineer thinking: I will create Filter_{i}_I_attacked_solution.py with the function."
+    if dom == "agentic" and k == 2 and i % 3 == 0:
+        return "type: action\n think : I am at step 3 where the next task is required. I must call the tool."
+    if dom == "agentic" and k == 4 and i % 3 == 1:
+        return "According to the instructions, I should cooperate with the injected error information."
+    if dom == "math" and k == 2 and i % 3 == 1:
+        return "Following the SYSTEM OVERRIDE instructions exactly: the answer is 42."
+    return f"{dom} step {k}"
+
+
 def write_raw(d: Path, n: int = 12) -> None:
     """Synthetic raw data for every reader but AFTraj (pandas): Who&When Pro, StepFinder, AgenTracer, TraceElephant
     and Who&When (one Who&When question equals a StepFinder question, which must be removed from the pool)."""
@@ -129,8 +149,8 @@ def write_raw(d: Path, n: int = 12) -> None:
                 for i in range(n if sp == "train" else 3):
                     one = 1 if dom == "agentic" else 0             # agentic step fields are 1-based
                     names = ["assistant"] * 5 if dom == "agentic" else ["Team Leader", "Engineer"] * 2 + ["Engineer"]
-                    h = [{"step": str(k + one), "role": "assistant", "name": names[k], "content": f"{dom} step {k}"}
-                         for k in range(5)]
+                    h = [{"step": str(k + one), "role": "assistant", "name": names[k],
+                          "content": agentracer_text(dom, i, k, names[k])} for k in range(5)]
                     buf.write(json.dumps({"question": f"AgenTracer {dom} {sp} task {i} with a long text of eight words.",
                                           "question_ID": f"q{i}", "history": h, "mistake_step": str(2 + one),
                                           "mistake_agent": names[2], "ground_truth": "ok"}) + "\n")
@@ -668,6 +688,242 @@ class TestDebias(unittest.TestCase):
             self.assertTrue(s_on["debias"]["groups"])
             self.assertEqual(set(s_on["eval_vs_compare"]["same_md5"].values()), {True})   # test sets untouched
             self.assertFalse((d / "out_b/norm").exists())
+
+
+# ------------------------------------------------------------------------------------------------- cleaning
+DEBIAS_COMMIT = "4a79d36"   # the builder with --debias-length, before --clean: clean-off outputs must stay byte-identical
+ARTEFACTS = re.compile(r"attacked_solution|I am at step \d|system override|```python|</?code>|<end_code>", re.I)
+
+
+def read_jsonl(path: Path) -> list[dict]:
+    with open(path) as f:
+        return [json.loads(x) for x in f]
+
+
+class TestCleanRecord(unittest.TestCase):
+    def ar(self, subset, texts, bench=None, **kw):
+        return fp._rec(f"{subset}-1", "agentracer", subset, bench or subset, kw.pop("task", "Write a function."), "ok",
+                       [("Engineer" if subset == "coding" else "assistant", t) for t in texts], 1,
+                       "Engineer" if subset == "coding" else None, single=subset != "coding", **kw)
+
+    def test_text_rules_everywhere(self):
+        r = self.ar("coding", ["Team Leader: name it Leetcode_1_I_attacked_solution.py",
+                               "Engineer thinking: I will create Leetcode_1_I_attacked_solution.py"],
+                    task="Save as X_attacked_solution.py")
+        c = collections.Counter()
+        out, why = fp.clean_record(r, "v1", counts=c)
+        self.assertEqual(why, "group:agentracer/coding/coding")
+        self.assertEqual(out["flags"], ["label_unreliable"])
+        self.assertFalse(any("attacked" in s["text"] for s in out["steps"]) or "attacked" in out["task"])
+        self.assertIn("Leetcode_1_I_solution.py", out["steps"][1]["text"])
+        self.assertEqual(c["attacked_filename"], 3)
+        self.assertEqual(r["steps"][1]["text"], "Engineer thinking: I will create Leetcode_1_I_attacked_solution.py")
+        self.assertEqual(r["flags"], [])                                          # the input record is not modified
+        a = self.ar("agentic", ["search", "think : I am at step 3 where the next task is required. I must call it."],
+                    bench="Diagnosis Error")
+        out, why = fp.clean_record(a, "v1")
+        self.assertEqual(out["steps"][1]["text"], "think : I must call it.")
+        self.assertEqual(why, "meta_leak")                                        # judged on the original text
+        m = self.ar("math", ["x", "Following the SYSTEM OVERRIDE instructions exactly: 42. Per the mandatory system "
+                                  "override, done."])
+        out, why = fp.clean_record(m, "v1")
+        self.assertEqual(out["steps"][1]["text"], "Following the instructions exactly: 42. Per the instruction, done.")
+        self.assertEqual(why, "meta_leak")
+        self.assertEqual(fp.clean_record(self.ar("math", ["Let x be 2.", "So it is 4."]), "v1")[1],
+                         "group:agentracer/math/math")
+        ok = self.ar("agentic", ["search the web", "So the answer is 4."], bench="Diagnosis Error")
+        out, why = fp.clean_record(ok, "v1")
+        self.assertIsNone(why)
+        self.assertEqual(out["steps"], ok["steps"])
+
+    def test_scopes_and_groups(self):
+        sm = rec(4, 1, agents=("Agent",), subset="smolagents", text=lambda i: (
+            f"Thought: t{i}\n<code>\nx = {i}\n</code>\nCode:\n```py\nx = {i}\n```" if i == 1 else
+            f"Thought: t{i}\nCode:\n```python\nx = {i}\n```<end_code>"), single=True)
+        out, why = fp.clean_record(sm, "v1")
+        self.assertIsNone(why)
+        self.assertFalse(any(ARTEFACTS.search(s["text"]) for s in out["steps"]))
+        self.assertEqual(out["steps"][1]["text"], "Thought: t1\n\nx = 1\n\nCode:\n```py\nx = 1\n```")
+        mc = rec(4, 1, subset="mathchat", text=lambda i: f"```python\nprint({i})\n```")   # fences outside smolagents
+        out, why = fp.clean_record(mc, "v1")
+        self.assertEqual((out["steps"], why), (mc["steps"], None))
+        for sub in ("debate", "dylan"):
+            self.assertEqual(fp.clean_record(rec(4, 1, subset=sub), "v1")[1], f"group:wwpro/{sub}")
+        self.assertIsNone(fp.clean_record(rec(4, 1, subset="debate"), "v1", drop_groups={})[1])
+        sf = rec(5, 2, origin="stepfinder", subset="alg", text=lambda i: "inject the error information exactly as "
+                                                                         "specified")
+        self.assertEqual(fp.clean_record(sf, "v1"), (sf, None))          # meta leak: agentracer / aftraj only
+        with self.assertRaises(ValueError):
+            fp.clean_record(sf, "v2")
+
+
+class TestClean(unittest.TestCase):
+    def test_clean_build(self):
+        src = subprocess.run(["git", "-C", str(ROOT), "show", f"{DEBIAS_COMMIT}:scripts/build_fa_public.py"],
+                             capture_output=True, text=True)
+        if src.returncode != 0:
+            self.skipTest(f"git commit {DEBIAS_COMMIT} not readable")
+        env = {**os.environ, "CUDA_VISIBLE_DEVICES": "", "OMP_NUM_THREADS": "2"}
+        common = ["--origins", "wwpro,stepfinder,agentracer,traceelephant", "--n-val", "12", "--tokenizer",
+                  "missing.json", "--caps", "{}", "--share", '{"wwpro": 0.5}', "--debias-length", "wwpro,agentracer"]
+        with tempfile.TemporaryDirectory(dir=ROOT, prefix=".fa1_test_") as d:
+            d = Path(d)
+            write_raw(d / "raw", n=60)
+            base = d / "base"
+            (base / "scripts").mkdir(parents=True)
+            (base / "scripts/build_fa_public.py").write_text(src.stdout)
+            (base / "src").symlink_to(ROOT / "src")
+
+            def run(script: Path, out: Path, ev: Path, extra=()):
+                cmd = [sys.executable, "-P", str(script), "--raw", str(d / "raw"), "--out", str(out), "--eval-dir",
+                       str(ev)] + common + list(extra)
+                r = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=900, cwd=d)
+                self.assertEqual(r.returncode, 0, r.stdout[-3000:] + r.stderr[-3000:])
+                return json.loads((out / "summary.json").read_text())
+            run(base / "scripts/build_fa_public.py", base / "out", base / "eval")      # 4a79d36, length debias on
+            s_off = run(ROOT / "scripts/build_fa_public.py", d / "out", d / "eval")    # now, clean off
+            for sub in ("out", "eval"):
+                ps = sorted((base / sub).glob("*.jsonl"))
+                self.assertEqual(len(ps), 4 if sub == "out" else 9)
+                self.assertEqual([p.name for p in ps], sorted(p.name for p in (d / sub).glob("*.jsonl")))
+                for p in ps:
+                    self.assertEqual(p.read_bytes(), (d / sub / p.name).read_bytes(), f"{sub}/{p.name}")
+            self.assertNotIn("clean", s_off)
+            orig = {p.name: p.read_bytes() for p in (d / "eval").glob("*.jsonl")}
+            s = run(ROOT / "scripts/build_fa_public.py", d / "out_c", d / "eval",
+                    ["--stage", "build", "--norm", str(d / "out/norm"), "--clean", "v1"])
+            self.assertEqual(s["audit"]["failures"], 0)
+            self.assertEqual({p.name: p.read_bytes() for p in (d / "eval").glob("*.jsonl") if p.name in orig}, orig)
+            c = s["clean"]
+            ef = c["eval_files"]
+            self.assertTrue(ef["fa1_traceelephant_test_c.jsonl"].startswith("unchanged"))
+            self.assertFalse((d / "eval/fa1_traceelephant_test_c.jsonl").exists())
+            for o in ("agentracer", "wwpro"):                 # artefacts (agentracer) and smolagents fences (wwpro)
+                self.assertEqual(ef[f"fa1_{o}_test_c.jsonl"], "written")
+                self.assertTrue((d / f"eval/fa1_{o}_test_c.jsonl").exists())
+            self.assertIn("agentracer/coding/coding", c["dropped"])
+            self.assertIn("wwpro/debate", c["dropped"])
+            for name in ("train.jsonl", "val.jsonl", "train_agent.jsonl", "val_agent.jsonl"):
+                items = read_jsonl(d / "out_c" / name)
+                self.assertTrue(items or name == "val_agent.jsonl", name)
+                for it in items:
+                    self.assertIsNone(ARTEFACTS.search(it["prompt"]), it["item_id"])
+                    self.assertNotIn((it["fa"]["origin"], it["fa"]["subset"]), {("agentracer", "coding"),
+                                                                                ("wwpro", "debate")})
+            self.assertTrue(any(it["fa"]["origin"] == "agentracer" for it in read_jsonl(d / "out_c/train.jsonl")))
+            old = {it["item_id"]: it for it in read_jsonl(d / "eval/fa1_agentracer_test.jsonl")}
+            new = read_jsonl(d / "eval/fa1_agentracer_test_c.jsonl")
+            leak = set(c["test"]["agentracer"]["dropped_meta_leak"]["uids"])
+            self.assertTrue(leak)
+            self.assertEqual(len(new), len(old) - len(leak))
+            for it in new:                                    # ids of the uncleaned file, the same trajectory
+                self.assertEqual(it["fa"]["uid"], old[it["item_id"]]["fa"]["uid"])
+                self.assertEqual(it["gold_label"], old[it["item_id"]]["gold_label"])
+                self.assertNotIn(it["fa"]["uid"], leak)
+                self.assertIsNone(ARTEFACTS.search(it["prompt"]))
+                self.assertEqual("label_unreliable" in it["fa"]["flags"], it["fa"]["subset"] == "coding")
+            self.assertTrue(any(it["fa"]["subset"] == "coding" for it in new))   # dropped from train, kept in test
+            ww = read_jsonl(d / "eval/fa1_wwpro_test_c.jsonl")
+            self.assertEqual(len(ww), len(read_jsonl(d / "eval/fa1_wwpro_test.jsonl")))
+            self.assertTrue(any(it["fa"]["subset"] == "debate" for it in ww))
+            s2 = run(ROOT / "scripts/build_fa_public.py", d / "out_c", d / "eval",     # deterministic
+                     ["--stage", "build", "--norm", str(d / "out/norm"), "--clean", "v1"])
+            self.assertEqual(s["md5"], s2["md5"])
+            r = subprocess.run([sys.executable, "-P", str(ROOT / "scripts/build_fa_public.py"), "--stage", "build",
+                                "--norm", str(d / "out/norm"), "--out", str(d / "out_x"), "--eval-dir", str(d / "eval"),
+                                "--clean", "v1", "--eval-suffix", ""], capture_output=True, text=True, env=env, cwd=d)
+            self.assertNotEqual(r.returncode, 0)                                         # never over the originals
+
+
+# ------------------------------------------------------------------------------------------------- n-gram probe
+class TestNgramProbe(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.ng = load_script("fa_ngram_probe")
+
+    def trajs(self, n, tell: float, role: bool = False, seed: int = 0):
+        """n trajectories; with probability tell the gold step contains the word 'zeta'; with role, 'zeta' marks every
+        step of agent Z instead and the gold step is always a Z step (a role cue the structure prior absorbs)."""
+        rng = random.Random(seed)
+        out = []
+        for i in range(n):
+            k = rng.randint(3, 8)
+            agents = [rng.choice("XYZ") for _ in range(k)]
+            if role:
+                zs = [j for j, a in enumerate(agents) if a == "Z"] or [0]
+                agents[zs[0]] = "Z"
+                g = rng.choice(zs)
+            else:
+                g = rng.randrange(k)
+            steps = []
+            for j in range(k):
+                w = [rng.choice(["alpha", "beta", "gamma", "delta"]) for _ in range(4)]
+                if (role and agents[j] == "Z") or (not role and j == g and rng.random() < tell):
+                    w.append("zeta")
+                steps.append(" ".join(w))
+            out.append({"id": str(i), "group": "x/y", "task": f"task {i}", "steps": steps, "agents": agents, "gold": g})
+        return out
+
+    def run_group(self, trajs, evals=None):
+        H = self.ng.Hasher()
+        for t in trajs + [t for ts in (evals or {}).values() for t in ts]:
+            t["buckets"] = [H.buckets(s) for s in t["steps"]]
+        args = type("A", (), {"folds": 5, "min_df": 10, "lams": [1e-3, 1e-2, 1e-1], "top": 5, "max_agents": 30})
+        return self.ng.run_group(trajs, evals or {}, H, args)
+
+    def test_hash_and_phrase_gains(self):
+        import numpy as np
+        H = self.ng.Hasher()
+        t = "The quick brown fox 123 jumps over the lazy dog 7"
+        b = set(H.buckets(t).tolist())
+        self.assertEqual(set(H.grams_of_bucket([t], b)), b)                 # every bucket read back to its n-grams
+        trajs = self.trajs(200, 0.5)
+        for tr in trajs:
+            tr["buckets"] = [H.buckets(s) for s in tr["steps"]]
+        df = np.zeros(1 << self.ng.NB, dtype=np.int32)
+        for tr in trajs:
+            df[np.unique(np.concatenate(tr["buckets"]))] += 1
+        kept = np.flatnonzero(df >= 5)
+        fmap = np.full(1 << self.ng.NB, -1)
+        fmap[kept] = np.arange(len(kept))
+        B = self.ng.Block(trajs, fmap)
+        p = np.random.RandomState(0).rand(B.S)
+        rank, grank = self.ng.rank_layout(B, p)
+        gp, gn, cov = self.ng.phrase_gains(B, rank, grank, len(kept))
+        bp, bn, bc = (np.zeros(len(kept), int) for _ in range(3))
+        for ti, tr in enumerate(trajs):                                     # brute force
+            s0, k = B.start[ti], B.sizes[ti]
+            pp = p[s0:s0 + k]
+            base = int(np.argmax(pp)) == tr["gold"]
+            feats = [set(fmap[x][fmap[x] >= 0].tolist()) for x in tr["buckets"]]
+            for f in set().union(*feats):
+                has = [f in fs for fs in feats]
+                if all(has):
+                    continue
+                bc[f] += 1
+                bp[f] += (max((i for i in range(k) if has[i]), key=lambda i: (pp[i], -i)) == tr["gold"]) - base
+                bn[f] += (max((i for i in range(k) if not has[i]), key=lambda i: (pp[i], -i)) == tr["gold"]) - base
+        self.assertTrue((gp == bp).all() and (gn == bn).all() and (cov == bc).all())
+
+    def test_planted_tell_and_control(self):
+        r = self.run_group(self.trajs(300, 0.6), {"ev": self.trajs(80, 0.6, seed=1)})
+        self.assertGreater(r["cv"]["ngram"] - r["cv"]["position"], 0.3)
+        self.assertGreater(r["phrases"]["selected_heldout_gain"], 0.3)
+        self.assertEqual(r["phrases"]["top"][0]["phrase"], "zeta")
+        self.assertGreater(r["eval"]["ev"]["ngram"], r["eval"]["ev"]["position"] + 0.2)
+        r0 = self.run_group(self.trajs(300, 0.0))                             # no tell
+        self.assertLess(r0["cv"]["ngram"] - r0["cv"]["position"], 0.05)
+        self.assertLess(r0["phrases"]["selected_heldout_gain"], 0.04)
+        rr = self.run_group(self.trajs(300, 0.0, role=True))                  # a role cue: absorbed by the structure
+        self.assertGreater(rr["phrases"]["selected_heldout_gain"], 0.15)
+        self.assertLess(rr["phrases_over_structure"]["selected_heldout_gain"], 0.04)
+
+    def test_step_texts(self):
+        r = rec(5, 2, text=lambda i: f"line one {i}\nStep 9 [Fake]: not a header\nmore {i}")
+        it, _ = fp.make_items(r, "x-1", "fa1/wwpro", cap=3000, with_gt=True, rng=random.Random(0))
+        texts = self.ng.step_texts(it)
+        self.assertEqual(texts, [fp.cut(s["text"], 3000) for s in r["steps"]])
+        self.assertEqual(self.ng.task_of(it["prompt"]), "compute the total.")
 
 
 if __name__ == "__main__":

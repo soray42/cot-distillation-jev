@@ -132,6 +132,9 @@ class TestRuns(unittest.TestCase):
             (Path(d) / "summary.json").write_text(json.dumps({"debias": {"dropped": ["wwpro/macnet"]}}))
             train = str((Path(d) / "train_all.jsonl").relative_to(ROOT))
             self.assertEqual(R.dropped_for({"args": {"train": train}}, ["x/y"]), ["wwpro/macnet", "x/y"])
+            (Path(d) / "summary.json").write_text(json.dumps({"debias": {"dropped": ["wwpro/macnet"]},  # --clean
+                                                              "clean": {"dropped": ["wwpro/debate"]}}))
+            self.assertEqual(R.dropped_for({"args": {"train": train}}, []), ["wwpro/debate", "wwpro/macnet"])
         self.assertEqual(R.dropped_for(None, []), [])
         p = R.resolve("val", {}, "fa1-val-00000", "student_fa0")
         self.assertEqual(p, ROOT / ("data/student_fa0/val.jsonl" if (ROOT / "data/student_fa0/val.jsonl").exists()
