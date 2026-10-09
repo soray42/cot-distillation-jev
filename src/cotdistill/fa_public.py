@@ -25,6 +25,9 @@ Sources and their decisive-step conventions (checked on the data, tier1_public.m
   agentracer    AgenTracer data-v1.0.0 (agentic, coding, math; train -> pool, test -> test): mistake_step is the value
                 of the step field (1-based in agentic, 0-based in coding / math).
   traceelephant TraceElephant (eval only): mistake_step is the 1-based step_id.
+  correct       CORRECT-Error (opt-in, build_fa_public.py --add-sources): history[0] is the user prompt; mistake_step
+                indexes history, so the rendered index (history[1:]) is mistake_step - 1 (see "new sources" below).
+  aegis         Aegis (opt-in): agent-level labels only (the single faulty agent), no step items.
 Never rendered: is_injected, is_replayed, is_live, phase, injection_via, ledger, accepted_predictions, is_mistake,
 mistake_reason, tool-call ids.
 """
@@ -527,10 +530,17 @@ def log_chars(rec: dict, cap: int) -> int:
     return sum(min(len(s["text"].strip()), cap) + (7 if len(s["text"].strip()) > cap else 0) for s in rec["steps"])
 
 
-def fit_cap(rec: dict, char_budget: int, cmax: int, cmin: int) -> int:
+def agent_prompt(rec: dict, cap: int) -> str:
+    """The agent-level prompt of make_items / make_agent_item (log without the reference line, agent question)."""
+    return render_log(rec, cap, False) + "\n\n" + Q_AGENT + "\nOptions:\n" + options_block(agents_in_order(rec))
+
+
+def fit_cap(rec: dict, char_budget: int, cmax: int, cmin: int, prompt=None) -> int:
     """The largest per-step cap c in [cmin, cmax] (water-filling: every step cut to at most c characters) whose step
-    prompt is at most char_budget characters; cmin if none is."""
-    fixed = len(step_prompt(dict(rec, steps=[dict(s, text="") for s in rec["steps"]]), 0, True))
+    prompt (or prompt(rec, cap), e.g. agent_prompt for agent-only records) is at most char_budget characters; cmin if
+    none is."""
+    empty = dict(rec, steps=[dict(s, text="") for s in rec["steps"]])
+    fixed = len(step_prompt(empty, 0, True) if prompt is None else prompt(empty, 0))
     if fixed + log_chars(rec, cmax) <= char_budget:
         return cmax
     lo, hi = cmin, cmax
@@ -826,3 +836,357 @@ def clean_record(rec: dict, version: str, drop_groups=None, counts=None) -> tupl
     if g in groups:
         return out, f"group:{g}"
     return out, None
+
+
+# ------------------------------------------------------------------------------------------------- new sources (fa1d)
+# build_fa_public.py --add-sources correct,aegis (notes/next_round/failure_attribution/tier1_public.md, fa1d). Both are
+# cleaned by their readers (stage normalize), so their records are the same with or without --clean:
+#   correct  CORRECT-Error (Yu et al., ICML 2026; Apache-2.0): 2,226 Magentic-One trajectories (Planner, WebSurfer,
+#            Coder, CodeExecutor, FileSurfer) with one injected decisive error each. history[0] is always the user
+#            task prompt and mistake_step indexes history (the role at mistake_step equals mistake_agent in 2,001 /
+#            2,226; the other 225: 43 label step 0 = the user prompt with agent "Unknown", 70 bracketed names
+#            "[Planner]" that agent_name() reads as "Planner", the rest name another agent) -> rendered steps
+#            history[1:], rendered index mistake_step - 1. groundtruth and mistake_reason are empty in every row (no
+#            reference line, no _gt items). Literal tells of the injector, removed here:
+#              - 5,691 / 10,146 non-gold WebSurfer contents are Python literal lists "['...']" (0 / 491 gold ones):
+#                parsed with ast.literal_eval (never eval) and joined (literal_text)
+#              - the page line: "open to the page [<title>](<url>)" in 93% of the original WebSurfer steps, 0% "(<url>)";
+#                the injected ones write "(<url>)" in 89% -> every form rewritten to "open to the page (<url>)"
+#              - the injector's "Agent: <name>\nContent:" wrapper (120 / 2,183 gold steps, 0 others) -> removed
+#              - trajectories whose text carries the injector's plan, refusal or failure message (CE_META) -> dropped
+#   aegis    Aegis (Kong et al., 2025; MIT): MAS trajectories with errors injected into one or more agents; label =
+#            the set of (faulty agent, MAST failure mode); no step index (no step items). Kept: trajectories with
+#            exactly one faulty agent (agent-level finals; Aegis-Training train + val -> pool, Aegis-Bench test ->
+#            test). Contents that are Python literal lists of {"type", "text"} (smolagents) are parsed with
+#            ast.literal_eval; "System" entries (the smolagents system prompt, never faulty) are not rendered;
+#            is_injected (macnet), phase and agent_role are never rendered; trajectories with injector debris or text
+#            that narrates the injection (AEGIS_META) are dropped. The faulty agent's MAST mode maps to this taxonomy
+#            for category / mode nodes (MAST_MAP; only when the agent has exactly one error type).
+
+def literal_text(s) -> tuple[str, bool]:
+    """(text, parsed): a content string that is a Python literal list of strings or of {"text": ...} dicts (CORRECT-Error
+    WebSurfer "['...']", Aegis smolagents "[{'type': 'text', 'text': ...}]") parsed with ast.literal_eval (never eval)
+    and joined by newlines; any other string, or a literal of another shape, is returned unchanged (None -> "")."""
+    import ast
+    if s is None:
+        return "", False
+    if not isinstance(s, str):
+        return str(s), False
+    t = s.strip()
+    if len(t) < 4 or t[0] != "[" or t[-1] != "]" or t[1] not in "'\"{":
+        return s, False
+    try:
+        v = ast.literal_eval(t)
+    except (ValueError, SyntaxError, TypeError, MemoryError, RecursionError):
+        return s, False
+    if isinstance(v, list) and v and all(isinstance(x, str) for x in v):
+        return "\n".join(v), True
+    if isinstance(v, list) and v and all(isinstance(x, dict) and isinstance(x.get("text"), str) for x in v):
+        return "\n".join(x["text"] for x in v), True
+    return s, False
+
+
+def _ddg(m) -> str:
+    from urllib.parse import quote_plus
+    return f"open to the page (https://duckduckgo.com/?q={quote_plus(m.group(1))}&ia=web)."
+
+
+CE_TEXT_RULES = (
+    ("agent_content_wrapper", re.compile(r"\A\s*Agent:[^\n]*\n\s*Content:[ \t]*\n?"), ""),
+    ("page_title_link", re.compile(r"open to the page \[[^\n]*?\]\((https?://[^\s)]+)\)"), r"open to the page (\1)"),
+    ("page_title_url", re.compile(r"open to the page (?![\[(])[^\n]*? at DuckDuckGo\s*\((https?://[^\s)]+)\)"),
+     r"open to the page (\1)"),
+    ("page_title_only", re.compile(r"open to the page (?![\[(])([^\n]*?) at DuckDuckGo\."), _ddg),
+)
+_INJECTOR_TEXT = (
+    ("error_in_generation", re.compile(r"Error in content generation", re.I)),
+    ("injection_plan", re.compile(r"INJECTION PLAN|Subtlety Rationale|Expected Impact\s*:|Error Pattern\s*:|"
+                                  r"Injection (?:Strategy|Point|Type)\s*:", re.I)),
+    ("upper_tag", re.compile(r"</?[A-Z][A-Z0-9]*_[A-Z0-9_]+>")),
+    ("introduced_error", re.compile(r"\bintroduc\w* (?:an? )?(?:subtle |deliberate |small )?(?:error|mistake|bug|flaw)|"
+                                    r"\bsubtle (?:error|mistake|flaw)", re.I)),
+    ("refusal", re.compile(r"(?:can[’']?t|cannot|won[’']?t|unable to) (?:help|assist|comply)[^.\n]{0,80}(?:inject|insert|"
+                           r"deceptive|misleading|misinformation|incorrect|error|modif|false)", re.I)),
+    ("narrated", re.compile(r"Preserving the original content|deliberately (?:incorrect|wrong|mislead|introduc|flaw|"
+                            r"erroneous)|intentionally (?:incorrect|wrong|mislead|introduc|flaw|erroneous)|"
+                            r"\bto incorrectly\b", re.I)),
+    ("inject_phrase", re.compile(r"\binject(?:ed|ing|ion)? (?:false|misleading|deceptive|an? error|errors|error|incorrect)",
+                                 re.I)),
+)
+CE_META = _INJECTOR_TEXT
+AEGIS_META = _INJECTOR_TEXT + (
+    ("injector_log", re.compile(r"Error in inject\w*|Injection for \w+|🎯|🔍|chat\.completions\.create|Raw OpenAI API",
+                                re.I)),
+    ("injector_path", re.compile(r"malicious_agent", re.I)),
+    ("as_instructed", re.compile(r"\bas instructed\b", re.I)),
+    ("mast_code", re.compile(r"\bFM-\d\.\d\b")),
+    ("refusal_plain", re.compile(r"I[’']m sorry, but I can[’']?t (?:assist|help)|I can[’']?t (?:assist|help) with "
+                                 r"(?:that|this)", re.I)),
+)
+
+
+FINAL_ANSWER = re.compile(r"final answer", re.I)
+# CORRECT-Error records with these flags leave train / val and the test files (build_fa_public.py), with the evidence
+CORRECT_DROP_FLAGS = {
+    "same_speaker_next": "structural injection tell: the step after a non-final gold Planner step is another Planner "
+                         "step in 534 / 534 trajectories, after other Planner steps in 1.4% (153 / 10,765)",
+    "no_final_answer": "the run ends without a final answer (773 of the 783 runs that reach 20 steps): the 20-item "
+                       "label re-check found the labelled step decisive in 2 / 10 such runs (the Planner corrects the "
+                       "injected claim, or the loop and the step limit cause the failure) against 8 / 10 answered runs",
+}
+
+
+def injector_hits(texts, rules) -> list[str]:
+    """Names of the rules (name, regex) that match any of the texts."""
+    return [n for n, p in rules if any(p.search(t) for t in texts if t)]
+
+
+def ce_clean_text(text: str, counts=None) -> str:
+    text, _ = literal_text(text)
+    for name, pat, rep in CE_TEXT_RULES:
+        text, k = pat.subn(rep, text)
+        if k and counts is not None:
+            counts[f"correct/text/{name}"] += k
+    return text
+
+
+def correct_records(rows, counts: collections.Counter):
+    """CORRECT-Error rows (dicts with the parquet fields; history a list of {role, content} or its Python-literal
+    string) -> records, split "pool" (the test set is held out by question in the build). Drops: history[0] not the
+    user prompt or a mistake_step outside history ("index"), mistake_step 0 ("user_step": the labelled step is the
+    user prompt), injector text anywhere in the trajectory ("meta_leak"). agent_mismatch is flagged as for StepFinder
+    (dropped from the pool by the build, kept in the test file)."""
+    import ast
+    for r in rows:
+        h = r["history"]
+        if isinstance(h, str):
+            h = ast.literal_eval(h)
+        h = [dict(e) for e in h]
+        k = int(r["mistake_step"])
+        if not h or str(h[0].get("role") or h[0].get("name")).lower() != "user" or not 0 <= k < len(h):
+            counts["correct/drop/index"] += 1
+            continue
+        if k == 0:
+            counts["correct/drop/user_step"] += 1
+            continue
+        texts = [ce_clean_text(e.get("content"), counts) for e in h[1:]]
+        hits = injector_hits(texts, CE_META)
+        if hits:
+            counts["correct/drop/meta_leak"] += 1
+            for n in hits:
+                counts[f"correct/meta/{n}"] += 1
+            continue
+        names = [str(e.get("role") or e.get("name") or "unknown") for e in h[1:]]
+        flags = [] if agent_name(names[k - 1]) == agent_name(r["mistake_agent"]) else ["agent_mismatch"]
+        if k < len(names) and agent_name(names[k]) == agent_name(names[k - 1]):
+            flags.append("same_speaker_next")
+        if not FINAL_ANSWER.search(texts[-1]):
+            flags.append("no_final_answer")
+        rec = _rec(str(r["trajectory_id"]), "correct", str(r["dataset"]), str(r["generator_model"]), r["question"],
+                   r.get("groundtruth"), list(zip(names, texts)), k - 1, r["mistake_agent"], ids=uuids(r["question"]),
+                   flags=flags)
+        rec["qid"] = f"{r['dataset']}/{re.sub(r'_[0-9]+$', '', str(r['question_id']))}"
+        yield rec
+
+
+def read_correct(path: str, counts: collections.Counter):
+    """CORRECT-Error from its parquet file (pandas, python3's user site) or from a .jsonl file of the same fields."""
+    if str(path).endswith(".jsonl"):
+        with open(path) as f:
+            rows = [json.loads(line) for line in f]
+    else:
+        import pandas as pd
+        df = pd.read_parquet(path)
+        rows = []
+        for _, x in df.iterrows():
+            d = {c: x[c] for c in ("trajectory_id", "dataset", "generator_model", "question", "groundtruth",
+                                   "question_id", "mistake_agent", "mistake_step")}
+            d["history"] = x["history"] if isinstance(x["history"], str) else [dict(e) for e in x["history"]]
+            rows.append(d)
+    yield from correct_records(rows, counts)
+
+
+# MAST failure mode (Aegis error_type) -> (this taxonomy's mode or None, its category or None, MAST name, rationale)
+MAST_MAP = {
+    "FM-1.1": ("R.4", "R", "Disobey task specification", "a wrong kind of solution for the task as specified"),
+    "FM-1.2": (None, None, "Disobey role specification", "no counterpart: acting outside one's role is neither a "
+                                                         "delegation nor a communication error"),
+    "FM-1.3": ("A.4", "A", "Step repetition", "repeating steps without progress"),
+    "FM-1.4": ("V.1", "V", "Loss of conversation history", "forgetting earlier information"),
+    "FM-1.5": (None, "A", "Unaware of termination conditions", "an action error (not stopping when done); neither "
+                                                                "premature termination nor looping exactly"),
+    "FM-2.1": ("V.1", "V", "Conversation reset", "progress and context lost by restarting"),
+    "FM-2.2": (None, "C", "Fail to ask for clarification", "a coordination failure; not one of C.1-C.3 exactly"),
+    "FM-2.3": ("PL.2", "PL", "Task derailment", "goal drift (moving away from the original objective)"),
+    "FM-2.4": ("C.2", "C", "Information withholding", "communication failure: information withheld"),
+    "FM-2.5": ("C.2", "C", "Ignored other agent's input", "communication failure: another agent's input ignored"),
+    "FM-2.6": (None, "R", "Reasoning-action mismatch", "a reasoning error in the broad sense; no exact mode"),
+    "FM-3.1": ("A.3", "A", "Premature termination", "premature termination"),
+    "FM-3.2": ("V.2", "V", "No or incomplete verification", "a missing check"),
+    "FM-3.3": ("V.2", "V", "Incorrect verification", "confirming a wrong result"),
+}
+AEGIS_MODES = sorted({m for m, _, _, _ in MAST_MAP.values() if m}, key=list(MODES).index)
+AEGIS_CATEGORIES = [c for c in CATEGORIES if c in {c for _, c, _, _ in MAST_MAP.values() if c}]
+AEGIS_HIDDEN = {"System"}          # the smolagents system prompt (never a faulty agent): not rendered
+# Aegis frameworks dropped from train / val (kept in the test file), with the evidence
+AEGIS_DROP_GROUPS = {
+    "aegis/macnet": "position-determined label: the faulty agent is the second agent (Node0) in all 160 single-faulty "
+                    "macnet trajectories kept (train 130, val 24, test 6; agent-probe position-only CV 100%)",
+    "aegis/dylan": "length and format tells: the faulty agent has the shortest mean turn in 47% of 686 pool "
+                   "trajectories (chance 25%); its turns drop the peer-evaluation block (\"let's evaluate\" in 11% of "
+                   "faulty vs 29% of other agents); agent probes on fa1d train: n-gram CV 35.7 -> 58.6, length "
+                   "(surface) fit on train 54.8 vs structure 21.4 on its Aegis-Bench items",
+}
+
+
+def aegis_records(lines, split: str, counts: collections.Counter):
+    for line in lines:
+        x = json.loads(line)
+        md = x.get("metadata") or {}
+        fw = str(md.get("framework"))
+        faulty = (x.get("output") or {}).get("faulty_agents") or []
+        names = sorted({str(a.get("agent_name")) for a in faulty})
+        if len(names) != 1:
+            counts[f"aegis/drop/{'no' if not names else 'several'}_faulty_agents_{split}"] += 1
+            continue
+        hist = (x.get("input") or {}).get("conversation_history") or []
+        steps = []
+        for s in hist:
+            a = str(s.get("agent_name"))
+            if a in AEGIS_HIDDEN:
+                counts["aegis/hidden_steps"] += 1
+                continue
+            steps.append((a, literal_text(s.get("content"))[0]))
+        hits = injector_hits([t for _, t in steps], AEGIS_META)
+        if hits:
+            counts[f"aegis/drop/meta_leak_{split}"] += 1
+            for n in hits:
+                counts[f"aegis/meta/{fw}/{n}"] += 1
+            continue
+        types = sorted({str(a.get("error_type")) for a in faulty})
+        mast = types[0] if len(types) == 1 else None
+        mode, cat = MAST_MAP.get(mast, (None, None, None, None))[:2] if mast else (None, None)
+        q = (x.get("input") or {}).get("query", "")
+        gt = (x.get("ground_truth") or {}).get("correct_answer")
+        rec = _rec(str(x["id"]), "aegis", fw, str(md.get("benchmark")), q, gt, steps, None, names[0], mode=mode,
+                   split="test" if split == "test" else "pool", ids=uuids(q))
+        rec.update(mast=mast, mast_all=types, category=cat, aegis_split=split,
+                   strategy=sorted({str(a.get("injection_strategy")) for a in faulty}))
+        yield rec
+
+
+def read_aegis(root: str, counts: collections.Counter):
+    """Aegis-Training/{train,val}.jsonl (pool) and Aegis-Bench/test.jsonl (test), streamed."""
+    import os
+    for rel, split in (("Aegis-Training/train.jsonl", "train"), ("Aegis-Training/val.jsonl", "val"),
+                       ("Aegis-Bench/test.jsonl", "test")):
+        with open(os.path.join(root, rel)) as f:
+            yield from aegis_records(f, split, counts)
+
+
+def build_agent_nodes(rec: dict, rng: random.Random) -> list[dict]:
+    """Nodes of an agent-only record (Aegis), each family balanced as in build_nodes: agent (the gold agent and one other),
+    category (the gold category and one other of AEGIS_CATEGORIES) when the record's MAST mode maps to a category, mode
+    (the gold mode and one other of AEGIS_MODES, from the same category with probability .5) when it maps to a mode; a
+    mode depends on its category's node."""
+    nodes: list[dict] = []
+    agents = agents_in_order(rec)
+    ga = rec.get("gold_agent")
+    if ga in agents and len(agents) >= 2:
+        other = rng.choice([a for a in agents if a != ga])
+        for k, a in enumerate(x for x in agents if x in (ga, other)):
+            nodes.append(_node(f"a{k}", "agent", f"Was the decisive error made by {a}?",
+                               f"Was the decisive error made by an agent other than {a}?", a == ga, [], rng, agent=a))
+    cat, mode = rec.get("category"), rec.get("mode")
+    if cat in AEGIS_CATEGORIES:
+        neg_mode = None
+        if mode in AEGIS_MODES:
+            same = [m for m in AEGIS_MODES if m != mode and category(m) == cat]
+            neg_mode = rng.choice(same) if same and rng.random() < 0.5 else rng.choice(
+                [m for m in AEGIS_MODES if m != mode])
+        if neg_mode and category(neg_mode) != cat:
+            neg_cat = category(neg_mode)
+        else:
+            neg_cat = rng.choice([c for c in AEGIS_CATEGORIES if c != cat])
+        cid = {}
+        for c in sorted((cat, neg_cat), key=AEGIS_CATEGORIES.index):
+            cid[c] = f"k{c}"
+            nodes.append(_node(cid[c], "category", f"Is the decisive error, broadly, {CATEGORIES[c]}?",
+                               f"Is the decisive error, broadly, something other than {CATEGORIES[c]}?", c == cat, [],
+                               rng, category=c))
+        if neg_mode:
+            for m in sorted((mode, neg_mode), key=AEGIS_MODES.index):
+                gl = MODES[m][1]
+                nodes.append(_node(f"m{m}", "mode", f"Is the decisive error {gl}?",
+                                   f"Is the decisive error something other than {gl}?", m == mode,
+                                   [cid[category(m)]] if category(m) in cid else [], rng, mode=m))
+    depth = node_depths(nodes)
+    for x in nodes:
+        x["node_depth"] = depth[x["id"]]
+    return nodes
+
+
+def make_agent_item(rec: dict, item_id: str, group: str, *, cap: int, rng: random.Random, nodes: bool = True):
+    """The agent-level item of an agent-only record (make_items' agent layout) with nodes (build_agent_nodes) as subqs;
+    None when the gold agent is not among two or more options."""
+    agents = agents_in_order(rec)
+    ga = rec.get("gold_agent")
+    if ga not in agents or not 2 <= len(agents) <= MAX_STEPS:
+        return None
+    al = list(SYMBOLS[:len(agents)])
+    k = agents.index(ga)
+    meta = {"origin": rec["origin"], "subset": rec["subset"], "benchmark": rec["benchmark"], "uid": rec["uid"],
+            "decisive_step": None, "decisive_agent": None, "gold_agent": ga, "mode": rec.get("mode"),
+            "category": rec.get("category"), "mast": rec.get("mast"), "mast_all": rec.get("mast_all"),
+            "n_steps": len(rec["steps"]), "n_agents": len(agents), "step_cap": cap, "flags": rec.get("flags", [])}
+    subqs = build_agent_nodes(rec, rng) if nodes else []
+    return {"item_id": item_id + "-agent", "source": SOURCE, "group": group + "/agent", "type": "choice",
+            "prompt": render_log(rec, cap, False) + "\n\n" + Q_AGENT + "\nOptions:\n" + options_block(agents),
+            "labels": al, "label_order": al, "label_names": dict(zip(al, agents)), "gold_label": al[k],
+            "gold_probs": None, "teacher": {L: float(i == k) for i, L in enumerate(al)}, "subqs": subqs,
+            "has_tree": bool(subqs), "tree_source": TREE_SOURCE, "tree_fix": True, "with_gt": False, "fa": meta}
+
+
+def audit_agent_item(item: dict) -> list[str]:
+    """Format, label and leak checks of an agent-level item (empty list: passes); node truths and per-family balance as
+    audit_item."""
+    bad = []
+    p, labs = item["prompt"], item["labels"]
+    head, sep, tail = p.rpartition("\n\n" + Q_AGENT + "\nOptions:\n")
+    if not sep or not head.startswith(HEADER + "\n\nTask: ") or "\nOptions:" in head or GT_PREFIX in head:
+        bad.append("layout")
+    opts = tail.split("\n")
+    if len(opts) != len(labs) or labs != list(SYMBOLS[:len(labs)]):
+        bad.append("options")
+    names = [item["label_names"][L] for L in labs]
+    if [o.split(") ", 1)[-1] for o in opts] != names:
+        bad.append("option names")
+    for a in names:
+        if not re.search(r"\nStep \d+ \[" + re.escape(a) + r"\]: ", head + "\n"):
+            bad.append(f"agent {a} not in log")
+            break
+    if item["gold_label"] not in labs or names[labs.index(item["gold_label"])] != item["fa"]["gold_agent"] \
+            or max(item["teacher"], key=item["teacher"].get) != item["gold_label"]:
+        bad.append("gold")
+    m = LEAK.search(head)
+    if m:
+        bad.append(f"log mentions {m.group(0)}")
+    by = {n["id"]: n for n in item.get("subqs", [])}
+    if len(by) != len(item.get("subqs", [])) or any(d not in by for n in item.get("subqs", []) for d in n["depends_on"]):
+        bad.append("node ids")
+    fam = collections.Counter()
+    for n in item.get("subqs", []):
+        q = re.sub(r"\[[^\[\]]*\]", "[]", n["question"]).replace(str(n.get("agent")), "")
+        if LEAK.search(q) or NODE_LEAK.search(q) or "Answer:" in q:
+            bad.append(f"{n['id']}: wording")
+        t = plain_truth(n)
+        fam[(n["type"], t)] += 1
+        want = {"agent": lambda: n.get("agent") == item["fa"]["gold_agent"],
+                "category": lambda: n.get("category") == item["fa"]["category"],
+                "mode": lambda: n.get("mode") == item["fa"]["mode"]}.get(n["type"], lambda: None)()
+        if t != want:
+            bad.append(f"{n['id']}: truth")
+    for kind in {k for k, _ in fam}:
+        if fam[(kind, True)] != fam[(kind, False)]:
+            bad.append(f"{kind}: unbalanced")
+    return bad

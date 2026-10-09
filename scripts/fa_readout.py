@@ -71,6 +71,10 @@ DEFAULT_EVAL = {
     "agtrc": "data/eval/fa1_agentracer_test_c.jsonl", "agtrcgt": "data/eval/fa1_agentracer_test_gt_c.jsonl",
     "agtrcag": "data/eval/fa1_agentracer_test_agent_c.jsonl",
     "fa1cv": "data/student_fa1c/val.jsonl", "fa1cva": "data/student_fa1c/val_agent.jsonl",
+    # new sources (build_fa_public.py --add-sources correct,aegis; CORRECT-Error has no reference answers: no _gt file)
+    "ce": "data/eval/fa1_correct_test.jsonl", "ceag": "data/eval/fa1_correct_test_agent.jsonl",
+    "aegisag": "data/eval/fa1_aegis_test_agent.jsonl",
+    "fa1dv": "data/student_fa1d/val.jsonl", "fa1dva": "data/student_fa1d/val_agent.jsonl",
 }
 VAL_BY_PREFIX = {"fa0-val": "data/student_fa0/val.jsonl", "fa1-val": "data/student_fa1/val.jsonl"}
 RUN_RE = re.compile(r"^(?P<arm>[^-]+)-(?P<tag>[^-]+)-(?P<model>.+)-(?P<data>student_[^-]+)-s(?P<seed>\d+)$")
@@ -402,6 +406,7 @@ def dropped_for(metrics: dict | None, extra: list[str]) -> list[str]:
                 try:
                     summ = json.loads(s.read_text())
                     out += (summ.get("debias") or {}).get("dropped", []) + (summ.get("clean") or {}).get("dropped", [])
+                    out += (summ.get("new_sources") or {}).get("dropped", [])
                 except (ValueError, OSError):
                     pass
     return sorted(set(out))

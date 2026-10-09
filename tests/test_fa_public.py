@@ -926,5 +926,291 @@ class TestNgramProbe(unittest.TestCase):
         self.assertEqual(self.ng.task_of(it["prompt"]), "compute the total.")
 
 
+
+# ------------------------------------------------------------------------------------------------- new sources (fa1d)
+CLEAN_COMMIT = "2509b67"    # the builder with --clean v1, before --add-sources: outputs without it stay byte-identical
+PAGE = "The web browser is open to the page"
+
+
+def ce_row(i: int, ds: str, run: int, k: int, n: int = 6, gold_agent=None, gold_text=None, literal_history=False,
+           final=True, pair=False):
+    """A CORRECT-Error row: history[0] the user prompt, then Planner / WebSurfer turns and (final) a Planner turn with
+    the final answer; the original WebSurfer turns are Python-literal lists with the '[title](url)' page line, the
+    injected (gold) one plain with '(url)'; pair: a second Planner turn right after a gold Planner turn."""
+    q = f"Which river flows through the city number {i} of dataset {ds} and how long is that river in kilometres?"
+    hist = [{"role": "user", "content": f"You have been given the following task:\n\n{q}\n\nWhat is your first action?"}]
+    for j in range(1, n + 1):
+        role = "Planner" if j % 2 else "WebSurfer"
+        url = f"https://duckduckgo.com/?q=river+{i}+{j}&ia=web"
+        if role == "Planner":
+            text = f"**Analysis of Previous Result:**\nstep {j}\n\n**Decision:**\n- Next Agent: WebSurfer"
+        elif j == k:
+            text = f"I typed 'river {i} {j}' into the browser search bar.\n\n{PAGE} ({url}).\nThe viewport shows 20%"
+        else:
+            text = repr([f"I typed 'river {i} {j}' into the browser search bar.\n\n{PAGE} [river {i} {j} at "
+                         f"DuckDuckGo]({url}).\nThe viewport shows 20%"])
+        if j == k and gold_text is not None:
+            text = gold_text
+        hist.append({"role": role, "content": text})
+        if pair and j == k:
+            hist.append({"role": "Planner", "content": "**Analysis of Previous Result:**\nre-plan"})
+    if final:
+        hist.append({"role": "Planner", "content": f"**Analysis of Previous Result:**\nFINAL ANSWER: river {i}"})
+    row = {"trajectory_id": f"gpt-5-nano_{ds}_task{i}_{run}", "dataset": ds, "generator_model": "gpt-5-nano",
+           "question": q, "groundtruth": "", "question_id": f"task{i}_{run}", "history": hist,
+           "mistake_agent": gold_agent or (hist[k]["role"] if k else "Unknown"), "mistake_step": k,
+           "mistake_reason": "", "is_corrected": False, "level": 0}
+    if literal_history:
+        row["history"] = repr(hist)
+    return row
+
+
+def aegis_line(i: int, fw: str, faulty, split: str, task: str | None = None) -> dict:
+    """An Aegis record; faulty = [(agent, mode), ...]; smoagents contents are Python-literal lists of text dicts and
+    start with a System prompt entry."""
+    q = task or f"Aegis {split} problem {i} for {fw}: compute the area of a triangle with sides {i}, {i + 3} and {i + 4}."
+    if fw == "smoagents":
+        names = ["System", "User", "Manager", "Searcher", "Manager"]
+        hist = [{"step": k + 1, "agent_name": a, "phase": "reasoning",
+                 "content": repr([{"type": "text", "text": f"{a} message {k} about {q[:20]}"}])}
+                for k, a in enumerate(names)]
+    else:
+        names = ["Assistant1", "Assistant2", "Assistant3", "Assistant1", "Assistant2", "Assistant3"]
+        hist = [{"step": k + 1, "agent_name": a, "phase": "reasoning", "content": f"{a} says {k}: the area is {k}."}
+                for k, a in enumerate(names)]
+        if fw == "macnet":
+            for h in hist:
+                h["is_injected"] = h["agent_name"] == faulty[0][0]
+    fa = [{"agent_name": a, "error_type": m, "injection_strategy": "response_corruption"} for a, m in faulty]
+    return {"id": f"{fw}_{split}_{i}", "metadata": {"framework": fw, "benchmark": "MATH", "model": "gpt-4o-mini"},
+            "input": {"query": q, "conversation_history": hist, "final_output": "x"},
+            "output": {"faulty_agents": fa},
+            "ground_truth": {"correct_answer": "6", "injected_agents": fa, "is_injection_successful": True}}
+
+
+def write_raw_new(d: Path, n: int = 30) -> None:
+    """Synthetic CORRECT-Error (.jsonl with the parquet's fields) and Aegis files next to write_raw's sources."""
+    rng = random.Random(7)
+    (d / "correct_error").mkdir(parents=True)
+    with open(d / "correct_error/test.jsonl", "w") as f:
+        for i in range(n):
+            for ds in ("hotpot", "wikimqa"):
+                for run in (1, 2):                                   # one question under two run ids
+                    nn = rng.choice((4, 6, 8))
+                    f.write(json.dumps(ce_row(i, ds, run, rng.randint(1, nn), nn,
+                                              literal_history=(i == 3 and run == 1))) + "\n")
+        f.write(json.dumps(ce_row(900, "hotpot", 1, 0)) + "\n")                       # labelled user prompt
+        f.write(json.dumps(ce_row(901, "hotpot", 1, 2, gold_text="INJECTION PLAN:\nError Pattern: x")) + "\n")
+        f.write(json.dumps(ce_row(902, "hotpot", 1, 2, gold_agent="[WebSurfer]")) + "\n")
+        f.write(json.dumps(ce_row(903, "hotpot", 1, 2, gold_agent="Coder")) + "\n")
+        for i in range(904, 924):                               # flagged: out of train / val and the test files
+            f.write(json.dumps(ce_row(i, "wikimqa", 1, 3, pair=i % 2 == 0, final=i % 2 == 1)) + "\n")
+    for sub, split, m in (("Aegis-Training", "train", 3 * n), ("Aegis-Training", "val", n), ("Aegis-Bench", "test", n)):
+        (d / "aegis" / sub).mkdir(parents=True, exist_ok=True)
+        with open(d / "aegis" / sub / f"{split}.jsonl", "w") as f:
+            for i in range(m):
+                fw = ("dylan", "smoagents", "macnet")[i % 3]
+                agents = ("Manager", "Searcher") if fw == "smoagents" else ("Assistant1", "Assistant2", "Assistant3")
+                mode = sorted(fp.MAST_MAP)[i % 14]
+                faulty = [(agents[i % len(agents)], mode)]
+                if i % 7 == 0:
+                    faulty.append((agents[(i + 1) % len(agents)], "FM-1.1"))           # two faulty agents: dropped
+                shared = (split == "train" and i % 9 == 0) or (split == "test" and i < 5)
+                task = f"Shared Aegis task {i % 5}: how many diagonals does a convex polygon with {i % 5 + 7} sides " \
+                    "have in total?" if shared else None          # train tasks equal to test tasks: removed by dedup
+                f.write(json.dumps(aegis_line(i, fw, faulty, split, task)) + "\n")
+            if split == "test":
+                x = aegis_line(999, "dylan", [("Assistant1", "FM-2.3")], split)
+                x["input"]["conversation_history"][1]["content"] = "Error in inject_prompt: Error code: 400"
+                f.write(json.dumps(x) + "\n")
+
+
+class TestNewReaders(unittest.TestCase):
+    def test_literal_text(self):
+        self.assertEqual(fp.literal_text(repr(["a\nb", "c"])), ("a\nb\nc", True))
+        self.assertEqual(fp.literal_text(repr([{"type": "text", "text": "x"}, {"type": "text", "text": "y"}])),
+                         ("x\ny", True))
+        for s in ("plain text", "[1, 2]", "['a', 1]", "[__import__('os').system('true')]", "['unterminated",
+                  "[{'type': 'image'}]"):
+            self.assertEqual(fp.literal_text(s), (s, False))
+        self.assertEqual(fp.literal_text(None), ("", False))
+
+    def test_correct_records(self):
+        counts = collections.Counter()
+        rows = [ce_row(1, "hotpot", 1, 4, 6), ce_row(2, "arc", 1, 0), ce_row(3, "arc", 2, 3, 4, literal_history=True),
+                ce_row(4, "hotpot", 1, 2, gold_text="Agent: WebSurfer\nContent: I typed 'x'.\n\n" + PAGE +
+                       " river at DuckDuckGo."),
+                ce_row(5, "hotpot", 1, 2, gold_text="I’m sorry, but I can’t help create or insert deceptive errors."),
+                ce_row(6, "hotpot", 1, 2, gold_agent="[WebSurfer]"), ce_row(7, "hotpot", 1, 2, gold_agent="Coder")]
+        recs = {r["uid"]: r for r in fp.correct_records(rows, counts)}
+        self.assertEqual(counts["correct/drop/user_step"], 1)
+        self.assertEqual(counts["correct/drop/meta_leak"], 1)
+        r = recs["gpt-5-nano_hotpot_task1_1"]
+        self.assertEqual((r["dec"], len(r["steps"]), r["gold_agent"]), (3, 7, "WebSurfer"))   # history index 4 -> 3
+        self.assertEqual(r["flags"], [])
+        self.assertEqual(r["qid"], "hotpot/task1")
+        self.assertIsNone(r["answer"])
+        for rr in recs.values():                       # no literal wrap, one page-line form, no injector wrapper
+            for st in rr["steps"]:
+                self.assertFalse(st["text"].startswith("['"), st["text"])
+                self.assertNotIn("at DuckDuckGo](", st["text"])
+                self.assertFalse(st["text"].startswith("Agent:"))
+                if st["agent"] == "WebSurfer":
+                    self.assertIn(PAGE + " (https://duckduckgo.com/?q=", st["text"])
+        self.assertEqual(recs["gpt-5-nano_arc_task3_2"]["dec"], 2)                  # history given as a literal
+        self.assertEqual(recs["gpt-5-nano_hotpot_task6_1"]["flags"], [])            # "[WebSurfer]" = WebSurfer
+        self.assertEqual(recs["gpt-5-nano_hotpot_task7_1"]["flags"], ["agent_mismatch"])
+        self.assertEqual(counts["correct/text/page_title_only"], 1)
+        fl = {x["uid"]: x["flags"] for x in fp.correct_records([ce_row(8, "arc", 1, 3, pair=True),
+                                                                 ce_row(9, "arc", 1, 2, final=False)], counts)}
+        self.assertEqual(fl, {"gpt-5-nano_arc_task8_1": ["same_speaker_next"],
+                              "gpt-5-nano_arc_task9_1": ["no_final_answer"]})
+
+    def test_aegis_records_and_items(self):
+        counts = collections.Counter()
+        lines = [json.dumps(aegis_line(0, "smoagents", [("Searcher", "FM-3.1")], "train")),
+                 json.dumps(aegis_line(1, "dylan", [("Assistant2", "FM-1.2")], "train")),
+                 json.dumps(aegis_line(2, "dylan", [("Assistant2", "FM-2.6")], "train")),
+                 json.dumps(aegis_line(3, "macnet", [("Assistant3", "FM-3.2"), ("Assistant3", "FM-1.1")], "train")),
+                 json.dumps(aegis_line(4, "dylan", [("Assistant1", "FM-3.2"), ("Assistant2", "FM-1.1")], "train"))]
+        bad = aegis_line(5, "dylan", [("Assistant1", "FM-2.3")], "train")
+        bad["input"]["conversation_history"][2]["content"] = "Path: /Users/x/malicious_agent/MASLab"
+        lines.append(json.dumps(bad))
+        recs = list(fp.aegis_records(lines, "train", counts))
+        self.assertEqual(counts["aegis/drop/several_faulty_agents_train"], 1)
+        self.assertEqual(counts["aegis/drop/meta_leak_train"], 1)
+        self.assertEqual(counts["aegis/hidden_steps"], 1)
+        sm, d12, d26, mac = recs
+        self.assertEqual([s["agent"] for s in sm["steps"]], ["User", "Manager", "Searcher", "Manager"])
+        self.assertTrue(sm["steps"][0]["text"].startswith("User message 1"))       # literal dicts parsed
+        self.assertEqual((sm["dec"], sm["gold_agent"], sm["mode"], sm["category"], sm["mast"]),
+                         (None, "Searcher", "A.3", "A", "FM-3.1"))
+        self.assertEqual((d12["mode"], d12["category"]), (None, None))              # FM-1.2: no counterpart
+        self.assertEqual((d26["mode"], d26["category"]), (None, "R"))               # category only
+        self.assertEqual((mac["mast"], mac["mode"], mac["mast_all"]), (None, None, ["FM-1.1", "FM-3.2"]))
+        self.assertFalse(any("is_injected" in s["text"] for s in mac["steps"]))
+        kinds = {}
+        for r in recs:
+            for seed in range(20):
+                it = fp.make_agent_item(r, f"x-{r['uid']}", "fa1/aegis", cap=3000, rng=random.Random(seed))
+                self.assertEqual(fp.audit_agent_item(it), [], it["item_id"])
+                self.assertEqual(it["label_names"][it["gold_label"]], r["gold_agent"])
+                self.assertNotIn("User", it["label_names"].values())
+                self.assertEqual(treeplan.statement_block(it) + "\n\n" + fp.Q_AGENT, treeplan.problem_no_options(it))
+                kinds[r["uid"]] = sorted({n["type"] for n in it["subqs"]})
+        self.assertEqual(kinds[sm["uid"]], ["agent", "category", "mode"])
+        self.assertEqual(kinds[d12["uid"]], ["agent"])
+        self.assertEqual(kinds[d26["uid"]], ["agent", "category"])
+        it = fp.make_agent_item(sm, "y", "fa1/aegis", cap=3000, rng=random.Random(0))
+        bad = json.loads(json.dumps(it))
+        bad["subqs"][0]["truth"] = not bad["subqs"][0]["truth"]
+        self.assertTrue(fp.audit_agent_item(bad))
+        for code, (m, c, _, _) in fp.MAST_MAP.items():                              # the map stays in the taxonomy
+            self.assertTrue(m is None or (m in fp.MODES and fp.category(m) == c), code)
+            self.assertTrue(c is None or c in fp.CATEGORIES, code)
+
+
+class TestAddSources(unittest.TestCase):
+    def test_off_byte_identical_and_on_build(self):
+        src = subprocess.run(["git", "-C", str(ROOT), "show", f"{CLEAN_COMMIT}:scripts/build_fa_public.py"],
+                             capture_output=True, text=True)
+        if src.returncode != 0:
+            self.skipTest(f"git commit {CLEAN_COMMIT} not readable")
+        env = {**os.environ, "CUDA_VISIBLE_DEVICES": "", "OMP_NUM_THREADS": "2"}
+        common = ["--n-val", "12", "--tokenizer", "missing.json", "--caps", "{}", "--share", '{"wwpro": 0.5}',
+                  "--debias-length", "wwpro,agentracer", "--clean", "v1"]
+        with tempfile.TemporaryDirectory(dir=ROOT, prefix=".fa1_test_") as d:
+            d = Path(d)
+            write_raw(d / "raw", n=60)
+            write_raw_new(d / "raw")
+            base = d / "base"
+            (base / "scripts").mkdir(parents=True)
+            (base / "scripts/build_fa_public.py").write_text(src.stdout)
+            (base / "src").symlink_to(ROOT / "src")
+
+            def run(script: Path, out: Path, ev: Path, extra=(), ok=True):
+                cmd = [sys.executable, "-P", str(script), "--raw", str(d / "raw"), "--out", str(out), "--eval-dir",
+                       str(ev)] + list(extra)
+                r = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=900, cwd=d)
+                if not ok:
+                    return r
+                self.assertEqual(r.returncode, 0, r.stdout[-3000:] + r.stderr[-3000:])
+                return json.loads((out / "summary.json").read_text()) if (out / "summary.json").exists() else None
+            norm = ["--origins", "wwpro,stepfinder,agentracer,traceelephant"]
+            run(base / "scripts/build_fa_public.py", base / "out", base / "eval", norm + common)   # 2509b67
+            s_off = run(ROOT / "scripts/build_fa_public.py", d / "out", d / "eval", norm + common)
+            for sub in ("out", "eval"):
+                ps = sorted((base / sub).glob("*.jsonl"))
+                self.assertGreaterEqual(len(ps), 4)
+                self.assertEqual([p.name for p in ps], sorted(p.name for p in (d / sub).glob("*.jsonl")))
+                for p in ps:
+                    self.assertEqual(p.read_bytes(), (d / sub / p.name).read_bytes(), f"{sub}/{p.name}")
+            self.assertNotIn("new_sources", s_off)
+            # on: normalize the new sources into their own dir, then build with them
+            run(ROOT / "scripts/build_fa_public.py", d / "out_new", d / "eval",
+                ["--stage", "normalize", "--origins", "correct,aegis", "--correct-file", "correct_error/test.jsonl",
+                 "--norm", str(d / "norm_new")])
+            nc = json.loads((d / "norm_new/counts.json").read_text())
+            self.assertEqual(nc["correct/drop/user_step"], 1)
+            self.assertEqual(nc["correct/drop/meta_leak"], 1)
+            self.assertGreater(nc["aegis/drop/several_faulty_agents_train"], 0)
+            self.assertEqual(nc["aegis/drop/meta_leak_test"], 1)
+            on = ["--stage", "build", "--norm", str(d / "out/norm"), "--add-norm", str(d / "norm_new"),
+                  "--add-sources", "correct,aegis", "--n-val", "12", "--tokenizer", "missing.json", "--caps", "{}",
+                  "--share", '{"wwpro": 0.45, "correct": 0.45}', "--debias-length", "wwpro,agentracer,correct",
+                  "--clean", "v1", "--aegis-val", "6"]
+            r = run(ROOT / "scripts/build_fa_public.py", d / "out_x", d / "eval_x", [x for x in on if x != "v1" and
+                                                                                    x != "--clean"], ok=False)
+            self.assertNotEqual(r.returncode, 0)                                   # --add-sources needs --clean
+            orig = {p.name: p.read_bytes() for p in (d / "eval").glob("*.jsonl")}
+            s = run(ROOT / "scripts/build_fa_public.py", d / "out_d", d / "eval", on)
+            self.assertEqual(s["audit"]["failures"], 0)
+            self.assertEqual({p.name: p.read_bytes() for p in (d / "eval").glob("*.jsonl") if p.name in orig}, orig)
+            for name in ("fa1_correct_test.jsonl", "fa1_correct_test_agent.jsonl", "fa1_aegis_test_agent.jsonl"):
+                self.assertTrue((d / "eval" / name).exists(), name)
+            for name in ("fa1_correct_test_gt.jsonl", "fa1_correct_test_c.jsonl", "fa1_aegis_test.jsonl",
+                         "fa1_aegis_test_c.jsonl", "fa1_aegis_test_agent_c.jsonl"):
+                self.assertFalse((d / "eval" / name).exists(), name)
+            ce_test = read_jsonl(d / "eval/fa1_correct_test.jsonl")
+            ag_test = read_jsonl(d / "eval/fa1_aegis_test_agent.jsonl")
+            train = read_jsonl(d / "out_d/train.jsonl")
+            train_ag = read_jsonl(d / "out_d/train_agent.jsonl")
+            val_ag = read_jsonl(d / "out_d/val_agent.jsonl")
+            self.assertTrue(any(it["fa"]["origin"] == "correct" for it in train))
+            self.assertFalse(any(it["fa"]["origin"] == "aegis" for it in train))     # agent-level only
+            aeg = [it for it in train_ag if it["fa"]["origin"] == "aegis"]
+            self.assertTrue(aeg and all(it["subqs"] and it["has_tree"] for it in aeg))
+            self.assertFalse(any(fp.clean_group(it["fa"]) in fp.AEGIS_DROP_GROUPS for it in aeg + val_ag
+                                 if it["fa"]["origin"] == "aegis"))                # AEGIS_DROP_GROUPS: train / val
+            self.assertTrue(any(it["fa"]["origin"] == "aegis" for it in val_ag))
+            n_other = sum(it["fa"]["origin"] != "aegis" for it in train_ag)
+            self.assertLessEqual(len(aeg), 0.35 / 0.65 * n_other + 1)               # --agent-share
+            q = TestBuiltData.task
+            test_tasks = {q(it["prompt"]) for it in ce_test + ag_test}
+            self.assertFalse(test_tasks & {q(it["prompt"]) for it in train + train_ag})
+            ce_q = {it["fa"]["uid"].rsplit("_", 1)[0] for it in ce_test}               # no question in both
+            self.assertFalse(ce_q & {it["fa"]["uid"].rsplit("_", 1)[0] for it in train if it["fa"]["origin"] == "correct"})
+            self.assertTrue(all(not it["with_gt"] for it in ce_test))
+            self.assertEqual({it["fa"]["origin"] for it in ag_test}, {"aegis"})
+            self.assertTrue(any(it["fa"]["subset"] in ("macnet", "dylan") for it in ag_test))  # ... kept in the test
+            self.assertEqual(s["new_sources"]["dropped"], sorted(fp.AEGIS_DROP_GROUPS))
+            for it in ce_test + read_jsonl(d / "eval/fa1_correct_test_agent.jsonl") + train + read_jsonl(
+                    d / "out_d/val.jsonl"):
+                self.assertFalse(set(it["fa"]["flags"]) & set(fp.CORRECT_DROP_FLAGS), it["item_id"])
+            self.assertFalse(any("agent_mismatch" in it["fa"]["flags"]
+                                 for it in read_jsonl(d / "eval/fa1_correct_test_agent.jsonl")))
+            self.assertGreater(sum(v for k, v in s["build_counts"].items() if k.startswith("correct/drop/same_")), 0)
+            for it in ce_test + [x for x in train if x["fa"]["origin"] == "correct"]:
+                self.assertEqual(fp.audit_item(it), [])
+                self.assertNotIn("['I typed", it["prompt"])
+                self.assertNotIn("at DuckDuckGo](", it["prompt"])
+            ns = s["new_sources"]
+            self.assertEqual(set(ns["agent_train_by_origin"]), {it["fa"]["origin"] for it in train_ag})
+            self.assertIn("aegis", ns)
+            self.assertIn("test_correct", s["baselines"])
+            s2 = run(ROOT / "scripts/build_fa_public.py", d / "out_d", d / "eval", on)          # deterministic
+            self.assertEqual(s["md5"], s2["md5"])
+
+
 if __name__ == "__main__":
     unittest.main()

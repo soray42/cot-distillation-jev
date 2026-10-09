@@ -55,6 +55,31 @@ unchanged test set keeps its original file (summary.json clean.eval_files says w
   cd <scratch> && CUDA_VISIBLE_DEVICES= OMP_NUM_THREADS=2 ~/.venvs/sev/bin/python -P -E \\
       ~/projects/jev/scripts/build_fa_public.py --stage build --norm data/student_fa1/norm --out data/student_fa1c \\
       --debias-length wwpro,aftraj,agentracer --clean v1
+
+New sources (off by default; off = the 2509b67 outputs byte for byte, tests/test_fa_public.py TestAddSources):
+--add-sources correct,aegis (requires --clean) adds CORRECT-Error (step-level, fa_public.read_correct) and Aegis (agent-level
+only, fa_public.read_aegis), normalized into their own dir (--add-norm, default --norm):
+
+  cd <scratch> && python3 -P -E ~/projects/jev/scripts/build_fa_public.py --stage normalize --origins correct,aegis \\
+      --norm data/student_fa1d/norm
+  cd <scratch> && CUDA_VISIBLE_DEVICES= OMP_NUM_THREADS=2 ~/.venvs/sev/bin/python -P -E \\
+      ~/projects/jev/scripts/build_fa_public.py --stage build --norm data/student_fa1/norm --add-norm \\
+      data/student_fa1d/norm --add-sources correct,aegis --out data/student_fa1d --debias-length \\
+      wwpro,aftraj,agentracer,correct --clean v1 --share '{"wwpro": 0.45, "correct": 0.45, "agentracer": 0.40, \\
+      "stepfinder": 0.35}'
+
+  correct  held out by question (--correct-test-frac of every dataset's trajectories; a group joins the normalized
+           question and the question_id without its _k run suffix, which repeats a question across runs and
+           generators) -> data/eval/fa1_correct_test.jsonl, _agent (no _gt: CORRECT-Error has no reference answers);
+           the rest is a step-level pool like the others (dedup, clean, debias, val / train, shares). Records flagged
+           with fa_public.CORRECT_DROP_FLAGS (a structural injection tell; runs without a final answer) leave the pool
+           and the test files; agent_mismatch leaves the pool and the test agent file (its step item stays).
+  aegis    Aegis-Bench test -> data/eval/fa1_aegis_test_agent.jsonl; Aegis-Training train + val -> agent-only pool: the
+           same dedup and clean, AEGIS_DROP_GROUPS out, val (--aegis-val-frac of the pool, at most --aegis-val, by task
+           group; its groups are excluded from every train split),
+           train capped at --agent-share of the agent-level train (stable hash, quotas per framework), agent items
+           with agent / category / mode nodes (fa_public.make_agent_item). No step items, no length debias.
+  New-source test files are written without --eval-suffix (they have no uncleaned version) and only when non-empty.
 """
 from __future__ import annotations
 
@@ -70,8 +95,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-for _v in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"):
-    os.environ.setdefault(_v, "2")
+for _v in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "RAYON_NUM_THREADS"):
+    os.environ.setdefault(_v, "2")          # RAYON: tokenizers' encode_batch threads (about +250 MB RSS at 32 threads)
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -81,6 +106,9 @@ from cotdistill import fa_public as fp  # noqa: E402
 TOKENIZER = "results/weights/T1-Qwen3.5-2B-Base-student_v3-s2/model/tokenizer.json"
 ORIGINS = ("wwpro", "aftraj", "stepfinder", "agentracer", "traceelephant")
 TEST_ORIGINS = ("wwpro", "aftraj", "agentracer", "traceelephant")
+NEW_ORIGINS = ("correct", "aegis")                 # --add-sources (opt-in); aegis has agent-level labels only
+AGENT_ONLY = ("aegis",)
+CORRECT_FILE = "correct_error/data/test-00000-of-00001.parquet"
 
 
 def rss_mb() -> int:
@@ -108,6 +136,8 @@ def stage_normalize(args) -> None:
         "stepfinder": lambda: fp.read_stepfinder(str(raw / "stepfinder/repo/data"), counts),
         "agentracer": lambda: fp.read_agentracer(str(raw / "agentracer/agentracer-data-v1.0.0.zip"), counts),
         "traceelephant": lambda: fp.read_traceelephant(str(raw / "traceelephant/data.zip"), counts),
+        "correct": lambda: fp.read_correct(str(raw / args.correct_file), counts),
+        "aegis": lambda: fp.read_aegis(str(raw / "aegis"), counts),
     }
     for origin in args.origins.split(","):
         n = 0
@@ -197,9 +227,11 @@ class Tok:
         return out
 
 
-def fit_caps(recs: list[dict], tok: Tok, args, stats: dict) -> dict:
-    """Per-trajectory step cap: the largest cap (<= --cap-max) whose step prompt with the reference line fits --budget
-    tokens; the character budget starts at --budget x 3.6 and shrinks by the measured token excess (6 rounds)."""
+def fit_caps(recs: list[dict], tok: Tok, args, stats: dict, agent: bool = False) -> dict:
+    """Per-trajectory step cap: the largest cap (<= --cap-max) whose step prompt with the reference line (agent: the
+    agent prompt, for agent-only records) fits --budget tokens; the character budget starts at --budget x 3.6 and
+    shrinks by the measured token excess (6 rounds)."""
+    prompt = fp.agent_prompt if agent else None
     caps, cb = {}, {}
     active = list(range(len(recs)))
     for r in recs:
@@ -208,8 +240,9 @@ def fit_caps(recs: list[dict], tok: Tok, args, stats: dict) -> dict:
     for _ in range(8):
         for i in active:
             r = recs[i]
-            caps[r["uid"]] = fp.fit_cap(r, int(cb[r["uid"]]), args.cap_max, args.cap_min)
-        n = tok.count([fp.step_prompt(recs[i], caps[recs[i]["uid"]], True) + "\n\nAnswer:" for i in active])
+            caps[r["uid"]] = fp.fit_cap(r, int(cb[r["uid"]]), args.cap_max, args.cap_min, prompt)
+        n = tok.count([(fp.agent_prompt(recs[i], caps[recs[i]["uid"]]) if agent else
+                        fp.step_prompt(recs[i], caps[recs[i]["uid"]], True)) + "\n\nAnswer:" for i in active])
         nxt = []
         for i, t in zip(active, n):
             r = recs[i]
@@ -274,22 +307,29 @@ def baselines(recs: list[dict], train: list[dict]) -> dict:
     ag = [r for r in recs if not r.get("single_agent") and r.get("gold_agent") in fp.agents_in_order(r)
           and len(fp.agents_in_order(r)) >= 2]
     if ag:
-        top = collections.Counter(r["gold_agent"] for r in train if r.get("gold_agent")).most_common()
-        acc = 0
-        for r in ag:
-            opts = fp.agents_in_order(r)
-            pick_ = next((a for a, _ in top if a in opts), opts[0])
-            acc += pick_ == r["gold_agent"]
-        own = collections.Counter(r["gold_agent"] for r in ag).most_common(1)[0]
-        out["agent"] = {"n": len(ag), "chance": round(sum(1 / len(fp.agents_in_order(r)) for r in ag) / len(ag), 3),
-                        "always_A_first_speaker": round(sum(fp.agents_in_order(r)[0] == r["gold_agent"] for r in ag)
-                                                        / len(ag), 3),
-                        "most_frequent_agent_train": round(acc / len(ag), 3),
-                        "most_frequent_agent_oracle": {"agent": own[0], "acc": round(sum(
-                            r["gold_agent"] == own[0] for r in ag) / len(ag), 3)},
-                        "agent_of_last_step": round(sum(r["steps"][-1]["agent"] == r["gold_agent"] for r in ag)
-                                                    / len(ag), 3)}
+        out["agent"] = agent_baselines(ag, train)
     return out
+
+
+def agent_baselines(ag: list[dict], train: list[dict]) -> dict:
+    """Trivial agent-level baselines on the records ag (gold agent among >= 2 options): chance, option A (first
+    speaker), the most frequent gold agent of train among the options, the agent of the last step, and the oracle most
+    frequent gold agent of ag itself."""
+    top = collections.Counter(r["gold_agent"] for r in train if r.get("gold_agent")).most_common()
+    acc = 0
+    for r in ag:
+        opts = fp.agents_in_order(r)
+        pick_ = next((a for a, _ in top if a in opts), opts[0])
+        acc += pick_ == r["gold_agent"]
+    own = collections.Counter(r["gold_agent"] for r in ag).most_common(1)[0]
+    return {"n": len(ag), "chance": round(sum(1 / len(fp.agents_in_order(r)) for r in ag) / len(ag), 3),
+            "always_A_first_speaker": round(sum(fp.agents_in_order(r)[0] == r["gold_agent"] for r in ag)
+                                            / len(ag), 3),
+            "most_frequent_agent_train": round(acc / len(ag), 3),
+            "most_frequent_agent_oracle": {"agent": own[0], "acc": round(sum(
+                r["gold_agent"] == own[0] for r in ag) / len(ag), 3)},
+            "agent_of_last_step": round(sum(r["steps"][-1]["agent"] == r["gold_agent"] for r in ag)
+                                        / len(ag), 3)}
 
 
 def step_features(r: dict, cap: int, level: str):
@@ -645,6 +685,188 @@ def clean_sets(pool: list[dict], tests: dict, args) -> tuple[list[dict], dict, d
     return out, new_tests, rep
 
 
+# ------------------------------------------------------------------------------------------------- new sources (fa1d)
+def correct_test(recs: list[dict], frac: float, seed: int) -> set:
+    """CORRECT-Error question groups held out so that about frac of every dataset's trajectories is in the test set:
+    a group joins the normalized question and rec["qid"] (dataset / question_id without its _k run suffix), so no
+    question and no question id is in both the test set and the pool."""
+    parent: dict = {}
+
+    def find(x):
+        while parent.setdefault(x, x) != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+    for r in recs:
+        a, b = find("q:" + fp.norm_task(r["task"])), find("i:" + r.get("qid", r["uid"]))
+        if a != b:
+            parent[max(a, b)] = min(a, b)
+    groups = collections.defaultdict(list)
+    for r in recs:
+        groups[find("q:" + fp.norm_task(r["task"]))].append(r)
+    chosen: set = set()
+    for ds in sorted({r["subset"] for r in recs}):
+        total = sum(r["subset"] == ds for r in recs)
+        have = sum(r["subset"] == ds for g in chosen for r in groups[g])
+        for g in sorted((g for g, rs in groups.items() if any(r["subset"] == ds for r in rs)),
+                        key=lambda g: fp.stable_hash(seed, "correct-test", g)):
+            if have >= round(frac * total):
+                break
+            if g not in chosen:
+                chosen.add(g)
+                have += sum(r["subset"] == ds for r in groups[g])
+    return {r["uid"] for g in chosen for r in groups[g]}
+
+
+def pick_quota(recs: list[dict], n: int, key: str) -> list[dict]:
+    """n records by stable hash with quotas per subset proportional to the subset sizes (largest remainder)."""
+    if n >= len(recs):
+        return sorted(recs, key=lambda r: fp.stable_hash(key, r["uid"]))
+    by = collections.defaultdict(list)
+    for r in sorted(recs, key=lambda r: fp.stable_hash(key, r["uid"])):
+        by[r["subset"]].append(r)
+    exact = {k: n * len(v) / len(recs) for k, v in by.items()}
+    q = {k: int(x) for k, x in exact.items()}
+    for k in sorted(exact, key=lambda k: (-(exact[k] - q[k]), k))[:n - sum(q.values())]:
+        q[k] += 1
+    return [r for k in sorted(by) for r in by[k][:q[k]]]
+
+
+def has_agent_item(r: dict) -> bool:
+    """make_items writes an agent item for r (multi-agent, gold agent among 2..62 options)."""
+    a = fp.agents_in_order(r)
+    return not r.get("single_agent") and r.get("gold_agent") in a and 2 <= len(a) <= fp.MAX_STEPS
+
+
+def agent_features(r: dict, cap: int, level: str):
+    """Per agent option (fa_public.agents_in_order): position = relative option index, first / last option, index
+    one-hots 0-7; structure = + speaks the last agent step, share of the agent steps, first step index / n; surface =
+    + log mean and log total cut length, mean-length rank, longest / shortest mean."""
+    import numpy as np
+    agents = fp.agents_in_order(r)
+    n, steps = len(agents), r["steps"]
+    lens = {a: [] for a in agents}
+    first = {}
+    for i, s in enumerate(steps):
+        if s["agent"] in lens:
+            lens[s["agent"]].append(min(len(s["text"].strip()), cap))
+            first.setdefault(s["agent"], i)
+    last = next((s["agent"] for s in reversed(steps) if s["agent"] in lens), None)
+    tot = max(1, sum(len(v) for v in lens.values()))
+    mean = {a: sum(v) / max(1, len(v)) for a, v in lens.items()}
+    rank = {a: k / max(1, n - 1) for k, a in enumerate(sorted(agents, key=lambda a: mean[a]))}
+    rows = []
+    for i, a in enumerate(agents):
+        f = [i / max(1, n - 1), i == 0, i == n - 1] + [min(i, 7) == k for k in range(8)]
+        if level in ("structure", "surface"):
+            f += [a == last, len(lens[a]) / tot, first[a] / max(1, len(steps))]
+        if level == "surface":
+            f += [math.log1p(mean[a]) / 8, math.log1p(sum(lens[a])) / 10, rank[a], mean[a] == max(mean.values()),
+                  mean[a] == min(mean.values())]
+        rows.append(np.array(f, dtype=float))
+    return np.stack(rows)
+
+
+def agent_tensor(recs: list[dict], caps: dict, level: str):
+    import numpy as np
+    rows = [agent_features(r, caps[r["uid"]], level) for r in recs]
+    m = max(len(x) for x in rows)
+    X = np.zeros((len(recs), m, rows[0].shape[1]), dtype=np.float32)
+    mask = np.zeros((len(recs), m), dtype=bool)
+    for j, f in enumerate(rows):
+        X[j, :len(f)] = f
+        mask[j, :len(f)] = True
+    return X, mask, np.array([fp.agents_in_order(r).index(r["gold_agent"]) for r in recs])
+
+
+def agent_probe(train: list[dict], evals: dict, caps: dict, folds: int) -> dict:
+    """Agent-level probes (conditional logit over the agent options; agent_features) per subset (framework): within-
+    train CV (folds by task) and fit on the subset's train records applied to its records of every eval set; pooled
+    over subsets. A surface - structure gap flags a length tell of the faulty agent."""
+    import numpy as np
+    out: dict = {"train_cv": {}, "fit_by_group": {}, "pooled": {}}
+    by = collections.defaultdict(list)
+    for r in train:
+        by[r["subset"]].append(r)
+    hits: dict = collections.defaultdict(collections.Counter)
+    for g, rs in sorted(by.items()):
+        if len(rs) < 2 * folds:
+            continue
+        T = {lev: agent_tensor(rs, caps, lev) for lev in LEVELS}
+        acc, _ = cv_probe(T, np.arange(len(rs)), [fp.norm_task(r["task"]) for r in rs], 0, folds)
+        out["train_cv"][g] = {"n": len(rs)} | {k: round(v, 3) for k, v in acc.items()}
+        hits["train_cv"]["n"] += len(rs)
+        for lev in LEVELS:
+            hits["train_cv"][lev] += round(acc[lev] * len(rs))
+        w = {lev: fit_clogit_v(*T[lev]) for lev in LEVELS}
+        for name, es in evals.items():
+            sel = [r for r in es if r["subset"] == g]
+            if not sel:
+                continue
+            e = {"n": len(sel)}
+            for lev in LEVELS:
+                X, mask, y = agent_tensor(sel, caps, lev)
+                h = int((clogit_probs(X, mask, w[lev]).argmax(1) == y).sum())
+                e[lev] = round(h / len(sel), 3)
+                hits[name][lev] += h
+            hits[name]["n"] += len(sel)
+            out["fit_by_group"][f"{name}/{g}"] = e
+    out["pooled"] = {k: {"n": c["n"]} | {lev: round(c[lev] / max(1, c["n"]), 3) for lev in LEVELS}
+                     for k, c in hits.items()}
+    return out
+
+
+def new_source_summary(args, train: list[dict], val: list[dict], tests: dict, agent_sets: dict, caps: dict,
+                       agent_counts: dict) -> dict:
+    """summary.json new_sources: step- and agent-level train mixes, CORRECT-Error held-out groups, Aegis by framework
+    (pool / train / val / test, MAST modes and their mapping), Aegis trivial baselines and agent-level probes."""
+    out: dict = {"add_sources": args.add_sources, "share": json.loads(args.share),
+                 "agent_share": json.loads(args.agent_share),
+                 "dropped": sorted(g for g in fp.AEGIS_DROP_GROUPS if "aegis" in args.add_sources),
+                 "dropped_why": {g: w for g, w in fp.AEGIS_DROP_GROUPS.items() if "aegis" in args.add_sources}}
+    out["step_train_by_origin"] = dict(collections.Counter(r["origin"] for r in train).most_common())
+    out["step_val_by_origin"] = dict(collections.Counter(r["origin"] for r in val).most_common())
+    ag = collections.Counter(r["origin"] for r in train if has_agent_item(r))
+    for o in AGENT_ONLY:
+        if f"agent_only/train" in agent_counts and agent_sets["train"]:
+            ag[o] = agent_counts["agent_only/train"]
+    tot = max(1, sum(ag.values()))
+    out["agent_train_by_origin"] = {o: {"n": n, "share": round(n / tot, 3)} for o, n in ag.most_common()}
+    if "correct" in tests:
+        te = tests["correct"]
+        out["correct"] = {"test_n": len(te), "test_by_dataset": dict(collections.Counter(r["subset"] for r in te)),
+                          "test_by_generator": dict(collections.Counter(r["benchmark"] for r in te)),
+                          "test_questions": len({fp.norm_task(r["task"]) for r in te}),
+                          "test_agent_mismatch_flagged": sum("agent_mismatch" in r["flags"] for r in te),
+                          "test_agent_baselines": agent_baselines(   # the records of fa1_correct_test_agent.jsonl
+                              [r for r in te if has_agent_item(r) and "agent_mismatch" not in r["flags"]],
+                              [r for r in train if r["origin"] == "correct"]),
+                          "train_by_dataset": dict(collections.Counter(r["subset"] for r in train
+                                                                       if r["origin"] == "correct")),
+                          "test_frac": args.correct_test_frac}
+    a_tr, a_va, a_te = ([r for r in agent_sets.get(k, []) if has_agent_item(r)]   # the records with an agent item
+                        for k in ("train", "val", "test_aegis"))
+    if a_tr or a_te:
+        def by_fw(rs):
+            return dict(sorted(collections.Counter(r["subset"] for r in rs).items()))
+
+        def cover(rs):
+            return {"mast": dict(sorted(collections.Counter(r.get("mast") or "several" for r in rs).items())),
+                    "with_mode": sum(r.get("mode") is not None for r in rs),
+                    "with_category": sum(r.get("category") is not None for r in rs)}
+        out["aegis"] = {"train": by_fw(a_tr), "val": by_fw(a_va), "test": by_fw(a_te),
+                        "train_cover": cover(a_tr), "test_cover": cover(a_te),
+                        "mast_map": {k: {"mode": m, "category": c, "mast": n, "why": w}
+                                     for k, (m, c, n, w) in fp.MAST_MAP.items()},
+                        "baselines": {name: agent_baselines(rs, a_tr) for name, rs in
+                                      (("val", a_va), ("test_aegis", a_te)) if rs},
+                        "baselines_by_framework": {f"test_aegis/{fw}": agent_baselines(
+                            [r for r in a_te if r["subset"] == fw], a_tr) for fw in sorted({r["subset"] for r in a_te})}}
+        if a_tr:
+            out["aegis"]["probe"] = agent_probe(a_tr, {"val": a_va, "test_aegis": a_te}, caps, args.debias_folds)
+    return out
+
+
 def stage_build(args) -> None:
     norm = ROOT / args.norm if args.norm else ROOT / args.out / "norm"
     out, ev = ROOT / args.out, ROOT / args.eval_dir
@@ -656,6 +878,13 @@ def stage_build(args) -> None:
     if not args.agentracer:
         origins = [o for o in origins if o != "agentracer"]
     recs = {o: load(norm, o) for o in origins}
+    add_norm = ROOT / args.add_norm if args.add_norm else norm
+    for o in args.add_sources:                              # --add-sources (off: nothing is loaded)
+        if not (add_norm / f"{o}.jsonl").exists():
+            raise SystemExit(f"--add-sources {o}: {add_norm / (o + '.jsonl')} missing (run --stage normalize "
+                             f"--origins {o} --norm {args.add_norm or args.norm})")
+        recs[o] = load(add_norm, o)
+        origins.append(o)
     print("loaded", {o: len(v) for o, v in recs.items()}, f"rss {rss_mb()} MB", flush=True)
     for o in origins:                                       # > 62 steps or a single step: no item
         keep = []
@@ -673,12 +902,22 @@ def stage_build(args) -> None:
         tests["wwpro"] = [r for r in recs["wwpro"] if fp.norm_task(r["task"]) in held]
         for r in tests["wwpro"]:
             r["split"] = "test"
+    if "correct" in recs:                                   # --add-sources: held out by question group
+        held_c = correct_test(recs["correct"], args.correct_test_frac, args.seed)
+        tests["correct"] = [r for r in recs["correct"] if r["uid"] in held_c]
+        for r in tests["correct"]:
+            r["split"] = "test"
+    if "aegis" in recs:                                     # Aegis-Bench test
+        tests["aegis"] = [r for r in recs["aegis"] if r["split"] == "test"]
     pool = [r for o in origins for r in recs[o] if r["split"] == "pool"]
     counts["pool/before_filters"] = len(pool)
     keep = []
     for r in pool:                           # label consistency (pool only; eval files keep the labels as given)
         if "agent_mismatch" in r["flags"]:
             counts[f"{r['origin']}/drop/agent_mismatch"] += 1
+        elif r["origin"] == "correct" and set(r["flags"]) & set(fp.CORRECT_DROP_FLAGS):
+            for f in sorted(set(r["flags"]) & set(fp.CORRECT_DROP_FLAGS)):
+                counts[f"correct/drop/{f}"] += 1
         elif not r["single_agent"] and r.get("gold_agent") not in fp.agents_in_order(r):
             counts[f"{r['origin']}/drop/gold_agent_not_an_agent"] += 1
         else:
@@ -714,6 +953,15 @@ def stage_build(args) -> None:
     pool = keep
     counts["pool/after_dedup"] = len(pool)
     print("dedup", dict(sorted(dedup.items())), f"rss {rss_mb()} MB", flush=True)
+    if "correct" in tests:              # flagged CORRECT records leave the test set after serving as dedup references
+        keep_t = []
+        for r in tests["correct"]:
+            bad = sorted(set(r["flags"]) & set(fp.CORRECT_DROP_FLAGS))
+            if bad:
+                counts["correct/test_excluded/" + "+".join(bad)] += 1
+            else:
+                keep_t.append(r)
+        tests["correct"] = keep_t
     test_order = {o: {u: k for k, u in enumerate(sorted(r["uid"] for r in rs))} for o, rs in tests.items()}
     clean = None
     if args.clean:                                      # off: nothing below runs and nothing is consumed
@@ -723,6 +971,13 @@ def stage_build(args) -> None:
     if args.debias_length:                              # off: nothing below runs and nothing is consumed
         pool, debias = debias_length(pool, args)
         counts["pool/after_debias"] = len(pool)
+    apool = [r for r in pool if r["origin"] in AGENT_ONLY]          # agent-only records (--add-sources aegis)
+    if apool:
+        pool = [r for r in pool if r["origin"] not in AGENT_ONLY]
+        for r in apool:
+            if fp.clean_group(r) in fp.AEGIS_DROP_GROUPS:
+                counts[f"{fp.clean_group(r)}/drop/group"] += 1
+        apool = [r for r in apool if fp.clean_group(r) not in fp.AEGIS_DROP_GROUPS]
     # ---- val (by task group), then per-source caps on what is left
     caps_cfg, share = json.loads(args.caps), json.loads(args.share)
 
@@ -746,6 +1001,19 @@ def stage_build(args) -> None:
     total = sum(pre.values())
     val: list = []
     val_groups: set = set()                             # task groups across every source: none in both val and train
+    aval: list = []
+    if apool:                                           # agent-only val first: its task groups leave every train split
+        agroups = collections.defaultdict(list)
+        for r in apool:
+            agroups[fp.norm_task(r["task"])].append(r)
+        n_aval = min(args.aegis_val, round(args.aegis_val_frac * len(apool)))
+        for g in sorted(agroups, key=lambda g: fp.stable_hash(args.seed, "aval", g)):
+            if len(aval) >= n_aval:
+                break
+            val_groups.add(g)
+            aval += pick(agroups[g], 8, f"{args.seed}|avalg|{g}", False)
+        aval = aval[:n_aval]
+        counts["aegis/val"] = len(aval)
     for k in sorted(per):
         rs, n_val = per[k], round(args.n_val * pre[k] / total)
         sub = pre[k] < len(rs)                          # subsampled for train: val drawn with the same decile quotas
@@ -773,17 +1041,34 @@ def stage_build(args) -> None:
     for k in sorted(by_k):
         train += pick(by_k[k], want[k], f"{args.seed}|train|{k[0]}|{k[1]}", want[k] < len(by_k[k]))
         counts[f"{k[0]}/{k[1]}/train"] = min(want[k], len(by_k[k]))
-    print("train", len(train), "val", len(val), f"rss {rss_mb()} MB", flush=True)
+    atrain: list = []
+    if apool:                                           # agent-only train: at most --agent-share of agent-level train
+        arest = [r for r in apool if fp.norm_task(r["task"]) not in val_groups]
+        n_step_agent = sum(has_agent_item(r) for r in train)
+        share_a = json.loads(args.agent_share).get("aegis", 1.0)
+        n_a = len(arest) if share_a >= 1 else int(share_a / (1 - share_a) * n_step_agent)
+        atrain = pick_quota(arest, n_a, f"{args.seed}|atrain")
+        counts["aegis/pool"] = len(apool)
+        counts["aegis/train"] = len(atrain)
+        counts["aegis/val_groups_discarded"] = len(apool) - len(arest) - len(aval)
+        val_discard.update(f"{r['origin']}/{r['subset']}" for r in apool
+                           if fp.norm_task(r["task"]) in val_groups and r["uid"] not in {x["uid"] for x in aval})
+    print("train", len(train), "val", len(val), "agent-only train", len(atrain), "val", len(aval),
+          f"rss {rss_mb()} MB", flush=True)
     vt = {fp.norm_task(r["task"]) for r in val}
     assert not vt & {fp.norm_task(r["task"]) for r in train}, "val and train share a task"
+    if apool:
+        avt = vt | {fp.norm_task(r["task"]) for r in aval}
+        assert not avt & {fp.norm_task(r["task"]) for r in train + atrain}, "val and train share a task"
     if args.dry:
         print(json.dumps({"counts": dict(sorted(counts.items())), "want": {"/".join(k): v for k, v in want.items()},
                           "train": describe(train), "val": describe(val),
-                          "tests": {o: describe(rs) for o, rs in tests.items()}}, indent=1))
+                          "tests": {o: describe(rs) for o, rs in tests.items() if o not in AGENT_ONLY}}, indent=1))
         return
     del recs, pool, per, rest, by_k, keep, idx            # records no split uses (peak RSS); outputs unaffected
     # ---- caps, items
-    allrecs = {"train": train, "val": val} | {f"test_{o}": rs for o, rs in tests.items()}
+    allrecs = {"train": train, "val": val} | {f"test_{o}": rs for o, rs in tests.items() if o not in AGENT_ONLY}
+    agent_sets = {"train": atrain, "val": aval} | {f"test_{o}": rs for o, rs in tests.items() if o in AGENT_ONLY}
     cap_stats: dict = {}
     caps = {}
     for name, rs in allrecs.items():
@@ -791,6 +1076,13 @@ def stage_build(args) -> None:
         caps.update(fit_caps(rs, tok, args, st))
         cap_stats[name] = st | {"cap": pct([caps[r["uid"]] for r in rs])}
         print("caps", name, st, f"rss {rss_mb()} MB", flush=True)
+    for name, rs in agent_sets.items():                 # agent-only records: the agent prompt fits the budget
+        if rs:
+            st = {}
+            caps.update(fit_caps(rs, tok, args, st, agent=True))
+            cap_stats[f"agent_only/{name}"] = st | {"cap": pct([caps[r["uid"]] for r in rs])}
+            print("caps agent_only", name, st, f"rss {rss_mb()} MB", flush=True)
+    agent_counts: dict = {}
     files: dict = {}
     fails = []
     node_stats = collections.defaultdict(collections.Counter)
@@ -817,16 +1109,50 @@ def stage_build(args) -> None:
             steps.append(s)
             if a:
                 agents.append(a)
+        ars = sorted(agent_sets[split], key=lambda r: fp.stable_hash(args.seed, split, "aorder", r["uid"]))
+        n_a = 0
+        for k, r in enumerate(ars):                     # agent-only records (--add-sources aegis): agent items
+            a = fp.make_agent_item(r, f"fa1-{split}-{r['origin']}-{k:05d}", f"fa1/{r['origin']}", cap=caps[r["uid"]],
+                                   rng=random.Random(f"fa1|{args.seed}|{r['uid']}|items"))
+            if a is None:
+                counts[f"{r['origin']}/drop/no_agent_item_{split}"] += 1
+                continue
+            bad = fp.audit_agent_item(a)
+            if bad:
+                fails.append((a["item_id"], bad[:3]))
+            for n in a["subqs"]:
+                node_stats[f"agent_only/{split}"][(n["type"], fp.plain_truth(n), n["polarity"])] += 1
+            agents.append(a)
+            n_a += 1
+        if ars:
+            agent_counts[f"agent_only/{split}"] = n_a
         write(out / f"{split}.jsonl", steps)
         write(out / f"{split}_agent.jsonl", agents)
     sfx = args.eval_suffix
+    new_files: set = set()
     for o, rs in tests.items():
         rs = sorted(rs, key=lambda r: r["uid"])
         steps, gts, agents = [], [], []
         for r in rs:
             iid = f"fa1-{o}-test-{test_order[o][r['uid']]:05d}"          # the id of the uncleaned set
+            if o in AGENT_ONLY:
+                a = fp.make_agent_item(r, iid, f"fa1/{o}", cap=caps[r["uid"]],
+                                       rng=random.Random(f"fa1|{args.seed}|{r['uid']}|items"))
+                if a is None:
+                    counts[f"{o}/drop/no_agent_item_test"] += 1
+                    continue
+                bad = fp.audit_agent_item(a)
+                if bad:
+                    fails.append((a["item_id"], bad[:3]))
+                for n in a["subqs"]:
+                    node_stats[f"agent_only/test_{o}"][(n["type"], fp.plain_truth(n), n["polarity"])] += 1
+                agents.append(a)
+                continue
             s, a = fp.make_items(r, iid, f"fa1/{o}", cap=caps[r["uid"]], with_gt=False,
                                  rng=random.Random(f"fa1|{args.seed}|{r['uid']}|items"))
+            if o == "correct" and "agent_mismatch" in r["flags"]:     # the agent label contradicts the step label
+                counts["correct/test_no_agent_item/agent_mismatch"] += 1
+                a = None
             bad = fp.audit_item(s)
             if bad:
                 fails.append((iid, bad[:3]))
@@ -840,13 +1166,21 @@ def stage_build(args) -> None:
                 gts.append(g)
             if a:
                 agents.append(a)
+        if o in NEW_ORIGINS:      # new sources: no uncleaned version, so no suffix; empty files are not written
+            if o in AGENT_ONLY:
+                agent_counts[f"agent_only/test_{o}"] = len(agents)
+            for kind, items in (("", steps), ("_gt", gts), ("_agent", agents)):
+                if items:
+                    write(ev / f"fa1_{o}_test{kind}.jsonl", items)
+                    new_files.add(str((ev / f"fa1_{o}_test{kind}.jsonl").relative_to(ROOT)))
+            continue
         write(ev / f"fa1_{o}_test{sfx}.jsonl", steps)
         write(ev / f"fa1_{o}_test_gt{sfx}.jsonl", gts)
         write(ev / f"fa1_{o}_test_agent{sfx}.jsonl", agents)
     if sfx:                       # suffixed eval files are kept only where they differ from the unsuffixed reference
         ref_dir = ROOT / (args.compare_eval or args.eval_dir)
         decided = {}
-        for p in [p for p in files if (ROOT / p).parent.resolve() == ev.resolve()]:
+        for p in [p for p in files if (ROOT / p).parent.resolve() == ev.resolve() and p not in new_files]:
             ref = ref_dir / (Path(p).name[:-len(sfx + ".jsonl")] + ".jsonl")
             if ref.exists() and md5(ROOT / p) == md5(ref):
                 (ROOT / p).unlink()
@@ -877,7 +1211,7 @@ def stage_build(args) -> None:
         for (t, truth, pol), v in c.items():
             fam[t][0] += v
             fam[t][1] += v * truth
-        n_items = len(allrecs[name])
+        n_items = len(allrecs[name]) if name in allrecs else agent_counts.get(name, 0)
         summary["nodes"][name] = {"per_item": round(sum(c.values()) / max(1, n_items), 2),
                                   "families": {t: {"n": v[0], "plain_yes": round(v[1] / v[0], 3)}
                                                for t, v in sorted(fam.items())},
@@ -893,6 +1227,9 @@ def stage_build(args) -> None:
         for g in sorted({debias_group(r) for r in rs})}, caps, args.debias_folds)
     if debias is not None:
         summary["debias"] = debias
+    if args.add_sources:                                # new sources: mixes, held-out sets, agent-only block
+        summary["normalize_counts_added"] = json.loads((add_norm / "counts.json").read_text())
+        summary["new_sources"] = new_source_summary(args, train, val, tests, agent_sets, caps, agent_counts)
     if clean is not None:
         summary["clean"] = clean
     if args.compare_eval and not sfx:
@@ -997,10 +1334,29 @@ def main() -> None:
     ap.add_argument("--clean-drop-groups", default=None,
                     help="comma list of groups (origin/subset[/benchmark]) dropped from train / val under --clean "
                          "(default fa_public.CLEAN_DROP_GROUPS)")
+    ap.add_argument("--add-sources", default="",
+                    help="comma list of new sources (correct, aegis) added to the build (off by default; requires "
+                         "--clean): normalized with --stage normalize --origins correct,aegis")
+    ap.add_argument("--add-norm", default=None, help="normalized records of --add-sources (default --norm)")
+    ap.add_argument("--correct-file", default=CORRECT_FILE, help="normalize: CORRECT-Error under --raw (.parquet; "
+                                                                 "a .jsonl of the same fields is read as is)")
+    ap.add_argument("--correct-test-frac", type=float, default=0.10)
+    ap.add_argument("--aegis-val", type=int, default=100, help="most Aegis val trajectories (by task group)")
+    ap.add_argument("--aegis-val-frac", type=float, default=0.2, help="Aegis val share of its pool (after dedup)")
+    ap.add_argument("--agent-share", default=json.dumps({"aegis": 0.35}),
+                    help="JSON {agent-only origin: max share of the agent-level train items}")
     ap.add_argument("--eval-suffix", default=None,
                     help="suffix of the test files written (default '' and, under --clean, _c); suffixed files equal "
                          "to the unsuffixed reference (--compare-eval, else --eval-dir) are removed again")
     args = ap.parse_args()
+    args.add_sources = [o for o in args.add_sources.split(",") if o]
+    bad = [o for o in args.add_sources if o not in NEW_ORIGINS]
+    if bad:
+        raise SystemExit(f"--add-sources: unknown {bad} (known: {', '.join(NEW_ORIGINS)})")
+    if args.add_sources and args.stage != "normalize" and not args.clean:
+        raise SystemExit("--add-sources needs --clean (its test files are written once, cleaned, without a suffix)")
+    if set(args.debias_length.split(",")) & set(AGENT_ONLY):
+        raise SystemExit(f"--debias-length: {', '.join(AGENT_ONLY)} has no step labels")
     if args.eval_suffix is None:
         args.eval_suffix = "_c" if args.clean else ""
     if args.clean and not args.eval_suffix:
@@ -1009,14 +1365,16 @@ def main() -> None:
         raise SystemExit(f"--cap-max {args.cap_max} > PRECUT {fp.PRECUT}")
     if args.stage in ("normalize", "all"):
         try:                                     # only the AFTraj reader needs pandas (python3's user site)
-            if "aftraj" in args.origins.split(","):
+            if "aftraj" in args.origins.split(",") or ("correct" in args.origins.split(",")
+                                                       and not args.correct_file.endswith(".jsonl")):
                 import pandas  # noqa: F401
             stage_normalize(args)
         except ImportError:
             if args.stage == "normalize":
                 raise
             cmd = ["python3", "-P", "-E", str(Path(__file__).resolve()), "--stage", "normalize", "--raw", args.raw,
-                   "--out", args.out, "--origins", args.origins] + (["--norm", args.norm] if args.norm else [])
+                   "--out", args.out, "--origins", args.origins, "--correct-file", args.correct_file] + (
+                ["--norm", args.norm] if args.norm else [])
             print("normalize in a subprocess:", " ".join(cmd), flush=True)
             subprocess.run(cmd, check=True, cwd=os.environ.get("TMPDIR", "/tmp"))
     if args.stage in ("build", "all"):
