@@ -195,7 +195,8 @@ _AGENT_ASK = r"Question: What should the agent do\?"
 # paragraph before the options, in the one form its generator writes (a BoardgameQA question names the claim it asks
 # about, as numgen's answer question names the quantity; the judged statement / hypothesis of JustLogic, FOLIO, FLD
 # and RuleTaker is a paragraph of the problem and stays). Not here, no clean cut: arc_challenge / arc_easy (the
-# question is the whole problem) and gsm8k_soc (one free-text paragraph whose last sentence may carry premises).
+# question is the whole problem) and gsm8k_soc (one free-text paragraph whose last sentence may carry premises; its
+# Tree Forcing build, source gsm8k_tf, has its own branch: GFPQ on every item, GFP-S only on bare questions, GSM8K_TF).
 FINAL_QUESTION = {
     "justlogic": r"Question: Is the statement true, false, or uncertain given the passage\?",
     "folio": r"Question: Is the statement true, false, or uncertain given the premises\?",
@@ -225,6 +226,9 @@ def statement_block(item: dict) -> str:
       line opening with "Options:" (fa_public.sanitize).
     - the sources of FINAL_QUESTION: the prompt before its last paragraph, which must be that source's final question
       (the only "Options:" block follows it; no earlier paragraph opens with "Question: ").
+    - gsm8k_tf (data/student_gsm8k_tf, GSM8K with Socratic step nodes): the problem before its last sentence, only when
+      that sentence is a bare question (gsm8k_question_cut); a question sentence that carries premises ("If she sells
+      3 more, how many ...?", about 60% of GSM8K train) raises ValueError, as gsm8k_soc does for every item.
     Any other source, or a prompt that does not have this shape, raises ValueError (no clean definition)."""
     src, p, iid = item.get("source"), item.get("prompt", ""), item.get("item_id")
     if src == "knights_knaves":
@@ -257,6 +261,12 @@ def statement_block(item: dict) -> str:
         if not sep or not tail or "\n\n" in tail or "\nOptions:" in head or not head.startswith(_FA_HEADER):
             raise ValueError(f"{iid}: fa_public prompt is not log + the step or agent question + options")
         return head
+    if src == GSM8K_TF:
+        cut = gsm8k_question_cut(_gsm8k_tf_problem(item))
+        if cut is None:
+            raise ValueError(f"{iid}: no statement block: the last sentence of this gsm8k_tf problem is not a bare "
+                             "question (it carries a number, a condition or a clause; GFPQ uses problem_no_options)")
+        return cut[0]
     if src in FINAL_QUESTION:
         head, sep, opts = p.partition("\nOptions:\n")
         body, cut, last = head.rpartition("\n\n")
@@ -275,13 +285,58 @@ _FA_Q_STEP = ("Question: Which step contains the decisive error, i.e. the earlie
               "let the system solve the task?")
 _FA_Q_AGENT = "Question: Which agent made the decisive error that caused the failure?"
 
+# GSM8K with Tree Forcing nodes (scripts/build_gsm8k_tf.py): "Question: <problem>\nOptions:\n<numbers>", the problem
+# one line of free text whose last sentence asks for the answer and often carries premises, so GFPQ
+# (problem_no_options) is defined for every item and GFP-S (statement_block) only where that sentence is a bare
+# question: it ends with "?", opens with a wh-word other than "When", and holds no digit, number word, comma, colon,
+# semicolon, %, $ or condition / time-clause word; the text before it is one or more sentences without a "?".
+GSM8K_TF = "gsm8k_tf"
+_GSM_CUT = re.compile(r"(?<=[.!?])\s+(?=[A-Z])")
+_GSM_ASK = re.compile(r"^(?:How|What|Which|Who|Whom|Whose|Where|Why)\b")
+_GSM_NUMWORD = re.compile(
+    r"\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|"
+    r"seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|"
+    r"billion|half|halves|twice|double|doubled|triple|tripled|thrice|third|thirds|quarter|quarters|fourth|fifth|dozen|"
+    r"dozens|percent|once)\b", re.I)
+_GSM_PREMISE = re.compile(
+    r"\b(?:if|when|whenever|after|before|assuming|assume|given|suppose|supposing|since|because|including|excluding|"
+    r"except|without|unless|while|until|now|then|instead)\b", re.I)
+
+
+def _gsm8k_tf_problem(item: dict) -> str:
+    """The problem text of a gsm8k_tf prompt ("Question: <one line>\nOptions:\n<options>"), else ValueError."""
+    p, iid = item.get("prompt", ""), item.get("item_id")
+    head, sep, opts = p.partition("\nOptions:\n")
+    body = head[len("Question: "):]
+    if (not sep or "\nOptions:" in opts or not head.startswith("Question: ") or "\n" in head or not body.strip()
+            or "Question:" in body):
+        raise ValueError(f"{iid}: gsm8k_tf prompt is not 'Question: <problem>' + options")
+    return body
+
+
+def gsm8k_question_cut(problem: str) -> tuple[str, str] | None:
+    """(statements, question sentence) of a GSM8K problem when its last sentence is a bare question (see GSM8K_TF),
+    else None. The statements are the exact text before the last sentence boundary."""
+    cuts = list(_GSM_CUT.finditer(problem))
+    if not cuts:
+        return None
+    body, ask = problem[:cuts[-1].start()], problem[cuts[-1].end():]
+    if (not body.strip() or "?" in body or not ask.endswith("?") or not _GSM_ASK.match(ask)
+            or re.search(r"[\d,;:%$]", ask) or _GSM_NUMWORD.search(ask) or _GSM_PREMISE.search(ask)):
+        return None
+    return body, ask
+
 
 def problem_no_options(item: dict) -> str:
     """The problem WITHOUT its answer options but WITH its final question (--tree-view statements+question, GFPQ): the
     prompt before "\nOptions:" (K&K: preamble, statement lines and the question line; numgen: the "Question: ..." line
     with the answer quantity's question sentence; FINAL_QUESTION sources: the statement block, a blank line and the
-    final question paragraph). The final question names what is asked (e.g. which quantity a word problem wants), which
-    GFP-S drops. Defined for the sources statement_block covers; anything else raises ValueError."""
+    final question paragraph; gsm8k_tf: the "Question: <problem>" line, for every item, whether or not its last
+    sentence has a clean cut). The final question names what is asked (e.g. which quantity a word problem wants), which
+    GFP-S drops. Defined for the sources statement_block covers and gsm8k_tf; anything else raises ValueError."""
+    if item.get("source") == GSM8K_TF:                     # own shape check: statement_block may refuse the item
+        _gsm8k_tf_problem(item)
+        return item["prompt"].partition("\nOptions:")[0]
     statement_block(item)                                  # same sources and shape checks as GFP-S
     head, sep, _ = item["prompt"].partition("\nOptions:")
     if not sep:
