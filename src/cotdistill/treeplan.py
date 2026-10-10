@@ -78,7 +78,8 @@ def _descendants(nodes: list[dict]) -> dict[str, set]:
 
 
 def full_tree_plan(item: dict, *, cap: int, rng: random.Random, subq_target: str = "cot",
-                   subq_filter: str = "all") -> list[dict]:
+                   subq_filter: str = "all", node_types: set | frozenset | None = None,
+                   stats: dict | None = None) -> list[dict]:
     """The nodes of a full-tree group (at most `cap`, sampled if the tree is larger) with both fact sets:
     "parents" (true parent results) and "matched" (as many results from other nodes of the same item, depth-matched
     where possible, excluding the node, its parents, its descendants and the near-answer nodes: sinks at the maximum
@@ -90,11 +91,19 @@ def full_tree_plan(item: dict, *, cap: int, rng: random.Random, subq_target: str
     (no such node: the view is not eligible), the nearest in depth (node_depth, on the graph before filtering), then
     with the same stated answer, ties at random (F4), and never list a node as its own parent (F12). Older data keeps
     the original plan, so registered arms reproduce. subq_filter (subq_keep) restricts the asked nodes only; parents
-    and the matched pool still come from every node of the item."""
+    and the matched pool still come from every node of the item. node_types (None = every node; --tree-node-types)
+    likewise keeps only the asked nodes whose "type" is listed (a node without one is dropped), before the cap; depths,
+    parents and the matched pool are untouched (a dropped parent is simply not asked). With node_types, stats counts
+    the asked nodes it drops (node_type_dropped); without, stats is not touched."""
     nodes = [sq for sq in item.get("subqs", []) if "id" in sq]
     asked = [sq for sq in nodes if _node_p(sq, subq_target) is not None]
     if subq_filter != "all":
         asked = [sq for sq in asked if subq_keep(sq, subq_filter)]
+    if node_types is not None:
+        kept = [sq for sq in asked if sq.get("type") in node_types]
+        if stats is not None:
+            stats["node_type_dropped"] = stats.get("node_type_dropped", 0) + len(asked) - len(kept)
+        asked = kept
     if cap and len(asked) > cap:                # cap 0: no cap (every node)
         asked = rng.sample(asked, cap)
     if not nodes:

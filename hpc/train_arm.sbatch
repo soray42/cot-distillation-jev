@@ -200,6 +200,7 @@ arm_config() {           # sets F S T RLM DS for arm $1
     GFP) F=teacher; S=cot;   T=cot; DX="--tree-full plain --tree-view problem --tree-cap 0 --tree-sources knights_knaves" ;;   # every node, full problem
     GFPS) F=teacher; S=cot;  T=cot; DX="--tree-full plain --tree-view statements --tree-cap 0 --tree-sources knights_knaves" ;; # GFP-S: no question/options
     GFPQ) F=teacher; S=cot;  T=cot; DX="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves" ;; # GFP-S + the final question (no options)
+    GFPSNC) F=teacher; S=cot; T=cot; DX="--tree-full plain --tree-view statements --tree-cap 0 --tree-sources knights_knaves --tree-node-types parse,derive" ;; # GFPS without the K&K case (hypothesis) nodes
     GTF) F=teacher; S=cot;   T=cot; DX="--tree-full plain --tree-view statements --tree-cap 0 --tree-sources knights_knaves --tree-scaffold 0.5 --tree-depth-weight 1.0" ;;  # GFPS + fading parents' results + depth weights
     TFLN) F=teacher; S=cot;  T=cot; DX="--tree-full plain --tree-view local --tree-cap 0 --tree-sources knights_knaves" ;;   # local view, nothing stated
     TFLP) F=teacher; S=cot;  T=cot; DX="--tree-full true --tree-view local+ctxparse --tree-cap 0 --tree-sources knights_knaves" ;;  # TFL, parse nodes in the GFPS view

@@ -403,7 +403,8 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
                     node_format: str = "yesno", eligible_only: bool = False, subq_filter: str = "all",
                     view: str = "problem", sources: set | None = None, node_weight: float = 0.0,
                     stats: dict | None = None, mix_p: float = 0.5, mix_seed: int = 0,
-                    mix_epoch: int = 0, scaffold_p: float | None = None, depth_weight: float = 0.0) -> list[Example]:
+                    mix_epoch: int = 0, scaffold_p: float | None = None, depth_weight: float = 0.0,
+                    node_types: set | frozenset | None = None) -> list[Example]:
     """One problem with ALL its tree nodes (up to `cap`) instead of k sampled ones: [final] + one view per node.
     mode "true": eligible nodes are asked with their parents' results stated; "matched": with the same number of
     depth-matched non-parent results (see full_tree_plan); "plain": every node asked without facts; "placebo": the
@@ -429,7 +430,12 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
       and the line order come from the node's own generator (treeplan.scaffold_rng, keyed by mix_seed, mix_epoch,
       item and node), never from rng, so nodes, order, targets (yes/no order included) and weights stay GFP-S's;
     - depth_weight G (0 = off; every view and mode except control): the problem's node-view weight (aux_total, or
-      node_weight x views) split in proportion to (1 + node depth)^G instead of evenly (_depths)."""
+      node_weight x views) split in proportion to (1 + node depth)^G instead of evenly (_depths).
+    node_types (None = every node; --tree-node-types, e.g. GFPSNC = GFP-S without the K&K "case" nodes; every view and
+    mode except control): only the nodes whose "type" is listed are asked (full_tree_plan, before the cap; items of
+    other sources are untouched). The weight convention is unchanged, so the kept views share the same per-problem
+    total (aux_total / kept views each); depths, parents, matched pools and scaffold results still use every node.
+    Not in rng lockstep with the unfiltered arm (fewer views draw fewer yes/no orders)."""
     fin = [e for e in build_examples(item, final=final, subq="none", subq_target=subq_target, lambda_sub=0.0, rng=rng,
                                      permute_final=permute_final) if e.kind == "final"]
     if not fin:
@@ -440,11 +446,14 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
         raise ValueError(f"scaffold_p {scaffold_p}: a probability, for --tree-full plain --tree-view statements (GTF)")
     if depth_weight and mode == "control":
         raise ValueError("--tree-depth-weight needs tree nodes: control questions have no depth")
+    if node_types is not None and mode == "control":
+        raise ValueError("--tree-node-types needs tree nodes: control questions have no type")
     if view not in ("problem", "statements", "statements+question"):
         return fin + _local_views(item, mode=mode, view=view, rng=rng, cap=cap, aux_total=aux_total,
                                   subq_target=subq_target, node_format=node_format, eligible_only=eligible_only,
                                   subq_filter=subq_filter, node_weight=node_weight, stats=stats, mix_p=mix_p,
-                                  mix_seed=mix_seed, mix_epoch=mix_epoch, depth_weight=depth_weight)
+                                  mix_seed=mix_seed, mix_epoch=mix_epoch, depth_weight=depth_weight,
+                                  node_types=node_types)
     if view in ("statements", "statements+question") and (mode != "plain" or eligible_only or node_format != "yesno"):
         raise ValueError("--tree-view statements is implemented for --tree-full plain (yes/no nodes, all nodes)")
     context = (statement_block(item) if view == "statements" else problem_no_options(item)
@@ -460,7 +469,8 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
             pool = rng.sample(pool, cap)
         views = [(sq, [], "fresh", 0) for sq in pool]
     else:
-        plan = full_tree_plan(item, cap=cap, rng=rng, subq_target=subq_target, subq_filter=subq_filter)
+        plan = full_tree_plan(item, cap=cap, rng=rng, subq_target=subq_target, subq_filter=subq_filter,
+                              node_types=node_types, stats=stats)
         if eligible_only:
             plan = [e for e in plan if e["parents"]]
         for e in plan:
@@ -542,7 +552,7 @@ def _scaffold_lines(item: dict, sq: dict, by: dict, p: float, seed: int, epoch: 
 def _local_views(item: dict, *, mode: str, view: str, rng: random.Random, cap: int, aux_total: float,
                  subq_target: str, node_format: str, eligible_only: bool, subq_filter: str, node_weight: float,
                  stats: dict | None, mix_p: float = 0.5, mix_seed: int = 0, mix_epoch: int = 0,
-                 depth_weight: float = 0.0) -> list[Example]:
+                 depth_weight: float = 0.0, node_types: set | frozenset | None = None) -> list[Example]:
     """Tree Forcing node views WITHOUT the original problem (local_context): the item's preamble, then
     - parse nodes (local_lines): the statement line(s) they read, in every mode;
     - other nodes, view "local": mode "true" = the results of the node's parents (its depends_on; every parent of a
@@ -569,7 +579,7 @@ def _local_views(item: dict, *, mode: str, view: str, rng: random.Random, cap: i
     parents or with a parent whose result is not confident (nothing sufficient to state). The node is then asked as
     in the problem-view arms (yes/no order drawn from rng, the same soft target). Weight: node_weight, else
     aux_total / views (the full-tree convention); depth_weight G splits the same total in proportion to
-    (1 + node depth)^G."""
+    (1 + node depth)^G. node_types restricts the asked nodes (full_tree_plan; see build_full_tree)."""
     if (mode not in ("true", "matched", "plain") or (view != "local" and mode != "true")
             or view not in ("local", "ancestors") + CTX_VIEWS):
         raise ValueError(f"--tree-view {view} is implemented for --tree-full true (and matched / plain with the local "
@@ -589,7 +599,8 @@ def _local_views(item: dict, *, mode: str, view: str, rng: random.Random, cap: i
     depth = ({i: by[i]["node_depth"] for i in by} if all("node_depth" in sq for sq in nodes) else node_depths(nodes))
     anc = ancestors(nodes) if view == "ancestors" else None
     views, no_par = [], set()
-    for e in full_tree_plan(item, cap=cap, rng=rng, subq_target=subq_target, subq_filter=subq_filter):
+    for e in full_tree_plan(item, cap=cap, rng=rng, subq_target=subq_target, subq_filter=subq_filter,
+                            node_types=node_types, stats=st):
         sq = e["node"]
         if is_local_leaf(sq):
             stated = []

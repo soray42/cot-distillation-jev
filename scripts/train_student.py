@@ -43,7 +43,7 @@ RESUME_FREE = {"stop_after_h", "ckpt_every_min", "ckpt_single", "stop_at_step", 
 # Training arguments added after checkpoints may have been written: a checkpoint without the key had this value.
 NEW_ARG_DEFAULTS = {"tree_view": "problem", "tree_sources": "", "tree_node_weight": 0.0, "attn_impl": "", "fsdp": False,
                     "fsdp_optim": None, "tree_mix_p": 0.5, "tree_scaffold": 0.0, "tree_depth_weight": 0.0,
-                    "chat_template": False, "tree_pack": 0}
+                    "chat_template": False, "tree_pack": 0, "tree_node_types": ""}
 
 LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj",
                 "in_proj_qkv", "in_proj_z", "in_proj_a", "in_proj_b", "out_proj"]
@@ -144,6 +144,12 @@ def main() -> None:
     ap.add_argument("--tree-sources", default="",
                     help="full-tree groups: comma list of item sources that get node views; other items train their "
                          "final question only (every view mode); empty = all sources")
+    ap.add_argument("--tree-node-types", default="",
+                    help="full-tree groups: comma list of node types (the subq field type, e.g. parse,derive: GFPSNC = "
+                         "GFP-S without the K&K case nodes) that get node views; nodes of other types are not asked "
+                         "(their results may still be stated as parents in --tree-full true / matched / GTF); the "
+                         "per-problem weight convention is unchanged, so the kept views share the same total; only the "
+                         "items of --tree-sources are affected; empty = every node type")
     ap.add_argument("--tree-node-weight", type=float, default=0.0,
                     help="full-tree groups: loss weight of every node view (times the item weight); 0 = the per-problem "
                          "convention, --aux-total split evenly over the problem's views")
@@ -240,10 +246,10 @@ def main() -> None:
     ap.add_argument("--log-every", type=int, default=20)
     args = ap.parse_args()
     tree_opts = (args.tree_view != "problem" or args.tree_sources or args.tree_node_weight or args.tree_cap == 0 or
-                 args.tree_scaffold or args.tree_depth_weight or args.tree_pack)
+                 args.tree_scaffold or args.tree_depth_weight or args.tree_pack or args.tree_node_types)
     if tree_opts and not args.tree_full:
         raise SystemExit("--tree-view / --tree-sources / --tree-node-weight / --tree-cap 0 / --tree-scaffold / "
-                         "--tree-depth-weight / --tree-pack need --tree-full")
+                         "--tree-depth-weight / --tree-pack / --tree-node-types need --tree-full")
     if args.tree_pack and (args.tree_pack < 2 or (args.tree_full, args.tree_view) != ("plain", "statements") or
                            args.tree_scaffold or args.fsdp or args.chat_template):
         raise SystemExit(f"--tree-pack {args.tree_pack}: at least 2 views per pack, for --tree-full plain --tree-view "
@@ -263,6 +269,10 @@ def main() -> None:
                          "--tree-view statements only (GTF)")
     if args.tree_depth_weight and args.tree_full == "control":
         raise SystemExit("--tree-depth-weight needs tree nodes: control questions have no depth")
+    node_types = frozenset(x.strip() for x in args.tree_node_types.split(",") if x.strip()) or None
+    if args.tree_node_types and (node_types is None or args.tree_full == "control"):
+        raise SystemExit(f"--tree-node-types {args.tree_node_types!r}: a comma list of node types, for tree nodes "
+                         "(not --tree-full control: control questions have no type)")
     if args.tree_eligible_only and args.tree_full not in ("true", "matched", "plain", "placebo"):
         raise SystemExit("--tree-eligible-only needs --tree-full true/matched/plain/placebo")
     if args.subq_filter != "all" and (args.depth_stages or args.fact_stages or args.facts_always):
@@ -429,6 +439,13 @@ def main() -> None:
     tree_sources = {x for x in args.tree_sources.split(",") if x} or None
     if tree_sources and not any(it.get("source") in tree_sources for it in train_items):
         raise SystemExit(f"--tree-sources {args.tree_sources}: no item of {args.train} has one of these sources")
+    if node_types:                           # every listed type must occur among the nodes that may be asked
+        have = {sq.get("type") for it in train_items if tree_sources is None or it.get("source") in tree_sources
+                for sq in it.get("subqs") or [] if "id" in sq}
+        if node_types - have:
+            raise SystemExit(f"--tree-node-types {args.tree_node_types}: no node of type(s) "
+                             f"{','.join(sorted(node_types - have))} in the {args.tree_sources or 'tree'} items of "
+                             f"{args.train} (types there: {','.join(sorted(str(x) for x in have))})")
     if args.tree_view in ("statements", "statements+question", "local+ctxparse", "mix"):   # GFP-S, GFPQ, TFLP, MIX: every
         from cotdistill.treeplan import problem_no_options, statement_block   # view must build (fail before training);
         view_fn = problem_no_options if args.tree_view == "statements+question" else statement_block   # GFPQ needs
@@ -473,7 +490,7 @@ def main() -> None:
                                 subq_filter=args.subq_filter, view=args.tree_view,
                                 sources=tree_sources, node_weight=args.tree_node_weight, stats=st,
                                 mix_p=args.tree_mix_p, mix_seed=args.seed, mix_epoch=ep, scaffold_p=p_sc,
-                                depth_weight=args.tree_depth_weight)
+                                depth_weight=args.tree_depth_weight, node_types=node_types)
             if g and args.tree_pack and any(e.kind == "subq" for e in g):   # GFPSP: the GFPS views, packed
                 g = pack_views(g, tok, statement_block(it), max_len=args.max_len, max_nodes=args.tree_pack,
                                rng=pack_rng(args.seed, ep, it["item_id"]), stats=st)
