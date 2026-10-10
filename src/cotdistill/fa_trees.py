@@ -62,6 +62,30 @@ BOILERPLATE = re.compile(
 ANSWER_MARKER = re.compile(
     r"(?im)^[\s*#>-]*(final(?:\s+[\w-]+){0,4}|answer)\s*(\([^)\n]*\))?\s*\**\s*[:：]"
     r"|\bfinal answer\s*(\([^)\n]*\))?\s*\**\s*[:：]")
+# "Final note:", "Final caution:", "Final output format reminder:", "Final computed totals snapshot:" are headers, not answers
+MARKER_NOT_ANSWER = {"note", "notes", "caution", "cautions", "reminder", "reminders", "snapshot", "warning", "warnings",
+                     "remark", "remarks", "comment", "comments", "caveat", "caveats", "thought", "thoughts", "check",
+                     "checks", "verification", "plan"}
+
+
+def is_answer_marker(text: str) -> bool:
+    """ANSWER_MARKER anywhere in text, except "Final <words>:" headers whose words name a note / caution / reminder /
+    snapshot / check rather than the result (MARKER_NOT_ANSWER)."""
+    for m in ANSWER_MARKER.finditer(text):
+        head = m.group(1)
+        if head and set(re.findall(r"[a-z]+", head.lower())[1:]) & MARKER_NOT_ANSWER:
+            continue
+        return True
+    return False
+
+
+def is_note_header(text: str) -> bool:
+    """A step opening with such a header ("Final note: the answer relies on ...") is a trailing remark, skipped like a
+    closing line by the bare-answer rule."""
+    m = re.match(r"(?i)^[\s*#>-]*final((?:\s+[\w-]+){0,4})\s*(\([^)\n]*\))?\s*\**\s*[:：]", text.strip())
+    return bool(m and set(re.findall(r"[a-z]+", m.group(1).lower())) & MARKER_NOT_ANSWER)
+
+
 BARE_MAX = 120
 LEAD_YES_NO = re.compile(r"(?i)^(yes|no)[.,!:]?(\s|$)")              # "Yes. If the green plots ..." also counts as bare
 NOT_BARE = re.compile(r"(?i)^(if|noted|acknowledged|understood|thanks|thank you|confirmed|proceed\w*|review\w*|ok|okay|"
@@ -173,10 +197,10 @@ def answer_step_rule(traj: dict) -> tuple[int | None, str]:
        with a bare "Yes" / "No";
     the later of the two when both exist."""
     agent_steps = [s for s in traj["steps"] if s["agent"] not in NON_AGENTS]
-    marked = [s["k"] for s in agent_steps if ANSWER_MARKER.search(s["text"])]
+    marked = [s["k"] for s in agent_steps if is_answer_marker(s["text"])]
     bare = None
     for s in reversed(agent_steps):              # skip the closing lines at the end of the log
-        if is_closing(s["text"]):
+        if is_closing(s["text"]) or is_note_header(s["text"]):
             continue
         bare = s["k"] if is_bare_answer(s["text"]) or LEAD_YES_NO.match(s["text"].strip()) else None
         break
