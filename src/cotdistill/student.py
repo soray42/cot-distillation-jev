@@ -20,12 +20,14 @@ import torch.nn.functional as F
 import torch.utils.checkpoint
 
 from .metrics import calibration  # noqa: F401  (re-exported for scripts)
-from .treeplan import (CTX_VIEWS, LOCAL_HEADER, _descendants, _fact_line, _node_p, ancestors,  # noqa: F401
-                       answer_component, depth_split, full_tree_plan, is_local_leaf, local_context, mix_statements,
-                       node_depths, problem_no_options, scaffold_fade, scaffold_rng, statement_block, subq_keep,
-                       view_leak)
+from .treeplan import (CTX_VIEWS, LOCAL_HEADER, MC_SYMBOLS, _descendants, _fact_line, _node_p,  # noqa: F401
+                       ancestors, answer_component, depth_split, full_tree_plan, is_local_leaf, is_mc_node,
+                       local_context, mc_check, mc_labels, mc_options_block, mix_statements, node_depths,
+                       problem_no_options, scaffold_fade, scaffold_rng, statement_block, subq_keep, view_leak)
 
 SUBQ_TEMPLATE = "{problem}\n\nIntermediate question: {question}\nOptions:\nA) {a}\nB) {b}\nAnswer:"
+# a multiple-choice tree node (treeplan.is_mc_node): its own options, the layout of SUBQ_TEMPLATE
+SUBQ_OPTS_TEMPLATE = "{problem}\n\nIntermediate question: {question}\nOptions:\n{opts}\nAnswer:"
 FINAL_TEMPLATE = "{problem}\n\nAnswer:"
 RATIONALE_PREFIX = "{problem}\n\nReasoning:"          # rationale-LM baseline: CoT text, then the answer
 
@@ -174,6 +176,16 @@ def _soft(p_yes: float, yes_first: bool, eps: float = 1e-4) -> list[float]:
     return [p, 1 - p] if yes_first else [1 - p, p]
 
 
+def mc_node_example(problem: str, sq: dict, weight: float, item_id) -> Example:
+    """A multiple-choice tree node (treeplan.is_mc_node) asked like a final question: the context, the node question
+    with its own options under the letters A, B, ... (SUBQ_OPTS_TEMPLATE), readout at "Answer:" over those letters, a
+    one-hot target on its answer index (label smoothing, if any, is applied by kl_loss as for the final question).
+    Draws nothing from any generator (the option order is the data's)."""
+    labels = mc_labels(sq)
+    return Example(SUBQ_OPTS_TEMPLATE.format(problem=problem, question=sq["question"], opts=mc_options_block(sq)),
+                   labels, [float(i == sq["answer"]) for i in range(len(labels))], weight, "subq", item_id)
+
+
 _OPT_LINE = re.compile(r"^([A-Za-z0-9])\) (.*)$")     # option symbols A-Z, a-z, 0-9 (lists of up to 62 options)
 
 
@@ -249,6 +261,9 @@ def build_examples(item: dict, *, final: str, subq: str, subq_target: str, lambd
         pool = rng.sample(cot, k) + rng.sample(ctl, min(n - k, len(ctl)))
     else:
         pool = {"cot": item.get("subqs", []), "random": item.get("random_subqs", [])}.get(subq, [])
+    if any(is_mc_node(sq) for sq in pool):              # opt-in MC nodes: the full-tree arms read them
+        raise ValueError(f"{item.get('item_id')}: multiple-choice tree nodes are read by the full-tree arms "
+                         "(--tree-full) and evaluate_subq, not by --subq")
     usable = []
     for sq in pool:
         p = None
@@ -435,7 +450,12 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
     mode except control): only the nodes whose "type" is listed are asked (full_tree_plan, before the cap; items of
     other sources are untouched). The weight convention is unchanged, so the kept views share the same per-problem
     total (aux_total / kept views each); depths, parents, matched pools and scaffold results still use every node.
-    Not in rng lockstep with the unfiltered arm (fewer views draw fewer yes/no orders)."""
+    Not in rng lockstep with the unfiltered arm (fewer views draw fewer yes/no orders).
+    Multiple-choice nodes (treeplan.is_mc_node: the node carries "options" and "answer"; opt-in data such as
+    scripts/build_fa_sf.py --trees) are asked in the same context as a yes/no node of the view (stated results and
+    GTF scaffold included) with their own options (mc_node_example: SUBQ_OPTS_TEMPLATE, labels A, B, ..., one-hot
+    target on the answer, the per-problem weight) and draw nothing from rng; node_format "mc" leaves them as they are.
+    The local views (_local_views) refuse them."""
     fin = [e for e in build_examples(item, final=final, subq="none", subq_target=subq_target, lambda_sub=0.0, rng=rng,
                                      permute_final=permute_final) if e.kind == "final"]
     if not fin:
@@ -494,7 +514,8 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
         rng.shuffle(lines)
         if eligible_only and not lines:                     # GFE: the draws of the k stated lines of TFE/TFME
             rng.shuffle([None] * k)
-        if node_format == "mc" and mode != "control":      # multiple-choice node view, same stated results
+        mc = mode != "control" and is_mc_node(sq)         # a node with its own options (opt-in data)
+        if node_format == "mc" and mode != "control" and not mc:   # multiple-choice node view, same stated results
             ex = _mc_node_view(item, sq, lines, tgt, rng, wk * wi)
             if ex is not None:
                 out.append(ex)
@@ -504,6 +525,9 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
             sc = _scaffold_lines(item, sq, by, scaffold_p, mix_seed, mix_epoch, stats)
             if sc:
                 problem = context + f"\n\n{LOCAL_HEADER}\n" + "\n".join(sc)
+        if mc:                                              # its options and answer, as a final question; no draw
+            out.append(mc_node_example(problem, sq, wk * wi, item["item_id"]))
+            continue
         yes_first = rng.random() < 0.5
         a, b = ("Yes", "No") if yes_first else ("No", "Yes")
         out.append(Example(SUBQ_TEMPLATE.format(problem=problem, question=sq["question"], a=a, b=b), ["A", "B"],
@@ -586,6 +610,9 @@ def _local_views(item: dict, *, mode: str, view: str, rng: random.Random, cap: i
                          "view)")
     if eligible_only or node_format != "yesno":
         raise ValueError(f"--tree-view {view} does not combine with --tree-eligible-only / --node-format mc")
+    if any(is_mc_node(sq) for sq in item.get("subqs", [])):
+        raise ValueError(f"{item.get('item_id')}: multiple-choice tree nodes are read in the problem / statements "
+                         f"views only, not in --tree-view {view}")
     ctx_view = view in CTX_VIEWS
     if ctx_view and not 0.0 <= mix_p <= 1.0:
         raise ValueError(f"mix_p {mix_p} is not a probability")
@@ -1199,12 +1226,21 @@ def evaluate_subq(model, tok, items: list[dict], max_len: int, bs: int, cache: d
     """Student accuracy on the sub-questions of held-out items (the mechanism check: does the one-pass
     student answer the intermediate judgements?). Target: program truth when known, else the teacher's
     CoT-conditioned answer. Also scores the matched control questions against the teacher's fresh answer.
-    Broken down by node type and source; yes/no order randomised per question as in training."""
+    Broken down by node type and source; yes/no order randomised per question as in training.
+    Multiple-choice nodes (treeplan.is_mc_node) are asked with their own options (mc_node_example, no rng draw) and
+    scored by argmax == answer; their preds carry probs, pred, answer and rank instead of p_yes (p_yes is P(answer)),
+    and they also count in the group cot/mc."""
     rng = random.Random(seed)
     exs, meta = [], []
     for it in items:
         for kind, pool in (("cot", it.get("subqs", [])), ("control", it.get("random_subqs", []))):
             for sq in pool:
+                if kind == "cot" and is_mc_node(sq):           # own options, as a final question; no rng draw
+                    exs.append(mc_node_example(it["prompt"], sq, 1.0, it["item_id"]))
+                    meta.append({"item_id": it["item_id"], "source": it.get("source"), "kind": kind,
+                                 "type": sq.get("type") or kind, "truth_known": True, "target": sq["answer"],
+                                 "mc": len(sq["options"]), "question": sq["question"], "var": sq.get("var")})
+                    continue
                 if kind == "cot":
                     tgt = sq["truth"] if sq.get("truth") is not None else (
                         None if sq.get("p_cot") is None else sq["p_cot"] > 0.5)
@@ -1231,28 +1267,44 @@ def evaluate_subq(model, tok, items: list[dict], max_len: int, bs: int, cache: d
     dev = next(model.parameters()).device
     order = sorted(range(len(exs)), key=lambda i: len(exs[i].text))
     p_yes = [0.0] * len(exs)
+    mc_probs: dict[int, list[float]] = {}
+
+    def keep(i: int, z) -> None:
+        if "mc" in meta[i]:
+            mc_probs[i] = torch.softmax(z.float(), -1).tolist()
+            p_yes[i] = mc_probs[i][meta[i]["target"]]
+            return
+        pa = torch.softmax(z, -1)[0].item()
+        p_yes[i] = pa if meta[i]["yes_first"] else 1 - pa
     if getattr(model, "cotd_readout", False):    # FSDP2 root: the same batches, split across the ranks and gathered
         for i, z in enumerate(model.batched(tok, exs, order, bs, max_len, cache)[0]):
-            pa = torch.softmax(z, -1)[0].item()
-            p_yes[i] = pa if meta[i]["yes_first"] else 1 - pa
+            keep(i, z)
     else:
         for s in range(0, len(order), bs):
             idx = order[s:s + bs]
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev.type == "cuda"):
                 zs = label_logits(model, tok, [exs[i] for i in idx], max_len, cache)
             for i, z in zip(idx, zs):
-                pa = torch.softmax(z, -1)[0].item()
-                p_yes[i] = pa if meta[i]["yes_first"] else 1 - pa
+                keep(i, z)
     if was_training:
         model.train()
     groups: dict[str, list[int]] = {}
     preds = []
-    for m, py in zip(meta, p_yes):
-        ok = int((py > 0.5) == m["target"])
-        preds.append(dict(m, p_yes=py, correct=ok))
+    for i, (m, py) in enumerate(zip(meta, p_yes)):
+        if "mc" in m:
+            pr = mc_probs[i]
+            pred = max(range(len(pr)), key=pr.__getitem__)           # the first maximum (the trainer's argmax)
+            ok = int(pred == m["target"])
+            rank = 1 + sum(1 for j, x in enumerate(pr) if x > pr[m["target"]] or (x == pr[m["target"]]
+                                                                                 and j < m["target"]))
+            preds.append(dict(m, p_yes=py, probs=pr, pred=pred, answer=m["target"], rank=rank, correct=ok))
+            groups.setdefault("cot/mc", []).append(ok)
+        else:
+            ok = int((py > 0.5) == m["target"])
+            preds.append(dict(m, p_yes=py, correct=ok))
         for g in ("all_" + m["kind"], f"{m['kind']}/{m['source']}", f"{m['kind']}/type/{m['type']}"):
             groups.setdefault(g, []).append(ok)
-        if m["kind"] == "cot" and m["truth_known"]:
+        if m["kind"] == "cot" and m["truth_known"] and "mc" not in m:
             groups.setdefault("cot/program_truth", []).append(ok)
         for g in ("chain", "chain_top", "chain_item"):
             if g in m:

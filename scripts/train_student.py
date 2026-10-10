@@ -38,7 +38,7 @@ from cotdistill.student import (Example, brier_loss, build_examples, build_fact_
 # Arguments that do not change the training trajectory: a checkpoint may be resumed with different values.
 RESUME_FREE = {"stop_after_h", "ckpt_every_min", "ckpt_single", "stop_at_step", "code_commit", "eval", "eval_subq", "eval_bs",
                "eval_max_len", "dump_hidden", "dump_layers", "log_every", "save", "eval_local", "eval_local_view",
-               "log_update_loss"}
+               "log_update_loss", "eval_mid_preds"}
 
 # Training arguments added after checkpoints may have been written: a checkpoint without the key had this value.
 NEW_ARG_DEFAULTS = {"tree_view": "problem", "tree_sources": "", "tree_node_weight": 0.0, "attn_impl": "", "fsdp": False,
@@ -221,6 +221,10 @@ def main() -> None:
     ap.add_argument("--eval-at", default="", help="training-length curve: comma list of points, in epochs, at which "
                     "the --eval-mid sets are evaluated during training (e.g. 0.5,1,2,4); stored as metrics.json trajectory")
     ap.add_argument("--eval-mid", default="", help="comma list of --eval set names for the --eval-at points (default all)")
+    ap.add_argument("--eval-mid-preds", action="store_true",
+                    help="also write each --eval-at point's predictions on the --eval-mid sets to "
+                         "<out>/mid/preds_<name>_e<epoch>.jsonl (checkpoint selection on a val set, e.g. "
+                         "scripts/fa_readout.py --sf); off: nothing is written")
     ap.add_argument("--eval-mid-max", type=int, default=600,
                     help="at --eval-at points each set is cut to at most this many items (every k-th item, spread "
                          "across the file's task groups); the final eval always uses the full sets")
@@ -571,8 +575,13 @@ def main() -> None:
     def mid_eval(at_step: int) -> None:
         row = {"step": at_step, "epoch": eval_steps[at_step], "s_elapsed": round(time.time() - t0, 1)}
         for name, items in mid_sets.items():
-            m, _ = evaluate(model, tok, items, args.eval_max_len, args.eval_bs, cache)
+            m, preds = evaluate(model, tok, items, args.eval_max_len, args.eval_bs, cache)
             row[name] = {k: m[k] for k in ("acc", "nll", "ece", "brier") if k in m}
+            if args.eval_mid_preds and is_main:          # opt-in: the predictions of this point
+                (out / "mid").mkdir(exist_ok=True)
+                with open(out / "mid" / f"preds_{name}_e{eval_steps[at_step]:g}.jsonl", "w") as f:
+                    for p in preds:
+                        f.write(json.dumps(p) + "\n")
         trajectory.append(row)
         print("trajectory", json.dumps(row), flush=True)
         if is_main:

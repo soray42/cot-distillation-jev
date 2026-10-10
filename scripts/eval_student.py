@@ -4,6 +4,11 @@
       --eval jevbench=data/eval/jevbench_public.jsonl kk=data/eval/kk_heldout.jsonl --out runs/base-2B
 
 Writes metrics.json and preds_<set>.jsonl; scripts/score_preds.py gives per-group breakdowns.
+
+--time (opt-in): forward-only seconds per item for a practicality table (e.g. StepFinder's seconds per trajectory):
+every item of every set alone (batch 1, the readout forward of evaluate, no generation), after one warm-up item,
+CUDA-synchronized wall time per item -> timing_<set>.json (mean, median, p90, max, total, prompt tokens, device).
+The predictions and metrics are written as without the flag.
 """
 from __future__ import annotations
 
@@ -17,7 +22,31 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from cotdistill.student import evaluate, evaluate_subq, load_model, subq_sets, use_chat_template  # noqa: E402
+from cotdistill.student import (FINAL_TEMPLATE, encode_tail, evaluate, evaluate_subq, load_model,  # noqa: E402
+                                subq_sets, use_chat_template)
+
+
+def time_items(model, tok, items: list[dict], max_len: int, cache: dict) -> dict:
+    """--time: seconds per item, each item alone (batch 1), after one untimed warm-up item; CUDA synchronized."""
+    import time
+    import numpy as np
+    dev = next(model.parameters()).device
+    sync = torch.cuda.synchronize if dev.type == "cuda" else (lambda: None)
+    evaluate(model, tok, items[:1], max_len, 1, cache)                 # warm-up (kernels, allocator, label ids)
+    secs, ntok = [], []
+    for it in items:
+        sync()
+        t = time.perf_counter()
+        evaluate(model, tok, [it], max_len, 1, cache)
+        sync()
+        secs.append(time.perf_counter() - t)
+        ntok.append(len(encode_tail(tok, FINAL_TEMPLATE.format(problem=it["prompt"]), max_len)))
+    a = np.array(secs)
+    return {"n": len(secs), "s_mean": float(a.mean()), "s_median": float(np.median(a)),
+            "s_p90": float(np.percentile(a, 90)), "s_max": float(a.max()), "s_total": float(a.sum()),
+            "tokens_mean": float(np.mean(ntok)), "tokens_max": int(max(ntok)), "batch": 1, "max_len": max_len,
+            "device": torch.cuda.get_device_name(dev) if dev.type == "cuda" else "cpu",
+            "dtype": str(next(model.parameters()).dtype), "per_item_s": [round(x, 4) for x in secs]}
 
 
 def main() -> None:
@@ -37,6 +66,8 @@ def main() -> None:
                     help="read out every item as one user turn of the model's chat template, thinking off, at the "
                          "assistant turn's first token (bare letters), as train_student.py --chat-template; off: "
                          "unchanged")
+    ap.add_argument("--time", action="store_true", help="also time every item alone (batch 1, forward only): "
+                    "timing_<set>.json")
     args = ap.parse_args()
 
     import transformers
@@ -63,6 +94,11 @@ def main() -> None:
             for p in preds:
                 f.write(json.dumps(p) + "\n")
         print(name, json.dumps(m), flush=True)
+        if args.time:
+            tm = time_items(model, tok, items, args.max_len, cache)
+            (out / f"timing_{name}.json").write_text(json.dumps(tm, indent=1))
+            results.setdefault("timing", {})[name] = {k: v for k, v in tm.items() if k != "per_item_s"}
+            print("timing", name, json.dumps(results["timing"][name]), flush=True)
     for sname, spath in subq_sets(args.eval_subq or ""):
         items = [json.loads(l) for l in open(spath) if l.strip()]
         sm, spreds = evaluate_subq(model, tok, items, args.max_len, args.bs, cache)

@@ -48,6 +48,42 @@ def node_depths(nodes: list[dict]) -> dict[str, int]:
     return {i: depth(i, frozenset()) for i in by}
 
 
+# ---- multiple-choice tree nodes (opt-in data; e.g. scripts/build_fa_sf.py --trees) -------------------------------------
+# A node that carries its own "options" (option texts) and "answer" (the gold index) is asked like a final question:
+# its options under the letters MC_SYMBOLS[:k], read out at "Answer:" over those letters, one-hot target on the answer
+# (label smoothing, if any, comes from the loss as for the final question). The trigger is the "options" key; no node
+# of the existing data carries one, so every default path is unchanged. MC nodes are read by the full-tree arms in the
+# problem / statements / statements+question views (GF, GFP-S, GFPSP, ...) and by evaluate_subq; they never state a
+# result (_fact_line is None for them) and the local Tree Forcing views refuse them.
+MC_SYMBOLS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"   # fa_public.SYMBOLS (Intern-Decision's)
+
+
+def is_mc_node(sq: dict) -> bool:
+    """Whether a tree node is a multiple-choice node (it has an "options" key); mc_check validates it."""
+    return isinstance(sq, dict) and "options" in sq
+
+
+def mc_check(sq: dict) -> None:
+    """ValueError unless the MC node has 2..62 distinct one-line option texts and an int answer index among them."""
+    o, a = sq.get("options"), sq.get("answer")
+    ok = (isinstance(o, list) and 2 <= len(o) <= len(MC_SYMBOLS) and all(isinstance(t, str) and t.strip()
+                                                                          and "\n" not in t for t in o)
+          and len(set(o)) == len(o) and isinstance(a, int) and not isinstance(a, bool) and 0 <= a < len(o))
+    if not ok or not str(sq.get("question") or "").strip() or "\n" in sq["question"]:
+        raise ValueError(f"MC node {sq.get('id')!r}: needs a one-line question, 2-{len(MC_SYMBOLS)} distinct one-line "
+                         f"options and an answer index (got options {o!r}, answer {a!r})")
+
+
+def mc_labels(sq: dict) -> list[str]:
+    mc_check(sq)
+    return list(MC_SYMBOLS[:len(sq["options"])])
+
+
+def mc_options_block(sq: dict) -> str:
+    """The node's 'X) text' option lines (the layout of a final question's options)."""
+    return "\n".join(f"{L}) {t}" for L, t in zip(mc_labels(sq), sq["options"]))
+
+
 def _node_p(sq: dict, subq_target: str = "cot") -> float | None:
     if subq_target == "truth" and sq.get("truth") is not None:
         return 1.0 if sq["truth"] else 0.0
@@ -94,9 +130,10 @@ def full_tree_plan(item: dict, *, cap: int, rng: random.Random, subq_target: str
     and the matched pool still come from every node of the item. node_types (None = every node; --tree-node-types)
     likewise keeps only the asked nodes whose "type" is listed (a node without one is dropped), before the cap; depths,
     parents and the matched pool are untouched (a dropped parent is simply not asked). With node_types, stats counts
-    the asked nodes it drops (node_type_dropped); without, stats is not touched."""
+    the asked nodes it drops (node_type_dropped); without, stats is not touched. Multiple-choice nodes (is_mc_node) are
+    asked under every subq_target (their target is their answer index); they are never confident, so never stated."""
     nodes = [sq for sq in item.get("subqs", []) if "id" in sq]
-    asked = [sq for sq in nodes if _node_p(sq, subq_target) is not None]
+    asked = [sq for sq in nodes if _node_p(sq, subq_target) is not None or is_mc_node(sq)]   # MC: its own answer
     if subq_filter != "all":
         asked = [sq for sq in asked if subq_keep(sq, subq_filter)]
     if node_types is not None:
