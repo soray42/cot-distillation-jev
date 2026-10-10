@@ -31,14 +31,16 @@ Dedup: a puzzle is skipped when its prompt (before or after augmentation), its s
 statement lines occurs in data/bench/train_kk.jsonl, data/student_v3sl/{train,val}.jsonl, any data/eval/*kk*.jsonl or
 data/eval/diag*.jsonl (every "prompt" / "*_prompt" string of every record), in val, or earlier in train; puzzles with
 fewer than 6 generated options (the solver's format) are skipped too. Each skip is counted.
-Size: --n train puzzles (default 1000), --val-n val puzzles (300). tokens.json (needs `tokenizers`; --no-tokens skips
-it): train tokens per epoch with the Qwen3.5 tokenizer, final view (A2: FINAL_TEMPLATE over the prompt) and GFP-S node
-views (every node, --tree-cap 0: SUBQ_TEMPLATE over treeplan.statement_block, as student.build_full_tree builds them),
-for every N of --grid (the build then generates max(grid) train puzzles and writes the first --n), next to the same
-counts for data/student_numgen_tf (--tree-sources numgen); padded tokens / forward passes per epoch for token budgets
-2048 and 4096 (student.token_budget_batches, IPU problems per update in file order). DEFAULT_N = the largest grid N
-whose GFP-S tokens per epoch stay within BUDGET x numgen's (tokens.json "rule" re-checks it; "crossover" gives the
-largest prefix N of any size).
+Size: --n train puzzles (default DEFAULT_N = 1792), --val-n val puzzles (300). tokens.json (needs `tokenizers`;
+--no-tokens skips it): train tokens per epoch with the Qwen3.5 tokenizer, final view (A2: FINAL_TEMPLATE over the
+prompt) and GFP-S node views (every node, --tree-cap 0: SUBQ_TEMPLATE over treeplan.statement_block, as
+student.build_full_tree builds them), for every N of --grid (the build then generates max(grid) train puzzles and
+writes the first --n), next to the same counts for data/student_numgen_tf (--tree-sources numgen); padded tokens /
+forward passes per epoch for token budgets 2048 and 4096 (student.token_budget_batches, IPU problems per update in
+file order). DEFAULT_N = the largest train
+prefix whose GFP-S tokens per epoch stay within BUDGET x numgen's (tokens.json "crossover": 1792 = 256 per size, 1.10x
+numgen, so a 4-epoch GFP-S run costs about what the numgen one did; "rule" re-checks it and also gives the largest grid
+N within the budget, 1000 = 0.61x).
 summary.json: sizes, md5s, people-count / gold-position / augmentation counts (v3sl K&K alongside), node statistics,
 cleaning and sufficiency counters (v3sl's names), dedup counts, format check.
 
@@ -87,7 +89,7 @@ SOLVER = "teacher_cache/solver_kk_v3f/build_reasoning_trees.py"
 TOKENIZER = "results/weights/T1-Qwen3.5-2B-Base-student_v3-s2/model/tokenizer.json"
 NUMGEN = "data/student_numgen_tf/train.jsonl"
 GRID = "1000,2000,4000,8000"
-DEFAULT_N, VAL_N = 1000, 300
+DEFAULT_N, VAL_N = 1792, 300        # DEFAULT_N: tokens.json crossover (the largest prefix within BUDGET), 256 per size
 BUDGET = 1.10                       # GFP-S tokens per epoch at most 1.1 x numgen's (DEFAULT_N rule)
 AUG_BLOCK, AUG_WRONG, AUG_RIGHT = 50, 4, 1  # per block: inject_none's p_wrong 0.08 / p_right 0.02, exact
 IPU = 32                            # train_student.py --items-per-update default (full-tree loop: problems per update)
@@ -531,7 +533,7 @@ def main(argv: list[str] | None = None) -> dict:
         ok = [int(n) for n, row in tok_rep["grid"].items() if row["tokens_gfps"] <= cap]
         tok_rep["rule"] = {"budget": BUDGET, "numgen_tokens_gfps": ng["tokens_gfps"], "cap_tokens_gfps": round(cap),
                            "largest_grid_n_within_budget": max(ok) if ok else None, "default_n": DEFAULT_N,
-                           "default_n_follows_rule": bool(ok) and max(ok) == DEFAULT_N}
+                           "default_n_follows_rule": crossing == DEFAULT_N}
         tok_rep["crossover"] = {"n": crossing, "n_multiple_of_7": None if crossing is None else crossing // 7 * 7,
                                 "note": "largest train prefix with GFP-S tokens per epoch <= cap_tokens_gfps "
                                         "(None: the whole pool fits)"}
