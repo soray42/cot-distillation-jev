@@ -38,6 +38,7 @@ Owner: Haotian "Sora" Yang. Private research repository; data, results and notes
 | `scripts/ladder_readout.py`, `depth_readout.py`, `fa_readout.py` | Readouts: arms x seeds x learning rates with paired bootstrap CIs; difficulty shift; failure-attribution baselines |
 | `scripts/kk_audit.py`, `kk_audit_endpoints.py`, `kk_audit_diag.py` | Causal audit (DAS interchange interventions, probes) and its registered endpoints |
 | `scripts/grad_subspace.py` | One-step full-gradient subspaces vs the finished update (link to LoRA-One, arXiv 2502.01235) |
+| `scripts/kk_reasoning_type.py` | Knights-and-Knaves test items split by hypothesis structure (one vs several or nested case splits); arm differences per subgroup |
 | `scripts/eval_intern_format.py`, `eval_llm_baseline.py` | Evaluating third-party models in their own request format; chat-template baselines |
 | `hpc/train_arm.sbatch` | Slurm job for one training run; `arm_config` lists every arm (A2, G3, GFPS, GFPQ, GFPSP, TFL, GTF, ...) |
 | `hpc/*.sbatch`, `hpc/*.sh` | Other jobs (audit, Intern-format eval, gradient subspaces, memory tests) and data push / fetch helpers |
@@ -88,6 +89,8 @@ python scripts/ladder_readout.py 'results/hpc/l4b/*' --out results/ladder_readou
 ## Changelog
 
 The README is updated with every push.
+
+- 2026-10-10: `scripts/kk_reasoning_type.py`: the Tree Forcing vs answer-only gap on Knights-and-Knaves does not depend on how many hypothetical case splits a puzzle needs (interaction about 0). Status: learning-rate sweep on two domains (math: Tree Forcing ahead at tuned rates; Knights-and-Knaves: tie), PrOntoQA-OOD and GSM8K runs queued.
 
 - 2026-10-09: first README. Since the previous push: Tree Forcing variants GFPQ and GFPSP (packed node questions),
   token-budget batching for every arm on one GPU, PrOntoQA-OOD and GSM8K tree domains, failure-attribution Tier 0 and
