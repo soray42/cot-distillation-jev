@@ -119,6 +119,12 @@ def audit_item(solver, it: dict, trees: Path, c: collections.Counter, bad: list)
     raw = json.load(open(trees / f"trees/{it['item_id']}.json"))["nodes"]
     assert [(n["id"], n["question"], n["depends_on"]) for n in builder.nodes] == \
         [(n["id"], n["question"], n["depends_on"]) for n in raw], f"{it['item_id']}: re-solved tree differs"
+    return audit_nodes(solver, builder, raw, it, c, bad)
+
+
+def audit_nodes(solver, builder, raw: list[dict], it: dict, c: collections.Counter, bad: list) -> dict:
+    """audit_item's check for a solved builder (its proof's raw node list `raw`) and the item's cleaned nodes
+    (it["subqs"]); also used by scripts/build_kk_tf.py on puzzles solved in memory."""
     m, universe = masks(solver, builder)
     alias, generic, verify = cleaning_map(raw)
     rawby = {n["id"]: n for n in raw}
