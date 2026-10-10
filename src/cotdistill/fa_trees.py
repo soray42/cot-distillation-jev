@@ -68,12 +68,18 @@ MARKER_NOT_ANSWER = {"note", "notes", "caution", "cautions", "reminder", "remind
                      "checks", "verification", "plan"}
 
 
+REQUEST_BEFORE = re.compile(r"(?i)\b(prepare|provide|give|submit|send|share|post|need|await\w*|wait(ing)? for|"
+                            r"request\w*|deliver)\s+(the|your|a|our)?\s*$")
+
+
 def is_answer_marker(text: str) -> bool:
     """ANSWER_MARKER anywhere in text, except "Final <words>:" headers whose words name a note / caution / reminder /
     snapshot / check rather than the result (MARKER_NOT_ANSWER)."""
     for m in ANSWER_MARKER.finditer(text):
         head = m.group(1)
         if head and set(re.findall(r"[a-z]+", head.lower())[1:]) & MARKER_NOT_ANSWER:
+            continue
+        if REQUEST_BEFORE.search(text[max(0, m.start() - 40):m.start()]):   # "Please prepare the final answer:"
             continue
         return True
     return False
@@ -94,7 +100,10 @@ NOT_BARE = re.compile(r"(?i)^(if|noted|acknowledged|understood|thanks|thank you|
 CLOSING_MAX = 200
 CLOSING = re.compile(r"(?i)^if\b|\b(task (is )?(complete|completed|closed)|terminat\w*|session (closed|complete|ended)|"
                      r"answer (provided|delivered|submitted)|(has|have) been (submitted|delivered|provided|sent)|"
-                     r"end of task|workflow complete|concluding|finaliz\w*|wrap(ping)?[- ]up|no further)\b")
+                     r"end of task|workflow complete|concluding|finaliz\w*|wrap(ping)?[- ]up|no further|"
+                     r"end of (the )?(log|conversation|session|chat|transcript|discussion)|sign(ing|ed)?[- ]off|"
+                     r"standing by|on standby|ready to (revisit|assist|help|continue|resume)|logging completion|"
+                     r"already concluded)\b")
 META_LEAK = re.compile(r"ground[ -]?truth|mistake_reason|is_mistake|\bFM-\d|annotat|gold (step|label|answer)|"
                        r"reference answer|hidden answer", re.I)
 STEP_REF = re.compile(r"\bStep\s+(\d+)(?:\s*\[([^\]\n]*)\])?")
