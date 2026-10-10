@@ -11,6 +11,9 @@ Owner: Haotian "Sora" Yang. Private research repository; data, results and notes
 
 ## Status (2026-10-10)
 
+- Failure attribution now follows StepFinder's protocol (same training data and test sets, our method). Reasoning trees for
+  its 4,056 training trajectories are written and checked; about 7% of its labels are not supported by the log.
+
 - Design: the science line trains and tests on one domain per run (numeric chains, PrOntoQA-OOD, GSM8K, Knights-and-
   Knaves); the multi-source mixture `student_v3sl` belongs to the release model. Single-domain Knights-and-Knaves data
   (`build_kk_tf.py`) were added on 2026-10-10; earlier Knights-and-Knaves comparisons used the mixture.
@@ -31,6 +34,8 @@ Owner: Haotian "Sora" Yang. Private research repository; data, results and notes
 | `src/cotdistill/treeplan.py` | Tree-node planning, torch-free: statement blocks per data source (`statement_block`, `problem_no_options`), node orders, leak checks |
 | `src/cotdistill/numgen.py`, `pronto.py`, `chaingen.py`, `rulegen.py`, `policygen.py`, `sources.py` | Data generators and source converters (numeric chains, PrOntoQA-OOD-style proofs, decision chains, rule and policy cases) |
 | `src/cotdistill/fa_tier0.py`, `fa_public.py` | Failure attribution: simulated multi-agent trajectories with replay-verified labels (Tier 0); cleaned public datasets (Tier 1) |
+| `src/cotdistill/fa_trees.py`, `scripts/extract_fa_trees.py` | Failure attribution: multiple-choice reasoning trees on StepFinder's trajectories (answer step, provenance chain, content, conflict, agent) and their automatic checks (chain, quotes, leaks, length / log-overlap / surface-form tells) |
+| `scripts/build_fa_sf.py` | StepFinder's protocol: one model per Who&When subset, its training trajectories, Who&When test files; `--trees` swaps in the reasoning trees |
 | `src/cotdistill/fsdp.py`, `offload.py` | Two-GPU FSDP2 training and CPU-offloaded AdamW (fp32 master weights) |
 | `src/cotdistill/interchange.py` | Interchange interventions for the causal audit |
 | `src/cotdistill/teacher.py`, `deepseek.py`, `openrouter.py`, `readout.py` | Teacher pipeline (DeepSeek only) and log-probability readout |
@@ -92,6 +97,11 @@ python scripts/ladder_readout.py 'results/hpc/l4b/*' --out results/ladder_readou
 ## Changelog
 
 The README is updated with every push.
+
+- 2026-10-10 (3): multiple-choice tree nodes (opt-in by an `options` field), `--eval-mid-preds`, `eval_student --time`;
+  `build_fa_sf.py` (StepFinder protocol) and `fa_readout.py --sf` (Acc@K, MRR@3, tolerance accuracy); `fa_trees.py` /
+  `extract_fa_trees.py` (reasoning trees for failure attribution with automatic checks, incl. answer-step rule fixes,
+  `rule_override`, log-overlap and surface-form checks).
 
 - 2026-10-10 (2): `--tree-node-types` and arm `GFPSNC`; `build_kk_tf.py` (single-domain Knights-and-Knaves, solver trees, 1,792 puzzles by default so Tree Forcing costs about as much per epoch as on numeric chains); status rewritten: science line on single-domain data only.
 
