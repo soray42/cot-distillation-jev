@@ -23,7 +23,9 @@ Teacher output ("source tree", one JSON object per trajectory; any teacher):
 
 A teacher that finds the label unsupported by the log writes {"traj_id": ..., "teacher": ..., "drop": "<reason>"}
 instead; the trajectory is then rejected with the failure "teacher_drop: <reason>". "label_note" records doubts about
-a label the teacher still builds a tree for.
+a label the teacher still builds a tree for. "rule_override": "<one sentence>" accepts a disagreement with
+answer_step_rule when the rule picks a step that is not the team's answer (e.g. a later remark "Awaiting further data
+..." after "Final answer: X"); the reason is kept in checks["answer_rule"]["override"].
 
 assemble() renders the options (pointer options exactly "Step k [AgentName]" with k = history step_id), shuffles
 them with a seeded RNG, and returns the output node list {"id", "type", "question", "options", "answer",
@@ -454,8 +456,10 @@ def check_tree(traj: dict, src: dict, nodes: list[dict] | None = None, seed: int
     rule_k, how = answer_step_rule(traj)
     teacher_k = chain[0] if chain else None
     agree = None if rule_k is None or teacher_k is None else rule_k == teacher_k
-    res["answer_rule"] = {"rule": rule_k, "how": how, "teacher": teacher_k, "agree": agree}
-    if agree is False:
+    override = (src.get("rule_override") or "").strip()
+    res["answer_rule"] = {"rule": rule_k, "how": how, "teacher": teacher_k, "agree": agree,
+                          **({"override": override} if override else {})}
+    if agree is False and not override:
         fails.append(f"answer_rule_disagree: rule {rule_k}, teacher {teacher_k}")
     if src.get("answer_step") is not None and teacher_k is not None and src.get("answer_step") != teacher_k:
         fails.append("answer_step_field_mismatch")
