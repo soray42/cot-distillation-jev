@@ -9,17 +9,19 @@ system to fail) and the tooling for a causal audit of internal variables.
 
 Owner: Haotian "Sora" Yang. Private research repository; data, results and notes are not tracked (see `.gitignore`).
 
-## Status (2026-10-09)
+## Status (2026-10-10)
 
-- At learning rate 1e-5 and equal compute, Tree Forcing beats answer-only training (`A2`) on Knights-and-Knaves puzzles
-  larger than any seen in training (3 of 3 seeds) and on deeper arithmetic chains (2 of 2 seeds), and learns within one
-  epoch in every seed.
-- Supervising the same steps with their premises written out (`TFL`) reaches about 100% on the steps but lowers one-pass
-  accuracy. The premises must stay latent.
-- Open: with its own best learning rate (3e-6) the answer-only baseline matches Tree Forcing on the logic puzzles (one
-  seed). A learning-rate sweep, 3 seeds at the selected rates, a packed variant (`GFPSP`) and data-efficiency runs
-  are in progress.
-- Open: the causal audit (`scripts/kk_audit.py`, version 2); the first version failed as a measurement.
+- Design: the science line trains and tests on one domain per run (numeric chains, PrOntoQA-OOD, GSM8K, Knights-and-
+  Knaves); the multi-source mixture `student_v3sl` belongs to the release model. Single-domain Knights-and-Knaves data
+  (`build_kk_tf.py`) were added on 2026-10-10; earlier Knights-and-Knaves comparisons used the mixture.
+- Numeric chains, learning rate tuned for both arms (3e-6), one seed: Tree Forcing ahead of answer-only training,
+  pending a rerun with both arms on the same hardware and precision and an answer-only run with matched compute.
+- Knights-and-Knaves inside the mixture: tie at tuned learning rates; the gap does not depend on the puzzle's hypothesis
+  structure (`kk_reasoning_type.py`).
+- In progress: PrOntoQA-OOD, GSM8K and single-domain Knights-and-Knaves pairs; seeds 13 and 14 on numeric chains; a
+  Tree Forcing variant without hypothetical case nodes (`GFPSNC`); causal audit v2.
+- Supervising the same steps with their premises written out (`TFL`) lowers one-pass accuracy; the premises must stay
+  latent.
 
 ## Repository layout
 
@@ -34,7 +36,7 @@ Owner: Haotian "Sora" Yang. Private research repository; data, results and notes
 | `src/cotdistill/teacher.py`, `deepseek.py`, `openrouter.py`, `readout.py` | Teacher pipeline (DeepSeek only) and log-probability readout |
 | `src/cotdistill/evalsets.py`, `metrics.py` | Held-out evaluation sets and torch-free metrics |
 | `scripts/train_student.py` | Training entry point (all arms; `--tree-full`, `--tree-view`, `--tree-pack`, `--token-budget`, `--fsdp`, `--chat-template`) |
-| `scripts/build_*.py` | Data builders (`build_numgen_tf.py`, `build_pronto_tf.py`, `build_gsm8k_tf.py`, `build_fa_tier0.py`, `build_fa_public.py`, `build_v7.py`, `build_v8.py`, ...) |
+| `scripts/build_*.py` | Data builders (`build_numgen_tf.py`, `build_pronto_tf.py`, `build_gsm8k_tf.py`, `build_kk_tf.py`, `build_fa_tier0.py`, `build_fa_public.py`, `build_v7.py`, `build_v8.py`, ...) |
 | `scripts/ladder_readout.py`, `depth_readout.py`, `fa_readout.py` | Readouts: arms x seeds x learning rates with paired bootstrap CIs; difficulty shift; failure-attribution baselines |
 | `scripts/kk_audit.py`, `kk_audit_endpoints.py`, `kk_audit_diag.py` | Causal audit (DAS interchange interventions, probes) and its registered endpoints |
 | `scripts/grad_subspace.py` | One-step full-gradient subspaces vs the finished update (link to LoRA-One, arXiv 2502.01235) |
@@ -54,6 +56,7 @@ Owner: Haotian "Sora" Yang. Private research repository; data, results and notes
 | `G3` | Final + 2 sampled nodes | Full problem with question and options |
 | `GFPS` (Tree Forcing) | Final + every node | Problem statements, without the final question and options |
 | `GFPQ` | Final + every node | Statements plus the final question, without options |
+| `GFPSNC` | As GFPS without hypothetical case nodes (`--tree-node-types parse,derive`) | Statements |
 | `GFPSP` | As GFPS, up to 8 node questions packed per sequence | Same; later questions see earlier questions, never answers |
 | `TFL` | Final + every node | Parents' results written as text, no problem |
 | `GTF` | GFPS + fading written parents + depth weights | Statements |
@@ -89,6 +92,8 @@ python scripts/ladder_readout.py 'results/hpc/l4b/*' --out results/ladder_readou
 ## Changelog
 
 The README is updated with every push.
+
+- 2026-10-10 (2): `--tree-node-types` and arm `GFPSNC`; `build_kk_tf.py` (single-domain Knights-and-Knaves, solver trees, 1,792 puzzles by default so Tree Forcing costs about as much per epoch as on numeric chains); status rewritten: science line on single-domain data only.
 
 - 2026-10-10: `scripts/kk_reasoning_type.py`: the Tree Forcing vs answer-only gap on Knights-and-Knaves does not depend on how many hypothetical case splits a puzzle needs (interaction about 0). Status: learning-rate sweep on two domains (math: Tree Forcing ahead at tuned rates; Knights-and-Knaves: tie), PrOntoQA-OOD and GSM8K runs queued.
 
