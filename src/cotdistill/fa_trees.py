@@ -39,6 +39,7 @@ survives (quote_min_cap).
 """
 from __future__ import annotations
 
+import collections
 import hashlib
 import json
 import random
@@ -284,6 +285,14 @@ def quote_min_cap(text: str, quote: str) -> int | None:
         else:
             lo = mid + 1
     return lo
+
+
+def option_form(o: str) -> tuple:
+    """Surface form class of an option: first word -ing / -ed / other, has a colon or semicolon, opens with a quote."""
+    w = re.findall(r"[A-Za-z']+", o)
+    f = w[0].lower() if w else ""
+    v = "ing" if f.endswith("ing") else "ed" if f.endswith("ed") else "other"
+    return (v, bool(re.search(r"[:;]", o)), o.lstrip()[:1] in "\"'\u201c\u2018")
 
 
 def content_tokens(s: str) -> set[str]:
@@ -569,6 +578,17 @@ def check_tree(traj: dict, src: dict, nodes: list[dict] | None = None, seed: int
         if want is not None and not hi <= int(want) <= lo:
             fails.append(f"overlap_rank_miss: {nd['id']} rank {hi}-{lo}, target {want}")
     res["overlap_rank"] = orank
+    # grammatical form tell (content / conflict): exactly one option differs from the other three in its form class
+    # (first word ending in -ing / -ed / other, a colon or semicolon, an opening quote), e.g. a correct option quoted as
+    # an imperative among three past-tense distractors; "pick the odd one" scored 51% on content nodes before the fix
+    for nd in nodes:
+        if nd["type"] not in TEXT_TYPES or len(nd["options"]) < 3:
+            continue
+        fm = [option_form(o) for o in nd["options"]]
+        cnt = collections.Counter(fm)
+        if len(cnt) == 2 and min(cnt.values()) == 1:
+            odd = next(i for i, f in enumerate(fm) if cnt[f] == 1)
+            fails.append(f"form_tell: {nd['id']} option {odd} {fm[odd]} vs {fm[(odd + 1) % len(fm)]}")
     # grounding of content options: the step whose kept text shares most tokens with each option (soft)
     step_tok = [content_tokens(kept_step(traj, s["k"])) for s in traj["steps"]]
     ground: dict[str, dict] = {}
