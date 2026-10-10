@@ -552,6 +552,23 @@ def check_tree(traj: dict, src: dict, nodes: list[dict] | None = None, seed: int
                         "question_only": c > lr,
                         "question_match_tell": bool(others) and c >= max(others) + QUESTION_TELL_MARGIN}
     res["question_probe"] = qo
+    # log-overlap rank of the correct option (content / conflict; 1 = most of its words in the log, 4 = fewest): the
+    # pilot-scale trees put verbatim actions of other steps in the distractors, so "pick the option least present in the
+    # log" was a tell; a source node may carry target_overlap_rank (1-4), checked with ties counted either way
+    orank: dict[str, int] = {}
+    src_nodes = {x.get("id"): x for x in (src.get("nodes") or [])}
+    for nd in nodes:
+        if nd["type"] not in TEXT_TYPES or not nd["options"]:
+            continue
+        rec = [recall(content_tokens(o), log_tok) for o in nd["options"]]
+        c = rec[nd["answer"]]
+        others = [x for i, x in enumerate(rec) if i != nd["answer"]]
+        hi, lo = 1 + sum(x > c for x in others), 1 + sum(x >= c for x in others)
+        orank[nd["id"]] = hi
+        want = (src_nodes.get(nd["id"]) or {}).get("target_overlap_rank")
+        if want is not None and not hi <= int(want) <= lo:
+            fails.append(f"overlap_rank_miss: {nd['id']} rank {hi}-{lo}, target {want}")
+    res["overlap_rank"] = orank
     # grounding of content options: the step whose kept text shares most tokens with each option (soft)
     step_tok = [content_tokens(kept_step(traj, s["k"])) for s in traj["steps"]]
     ground: dict[str, dict] = {}
