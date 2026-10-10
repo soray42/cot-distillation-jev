@@ -95,7 +95,7 @@ def is_note_header(text: str) -> bool:
 
 
 BARE_MAX = 120
-LEAD_YES_NO = re.compile(r"(?i)^(yes|no)[.,!:]?(\s|$)")              # "Yes. If the green plots ..." also counts as bare
+LEAD_YES_NO = re.compile(r"(?i)^(yes|no)([.,!:]|\s*$)")      # "No." / "Yes, ..." but not "No local files ..."              # "Yes. If the green plots ..." also counts as bare
 NOT_BARE = re.compile(r"(?i)^(if|noted|acknowledged|understood|thanks|thank you|confirmed|proceed\w*|review\w*|ok|okay|"
                       r"great|sure|we|i|i'll|i'm|let|let's|please|standing by|no further|session|task|workflow|"
                       r"summary|completed?|closing|done)\b")
@@ -503,7 +503,8 @@ def check_tree(traj: dict, src: dict, nodes: list[dict] | None = None, seed: int
     # leaks: ground truth, labels / meta words, the node's own answer in its question
     gt = traj["ground_truth"]
     for nd in nodes:
-        if any(gt_leak(gt, t) for t in _node_texts(nd)):
+        # the student sees question + options; quotes are evidence copied from the visible log, never shown as text
+        if any(gt_leak(gt, t) for t in [nd["question"]] + (nd["options"] if nd["type"] in TEXT_TYPES else [])):
             fails.append(f"gt_leak: {nd['id']}")
         if any(META_LEAK.search(t) for t in _node_texts(nd)):
             fails.append(f"meta_leak: {nd['id']}")
