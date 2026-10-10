@@ -29,6 +29,23 @@ Paired arm differences (--contrast, default GFPS-A2): runs paired by seed label 
   other a single run with another seed, they are paired and marked "unpaired seeds"); per item the mean correctness
   over the paired seeds, then an item bootstrap of the mean difference over items present in both.
 
+StepFinder protocol (--sf, opt-in; every output above unchanged; notes/next_round/failure_attribution/sf_protocol.md):
+  per step-level FA file and run, StepFinder's metrics (main.py evaluate) from the saved probabilities: Acc (= Acc@1),
+  Acc@2, Acc@3, MRR@3 (1 / rank, 0 beyond rank 3), tolerance accuracy |predicted step - gold step| <= delta for delta
+  1..5 (step numbers parsed from the "Step k [Agent]" options), and the step-derived agent accuracy (the agent of the
+  predicted step against the benchmark's mistake_agent when the item carries it, else the gold step's agent; names
+  compared lower-case without spaces / underscores); ranks as above (stable, ties to the earlier option). Files whose
+  build summary declares more trajectories than the file holds (data/eval/fa_sf_ww_hc.jsonl: 39 of 58, the rest have
+  more than 62 steps) are also scored over the full count with the missing trajectories counted wrong ("of N").
+  Checkpoints: "final" (preds_<name>.jsonl); "val-selected", the --eval-at point (or the end) with the best accuracy
+  on the run's val set (--sf-val, default val; the first best, as main.py's strict >), scored from the mid-training
+  predictions <run>/mid/preds_<name>_e<epoch>.jsonl (train_student.py --eval-mid-preds; without them only the
+  accuracy from trajectory.json); "test-selected" = StepFinder main.py's protocol (the best TEST accuracy over the
+  same points, which is how its published numbers were selected; optimistic, shown for reference only).
+  Trivial rankings on the same metrics: uniform random (expected values), first step first, step 1 first, last step
+  first, the best constant index on the file (oracle), each ranking the other steps by distance from its pick; the
+  position probe (fit on --train-step) when available. A table puts the runs next to StepFinder's published numbers.
+
 Run name: <ARM>-<tag>-<model>-<data>-s<seed> (hpc/train_arm.sbatch), e.g. A2-fa1x6-Qwen3.5-0.8B-Base-student_fa1-s12.
 Runs still training (no metrics.json or no final eval) are read from whatever preds files exist.
 
@@ -75,6 +92,8 @@ DEFAULT_EVAL = {
     "ce": "data/eval/fa1_correct_test.jsonl", "ceag": "data/eval/fa1_correct_test_agent.jsonl",
     "aegisag": "data/eval/fa1_aegis_test_agent.jsonl",
     "fa1dv": "data/student_fa1d/val.jsonl", "fa1dva": "data/student_fa1d/val_agent.jsonl",
+    # StepFinder protocol (scripts/build_fa_sf.py): Who&When step items without the reference answer
+    "sfalg": "data/eval/fa_sf_ww_alg.jsonl", "sfhc": "data/eval/fa_sf_ww_hc.jsonl",
 }
 VAL_BY_PREFIX = {"fa0-val": "data/student_fa0/val.jsonl", "fa1-val": "data/student_fa1/val.jsonl"}
 RUN_RE = re.compile(r"^(?P<arm>[^-]+)-(?P<tag>[^-]+)-(?P<model>.+)-(?P<data>student_[^-]+)-s(?P<seed>\d+)$")
@@ -159,6 +178,12 @@ def item_info(item: dict) -> dict:
             "gold": labels.index(item["gold_label"]) if item.get("gold_label") in labels else None,
             "kind": "step" if is_step else "agent", "options": None if is_step else opts}
     steps = parse_steps(item["prompt"], opts if is_step else None)
+    if is_step:                                  # --sf: step numbers and agents of the options, the agent label
+        ms = [STEP_OPT.match(o) for o in opts]
+        info["opt_steps"] = [int(m.group(1)) for m in ms]
+        info["opt_agents"] = [m.group(2) for m in ms]
+        info["agent_label"] = fa.get("mistake_agent") or fa.get("decisive_agent")
+        info["n_total_steps"] = fa.get("n_steps")
     info["agents"] = [a for a, _ in steps]
     info["lens"] = [n for _, n in steps]
     if is_step and len(steps) != len(opts):
@@ -553,9 +578,12 @@ def analyse(args) -> dict:
             fres["runs"][rname] = s
         fres["contrasts"] = contrasts(runs, vecs, args, rel)
         out_files[rel] = fres
-    return {"args": vars(args), "runs": [{k: v for k, v in r.items() if k != "metrics"} for r in runs],
-            "train_priors": {**pri.sources, "probe_items": pri.n_fit, "agent_names": len(pri.agent_counts)},
-            "files": out_files, "other_evals": dict(other), "acc_checks": checks}
+    res = {"args": vars(args), "runs": [{k: v for k, v in r.items() if k != "metrics"} for r in runs],
+           "train_priors": {**pri.sources, "probe_items": pri.n_fit, "agent_names": len(pri.agent_counts)},
+           "files": out_files, "other_evals": dict(other), "acc_checks": checks}
+    if getattr(args, "sf", False):                  # opt-in: StepFinder's protocol and metrics
+        res["sf"] = sf_analyse(runs, files, pri, args.sf_val)
+    return res
 
 
 def contrasts(runs: list[dict], vecs: dict, args, rel: str) -> list[dict]:
@@ -580,6 +608,233 @@ def contrasts(runs: list[dict], vecs: dict, args, rel: str) -> list[dict]:
         res = paired(v1, v2, args.boot, (rel, spec))
         out.append({"contrast": spec, "pairs": [(a["name"], b["name"]) for a, b in pairs], "note": note, **res})
     return out
+
+
+# ------------------------------------------------------------------------------------------------- StepFinder (--sf)
+SF_PUBLISHED = {   # StepFinder (KDD'26, arXiv 2606.03467): mean over seeds, checkpoints selected on the test set (main.py)
+    "alg": {"acc": 29.63, "acc_sd": 1.50, "acc1": 28.84, "acc2": 45.24, "acc3": 60.31, "s_per_traj": 0.61},
+    "hc": {"acc": 22.99, "acc_sd": 2.15, "acc1": 21.26, "acc2": 25.29, "acc3": 30.46, "s_per_traj": 3.56}}
+SF_DELTAS = (1, 2, 3, 4, 5)
+SF_TEST_FILES = {"fa_sf_ww_alg.jsonl": "alg", "ww_alg_step.jsonl": "alg", "fa_sf_ww_hc.jsonl": "hc"}
+MID_RE = re.compile(r"^preds_(?P<name>.+)_e(?P<epoch>[0-9.]+)$")
+
+
+def anorm(a) -> str:
+    return str(a or "").lower().replace("_", "").replace(" ", "")
+
+
+def sf_score(order: list[int], x: dict) -> dict:
+    """StepFinder's per-item metrics for a ranking `order` (option indices, best first) of item info x."""
+    g = x["gold"]
+    rank = order.index(g) + 1
+    pred = order[0]
+    d = abs(x["opt_steps"][pred] - x["opt_steps"][g])
+    out = {"acc": float(rank == 1), "acc2": float(rank <= 2), "acc3": float(rank <= 3),
+           "mrr3": 1.0 / rank if rank <= 3 else 0.0, "agent": float(anorm(x["opt_agents"][pred]) ==
+                                                                     anorm(x["agent_label"] or x["opt_agents"][g]))}
+    for k in SF_DELTAS:
+        out[f"tol{k}"] = float(d <= k)
+    return out
+
+
+def sf_order(probs: list[float]) -> list[int]:
+    """Option indices by descending probability, ties to the earlier option (ranks(): rank 1 = the trainer's argmax)."""
+    return sorted(range(len(probs)), key=lambda i: (-probs[i], i))
+
+
+def sf_mean(rows: list[dict], n_total: int | None = None) -> dict:
+    keys = ["acc", "acc2", "acc3", "mrr3"] + [f"tol{k}" for k in SF_DELTAS] + ["agent"]
+    out = {"n": len(rows)}
+    for k in keys:
+        v = [r[k] for r in rows]
+        out[k] = float(np.mean(v)) if v else float("nan")
+        if n_total and n_total > len(rows):                 # missing trajectories count wrong
+            out[k + "_of_all"] = float(np.sum(v)) / n_total
+    if n_total and n_total > len(rows):
+        out["n_total"] = n_total
+    return out
+
+
+def sf_expected_random(x: dict) -> dict:
+    n, g = len(x["labels"]), x["gold"]
+    gs = x["opt_steps"][g]
+    out = {"acc": 1 / n, "acc2": min(2, n) / n, "acc3": min(3, n) / n,
+           "mrr3": sum(1 / r for r in range(1, min(3, n) + 1)) / n,
+           "agent": sum(anorm(a) == anorm(x["agent_label"] or x["opt_agents"][g]) for a in x["opt_agents"]) / n}
+    for k in SF_DELTAS:
+        out[f"tol{k}"] = sum(abs(s - gs) <= k for s in x["opt_steps"]) / n
+    return out
+
+
+def sf_baselines(infos: list[dict], pri: "TrainPriors", n_total: int | None) -> dict:
+    """Trivial rankings scored with StepFinder's metrics: each picks a step and ranks the rest by distance from it
+    (ties to the earlier step); random = expected values; the best constant index is fit on the file (oracle)."""
+    def by_dist(n, c):
+        c = min(c, n - 1)
+        return sorted(range(n), key=lambda i: (abs(i - c), i))
+    out = {"random (expected)": sf_mean([sf_expected_random(x) for x in infos], n_total)}
+    for name, pick in (("first step", lambda n: 0), ("step 1", lambda n: 1), ("last step", lambda n: n - 1)):
+        out[name] = sf_mean([sf_score(by_dist(len(x["labels"]), pick(len(x["labels"]))), x) for x in infos], n_total)
+    best = max(range(62), key=lambda c: (sum(x["gold"] == min(c, len(x["labels"]) - 1) for x in infos), -c))
+    out[f"best constant index = {best} (oracle)"] = sf_mean(
+        [sf_score(by_dist(len(x["labels"]), best), x) for x in infos], n_total)
+    if "position" in pri.weights:
+        X, mask = tensor(infos, "position")
+        P = clogit_probs(X, mask, pri.weights["position"])
+        out["position probe (train)"] = sf_mean([sf_score(sf_order(list(P[j, :len(x["labels"])])), x)
+                                                 for j, x in enumerate(infos)], n_total)
+    return out
+
+
+def sf_total(path: Path) -> int | None:
+    """The trajectory count a StepFinder-protocol test file stands for (build_fa_sf.py summary test.of)."""
+    rel = str(path.relative_to(ROOT)) if path.is_relative_to(ROOT) else str(path)
+    for summ in sorted(ROOT.glob("data/student_fa_sf_*/summary.json")):
+        try:
+            t = json.loads(summ.read_text()).get("test") or {}
+        except (ValueError, OSError):
+            continue
+        if t.get("file") == rel:
+            return int(t["of"])
+    return None
+
+
+def mid_preds(run_dir: Path) -> dict:
+    """{epoch: {eval name: preds}} from <run>/mid/preds_<name>_e<epoch>.jsonl (train_student.py --eval-mid-preds)."""
+    out: dict = defaultdict(dict)
+    for pf in sorted((run_dir / "mid").glob("preds_*_e*.jsonl")):
+        m = MID_RE.match(pf.stem)
+        if m:
+            out[float(m.group("epoch"))][m.group("name")] = read_preds(pf)
+    return dict(out)
+
+
+def sf_points(r: dict, names: set, val: str) -> dict:
+    """Checkpoint points of a run: epoch -> {"preds": {name: preds}, "acc": {name: acc}} from the mid-training
+    predictions (or trajectory.json accuracies) and the final evaluation (epoch = args.epochs)."""
+    run_dir = Path(r["dir"])
+    pts: dict = {}
+    for ep, by in mid_preds(run_dir).items():
+        pts[ep] = {"preds": by, "acc": {}}
+    traj = (r["metrics"] or {}).get("trajectory")
+    if traj is None and (run_dir / "trajectory.json").exists():
+        try:
+            traj = json.loads((run_dir / "trajectory.json").read_text())
+        except ValueError:
+            traj = None
+    for row in traj or []:
+        ep = float(row["epoch"])
+        pts.setdefault(ep, {"preds": {}, "acc": {}})
+        for nm in names | {val}:
+            if isinstance(row.get(nm), dict) and "acc" in row[nm]:
+                pts[ep]["acc"][nm] = row[nm]["acc"]
+    final = (r["metrics"] or {}).get("eval") or {}
+    if final:
+        ep = float(((r["metrics"] or {}).get("args") or {}).get("epochs") or max(pts or [0]) + 1)
+        fp_ = {nm: read_preds(run_dir / f"preds_{nm}.jsonl") for nm in names | {val}
+               if (run_dir / f"preds_{nm}.jsonl").exists()}
+        pts[ep] = {"preds": fp_, "acc": {nm: final[nm]["acc"] for nm in names | {val} if nm in final
+                                          and "acc" in final[nm]}}
+    return dict(sorted(pts.items()))
+
+
+def sf_select(pts: dict, key: str) -> float | None:
+    """The first point with the best accuracy on eval name key (main.py: strictly better replaces)."""
+    best, at = -1.0, None
+    for ep, pt in pts.items():
+        a = pt["acc"].get(key)
+        if a is None and key in pt["preds"]:
+            v = [float(p["labels"][int(np.argmax(p["probs"]))] == p["gold_label"]) for p in pt["preds"][key].values()
+                 if p.get("gold_label") in p["labels"]]
+            a = float(np.mean(v)) if v else None
+        if a is not None and a > best:
+            best, at = a, ep
+    return at
+
+
+def sf_analyse(runs: list[dict], files: dict, pri: "TrainPriors", val: str) -> dict:
+    """--sf: StepFinder's metrics per step-level FA file and run (final, val-selected, test-selected) and baselines."""
+    out = {}
+    for path, ent in sorted(files.items(), key=lambda kv: sorted(kv[1]["names"])[0]):
+        infos = [x for x in read_items(Path(path)) if x["gold"] is not None and x["kind"] == "step"]
+        if not infos:
+            continue
+        rel = str(Path(path).relative_to(ROOT)) if Path(path).is_relative_to(ROOT) else path
+        n_total = sf_total(Path(path))
+        fres = {"names": sorted(ent["names"]), "n": len(infos), "n_total": n_total,
+                "baselines": sf_baselines(infos, pri, n_total), "runs": {}}
+        for rname, (preds, _) in sorted(ent["runs"].items()):
+            r = next(x for x in runs if x["name"] == rname)
+            names = set(ent["names"])
+            pts = sf_points(r, names, val)
+
+            def score(pr: dict) -> dict:
+                rows = [sf_score(sf_order(pr[x["item_id"]]["probs"]), x) for x in infos if x["item_id"] in pr]
+                return sf_mean(rows, n_total)
+            res = {"final": score(preds)}
+            for label, key in (("val_selected", val), ("test_selected", None)):
+                nm = next((n for n in sorted(names) if any(n in pt["preds"] or n in pt["acc"] for pt in pts.values())),
+                          None)
+                at = sf_select(pts, key if key else nm) if nm else None
+                if at is None:
+                    res[label] = None
+                    continue
+                pt = pts[at]
+                if nm in pt["preds"]:
+                    res[label] = dict(score(pt["preds"][nm]), epoch=at)
+                else:
+                    res[label] = {"epoch": at, "acc": pt["acc"].get(nm), "n": None, "note": "accuracy only "
+                                  "(trajectory.json; no --eval-mid-preds)"}
+            res["points"] = {ep: pt["acc"].get(val) for ep, pt in pts.items()}
+            fres["runs"][rname] = res
+        out[rel] = fres
+    return out
+
+
+def sf_report(sf: dict) -> list[str]:
+    L = ["## StepFinder protocol (--sf)", "",
+         "StepFinder's metrics (main.py evaluate): Acc = Acc@1, Acc@2, Acc@3, MRR@3, tolerance accuracy within "
+         "delta steps, and the agent of the predicted step. 'of N': the file's trajectories plus those left out "
+         "(more than 62 steps) counted wrong. StepFinder's published numbers selected the checkpoint on the TEST set "
+         "(main.py); ours: final and val-selected (test-selected shown for reference only).", ""]
+    cols = ["acc", "acc2", "acc3", "mrr3"] + [f"tol{k}" for k in SF_DELTAS] + ["agent"]
+    head = "| | ckpt | n | Acc | Acc@2 | Acc@3 | MRR@3 | " + " | ".join(f"tol{k}" for k in SF_DELTAS) + " | agent |"
+    for path, f in sf.items():
+        L.append(f"### {', '.join(f['names'])} ({path}, n = {f['n']}"
+                 + (f" of {f['n_total']}" if f["n_total"] and f["n_total"] > f["n"] else "") + ")")
+        L.append("")
+        L.append(head)
+        L.append("|---|---|---|" + "---|" * len(cols))
+        sub = SF_TEST_FILES.get(Path(path).name)
+        if sub:
+            pub = SF_PUBLISHED[sub]
+            L.append(f"| StepFinder (published, test-selected) | best on test | {f['n_total'] or f['n']} | "
+                     f"{pub['acc']:.2f} ± {pub['acc_sd']:.2f} | {pub['acc2']:.2f} | {pub['acc3']:.2f} | | | | | | | |")
+
+        def row(name, ck, m):
+            if m is None:
+                return f"| {name} | {ck} | – |" + " – |" * len(cols)
+            if m.get("n") is None:
+                return f"| {name} | {ck} e{m['epoch']:g} | – | {pct(m.get('acc'))} |" + " – |" * (len(cols) - 1)
+            cells = []
+            for c in cols:
+                v = pct(m[c])
+                if c + "_of_all" in m:
+                    v += f" ({pct(m[c + '_of_all'])})"
+                cells.append(v)
+            ep = f" e{m['epoch']:g}" if "epoch" in m else ""
+            return f"| {name} | {ck}{ep} | {m['n']} | " + " | ".join(cells) + " |"
+        for b, m in f["baselines"].items():
+            L.append(row(b, "–", m))
+        for rn, res in f["runs"].items():
+            for ck in ("final", "val_selected", "test_selected"):
+                L.append(row(f"**{rn}**", ck.replace("_", "-"), res[ck]))
+        if f["n_total"] and f["n_total"] > f["n"]:
+            L.append("")
+            L.append(f"Values in parentheses: over all {f['n_total']} trajectories, the {f['n_total'] - f['n']} "
+                     "left out counted wrong.")
+        L.append("")
+    return L
 
 
 # ------------------------------------------------------------------------------------------------- report
@@ -675,6 +930,8 @@ def report(res: dict) -> str:
         for rn, v in sorted(res["other_evals"].items()):
             L.append(f"| {rn} | " + " | ".join(pct(v.get(n)) for n in names) + " |")
         L.append("")
+    if res.get("sf"):
+        L += sf_report(res["sf"])
     return "\n".join(L)
 
 
@@ -690,6 +947,8 @@ def main(argv=None) -> dict:
     ap.add_argument("--dropped", default="", help="extra group keys to flag as dropped from training (comma list)")
     ap.add_argument("--boot", type=int, default=2000)
     ap.add_argument("--quiet", action="store_true", help="do not print the markdown report")
+    ap.add_argument("--sf", action="store_true", help="also StepFinder's protocol and metrics (see the docstring)")
+    ap.add_argument("--sf-val", default="val", help="--sf: the eval name whose accuracy selects the checkpoint")
     args = ap.parse_args(argv)
     for k in ("train_step", "train_agent"):
         v = getattr(args, k)
