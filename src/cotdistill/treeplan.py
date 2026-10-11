@@ -272,6 +272,9 @@ def statement_block(item: dict) -> str:
       line opening with "Options:" (fa_public.sanitize).
     - the sources of FINAL_QUESTION: the prompt before its last paragraph, which must be that source's final question
       (the only "Options:" block follows it; no earlier paragraph opens with "Question: ").
+    - lean_f1 (data/student_lean_tf_pilot, Lean-certified congruence chains, cotdistill.leangen): as pronto, the prompt
+      before its last paragraph (preamble + one premise per line), which must be the question LEAN_F1_QUESTION; its own
+      branch, so FINAL_QUESTION and every other source's cut are unchanged.
     - gsm8k_tf (data/student_gsm8k_tf, GSM8K with Socratic step nodes): the problem before its last sentence, only when
       that sentence is a bare question (gsm8k_question_cut); a question sentence that carries premises ("If she sells
       3 more, how many ...?", about 60% of GSM8K train) raises ValueError, as gsm8k_soc does for every item.
@@ -313,6 +316,14 @@ def statement_block(item: dict) -> str:
             raise ValueError(f"{iid}: no statement block: the last sentence of this gsm8k_tf problem is not a bare "
                              "question (it carries a number, a condition or a clause; GFPQ uses problem_no_options)")
         return cut[0]
+    if src == LEAN_F1:
+        head, sep, opts = p.partition("\nOptions:\n")
+        body, cut, last = head.rpartition("\n\n")
+        if (not sep or "\nOptions:" in opts or not cut or not body.strip() or not re.fullmatch(LEAN_F1_QUESTION, last)
+                or "\n\nQuestion: " in body or body.startswith("Question: ")):
+            raise ValueError(f"{iid}: no statement block: the lean_f1 prompt is not <preamble + premises> + its final "
+                             "question paragraph + options")
+        return body
     if src in FINAL_QUESTION:
         head, sep, opts = p.partition("\nOptions:\n")
         body, cut, last = head.rpartition("\n\n")
@@ -325,6 +336,11 @@ def statement_block(item: dict) -> str:
                      "(defined for knights_knaves, numgen, fa_tier0, fa_public and treeplan.FINAL_QUESTION; restrict "
                      "with --tree-sources)")
 
+
+# Lean F1 pilot (scripts/build_lean_tf.py): "<preamble>\n\n<premises, one per line>\n\n<question>\nOptions:\n<A-E>";
+# the question names the asked variable and divisor (leangen.QUESTION / leangen.FINAL_RE, checked equal in the tests).
+LEAN_F1 = "lean_f1"
+LEAN_F1_QUESTION = r"Question: What is the remainder when [a-z] is divided by [1-9][0-9]*\?"
 
 _FA_HEADER = "The log below comes from a multi-agent system that failed to solve its task.\n\nTask: "
 _FA_Q_STEP = ("Question: Which step contains the decisive error, i.e. the earliest mistake whose correction would have "
