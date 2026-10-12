@@ -9,22 +9,20 @@ system to fail) and the tooling for a causal audit of internal variables.
 
 Owner: Haotian "Sora" Yang. Private research repository; data, results and notes are not tracked (see `.gitignore`).
 
-## Status (2026-10-10)
+## Status (2026-10-12)
 
-- Failure attribution now follows StepFinder's protocol (same training data and test sets, our method). Reasoning trees for
-  its 4,056 training trajectories are written and checked; about 7% of its labels are not supported by the log.
-
-- Design: the science line trains and tests on one domain per run (numeric chains, PrOntoQA-OOD, GSM8K, Knights-and-
-  Knaves); the multi-source mixture `student_v3sl` belongs to the release model. Single-domain Knights-and-Knaves data
-  (`build_kk_tf.py`) were added on 2026-10-10; earlier Knights-and-Knaves comparisons used the mixture.
-- Numeric chains, learning rate tuned for both arms (3e-6), one seed: Tree Forcing ahead of answer-only training,
-  pending a rerun with both arms on the same hardware and precision and an answer-only run with matched compute.
-- Knights-and-Knaves inside the mixture: tie at tuned learning rates; the gap does not depend on the puzzle's hypothesis
-  structure (`kk_reasoning_type.py`).
-- In progress: PrOntoQA-OOD, GSM8K and single-domain Knights-and-Knaves pairs; seeds 13 and 14 on numeric chains; a
-  Tree Forcing variant without hypothetical case nodes (`GFPSNC`); causal audit v2.
-- Supervising the same steps with their premises written out (`TFL`) lowers one-pass accuracy; the premises must stay
-  latent.
+- Each method at its own tuned learning rate (3e-6), same hardware, 4B:
+  - arithmetic chains: Tree Forcing ahead in 2 of 2 seeds in range (+3.1, +4.4 points); answer-only training given 20
+    epochs (about Tree Forcing's compute) scores below its 12-epoch run;
+  - GSM8K (trees from GSM8K's own step annotations): +5.6 points [+3.8, +7.3] on GSM8K test + GSM1K, one seed;
+  - single-domain Knights-and-Knaves: +4.5 points over 12-epoch answer-only; 20-epoch answer-only catches up but loses
+    8 points on BIG-Bench Hard;
+  - PrOntoQA-OOD: tie (both near 100% in range, identical decay beyond).
+- The gain tracks what answer-only training leaves unlearned (its accuracy on the tree's node questions: 51% arithmetic,
+  63% GSM8K, 91% PrOntoQA). Depth beyond the training range is not extended so far; data efficiency is untested.
+- Failure attribution follows StepFinder's protocol with reasoning trees for all its training trajectories.
+- A Lean 4 pilot (`leangen.py`) generates certified congruence-chain problems with depth control and "semantic drift"
+  options (true but off-target), as a fifth domain and a possible benchmark.
 
 ## Repository layout
 
@@ -35,6 +33,7 @@ Owner: Haotian "Sora" Yang. Private research repository; data, results and notes
 | `src/cotdistill/numgen.py`, `pronto.py`, `chaingen.py`, `rulegen.py`, `policygen.py`, `sources.py` | Data generators and source converters (numeric chains, PrOntoQA-OOD-style proofs, decision chains, rule and policy cases) |
 | `src/cotdistill/fa_tier0.py`, `fa_public.py` | Failure attribution: simulated multi-agent trajectories with replay-verified labels (Tier 0); cleaned public datasets (Tier 1) |
 | `src/cotdistill/fa_trees.py`, `scripts/extract_fa_trees.py` | Failure attribution: multiple-choice reasoning trees on StepFinder's trajectories (answer step, provenance chain, content, conflict, agent) and their automatic checks (chain, quotes, leaks, length / log-overlap / surface-form tells) |
+| `src/cotdistill/leangen.py`, `scripts/build_lean_tf.py` | Lean 4 pilot: generated congruence chains whose answers, distractors (refuted, independent, true-but-off-target) and tree nodes are certified by the Lean kernel |
 | `scripts/build_fa_sf.py` | StepFinder's protocol: one model per Who&When subset, its training trajectories, Who&When test files; `--trees` swaps in the reasoning trees |
 | `src/cotdistill/fsdp.py`, `offload.py` | Two-GPU FSDP2 training and CPU-offloaded AdamW (fp32 master weights) |
 | `src/cotdistill/interchange.py` | Interchange interventions for the causal audit |
@@ -97,6 +96,9 @@ python scripts/ladder_readout.py 'results/hpc/l4b/*' --out results/ladder_readou
 ## Changelog
 
 The README is updated with every push.
+
+- 2026-10-12: Lean F1 pilot (`leangen.py`, `build_lean_tf.py`, a `lean_f1` statement block; 2,400 certified items,
+  surface-tell battery near chance); status rewritten with the four-domain results at tuned learning rates.
 
 - 2026-10-10 (3): multiple-choice tree nodes (opt-in by an `options` field), `--eval-mid-preds`, `eval_student --time`;
   `build_fa_sf.py` (StepFinder protocol) and `fa_readout.py --sf` (Acc@K, MRR@3, tolerance accuracy); `fa_trees.py` /
