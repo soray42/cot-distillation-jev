@@ -206,6 +206,8 @@ arm_config() {           # sets F S T RLM DS for arm $1
     TFLP) F=teacher; S=cot;  T=cot; DX="--tree-full true --tree-view local+ctxparse --tree-cap 0 --tree-sources knights_knaves" ;;  # TFL, parse nodes in the GFPS view
     MIX) F=teacher; S=cot;   T=cot; DX="--tree-full true --tree-view mix --tree-cap 0 --tree-sources knights_knaves" ;;   # per node and epoch: TFL or GFPS view (p .5)
     GFPSP) F=teacher; S=cot; T=cot; DX="--tree-full plain --tree-view statements --tree-cap 0 --tree-sources knights_knaves --tree-pack 8" ;;  # GFPS, up to 8 node questions per sequence (one pass, no answers)
+    GFPSR) F=teacher; S=cot; T=cot; DX="--tree-full plain --tree-view statements --tree-cap 0 --tree-sources knights_knaves --tree-target shuffled" ;;  # GFPS, node targets permuted within each problem (random-label control)
+    GFPQR) F=teacher; S=cot; T=cot; DX="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --tree-target shuffled" ;;  # GFPQ, node targets permuted within each problem (random-label control)
     *) echo "unknown ARM $1"; return 1 ;;
   esac
 }

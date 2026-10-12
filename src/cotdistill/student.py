@@ -419,7 +419,7 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
                     view: str = "problem", sources: set | None = None, node_weight: float = 0.0,
                     stats: dict | None = None, mix_p: float = 0.5, mix_seed: int = 0,
                     mix_epoch: int = 0, scaffold_p: float | None = None, depth_weight: float = 0.0,
-                    node_types: set | frozenset | None = None) -> list[Example]:
+                    node_types: set | frozenset | None = None, target_seed: int | None = None) -> list[Example]:
     """One problem with ALL its tree nodes (up to `cap`) instead of k sampled ones: [final] + one view per node.
     mode "true": eligible nodes are asked with their parents' results stated; "matched": with the same number of
     depth-matched non-parent results (see full_tree_plan); "plain": every node asked without facts; "placebo": the
@@ -455,7 +455,18 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
     scripts/build_fa_sf.py --trees) are asked in the same context as a yes/no node of the view (stated results and
     GTF scaffold included) with their own options (mc_node_example: SUBQ_OPTS_TEMPLATE, labels A, B, ..., one-hot
     target on the answer, the per-problem weight) and draw nothing from rng; node_format "mc" leaves them as they are.
-    The local views (_local_views) refuse them."""
+    The local views (_local_views) refuse them.
+    target_seed (None = off, the data's targets; --tree-target shuffled = GFPSR / GFPQR, the random-label control):
+    mode "plain" with views "problem" / "statements" / "statements+question" only (yes/no node format, no eligible_only,
+    no scaffold: no view states or selects by a real result). Every asked node keeps its view, question, option order
+    and weight, and the final question is untouched; only a node's target is replaced by its shuffled_targets
+    one (the item's P(Yes) values permuted among its nodes, keyed by target_seed and the item; an MC node: a uniformly
+    drawn option, one-hot). Nothing is drawn from rng, so the run is in rng lockstep with the real-target arm (same
+    nodes, order, option orders and weights). stats counts shuffled_views, shuffled_agree (the random target's answer
+    is the real one), shuffled_yes and real_yes (yes/no views with P(Yes) >= .5).
+    Why not --aux-kind cot_randlabel (G3R) or a --subq-target value: cot_randlabel is the grouped loop's (build_group),
+    draws from the training rng (breaking the lockstep) and redraws a uniform 50/50 label per view and epoch;
+    --subq-target picks which real field is the target and also feeds the non-tree loops."""
     fin = [e for e in build_examples(item, final=final, subq="none", subq_target=subq_target, lambda_sub=0.0, rng=rng,
                                      permute_final=permute_final) if e.kind == "final"]
     if not fin:
@@ -468,6 +479,10 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
         raise ValueError("--tree-depth-weight needs tree nodes: control questions have no depth")
     if node_types is not None and mode == "control":
         raise ValueError("--tree-node-types needs tree nodes: control questions have no type")
+    if target_seed is not None and (mode != "plain" or view not in ("problem", "statements", "statements+question")
+                                    or node_format != "yesno" or eligible_only or scaffold_p is not None):
+        raise ValueError("--tree-target shuffled is implemented for --tree-full plain, views problem / statements / "
+                         "statements+question, yes/no node format, without --tree-eligible-only or --tree-scaffold")
     if view not in ("problem", "statements", "statements+question"):
         return fin + _local_views(item, mode=mode, view=view, rng=rng, cap=cap, aux_total=aux_total,
                                   subq_target=subq_target, node_format=node_format, eligible_only=eligible_only,
@@ -509,6 +524,12 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
         if scaffold_p is not None:
             for key in ("scaffold_views", "scaffold_lines", "scaffold_eligible"):
                 stats[key] = stats.get(key, 0)
+    shuf = None
+    if target_seed is not None:                             # GFPSR / GFPQR: the random targets, drawn off rng
+        shuf = shuffled_targets(item, target_seed, subq_target)
+        st = stats if stats is not None else {}
+        for key in ("shuffled_views", "shuffled_agree", "shuffled_yes", "real_yes"):
+            st[key] = st.get(key, 0)
     for (sq, facts, tgt, k), wk in zip(views, ws):
         lines = [_fact_line(x) for x in facts]
         rng.shuffle(lines)
@@ -526,12 +547,46 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
             if sc:
                 problem = context + f"\n\n{LOCAL_HEADER}\n" + "\n".join(sc)
         if mc:                                              # its options and answer, as a final question; no draw
+            if shuf is not None:                            # GFPSR / GFPQR: a random option
+                st["shuffled_views"] += 1
+                st["shuffled_agree"] += shuf[sq["id"]] == sq["answer"]
+                sq = dict(sq, answer=shuf[sq["id"]])
             out.append(mc_node_example(problem, sq, wk * wi, item["item_id"]))
             continue
         yes_first = rng.random() < 0.5
         a, b = ("Yes", "No") if yes_first else ("No", "Yes")
+        p = _node_p(sq, tgt)
+        if shuf is not None:                                # GFPSR / GFPQR: the permuted target, same view and draws
+            st["shuffled_views"] += 1
+            st["shuffled_agree"] += (shuf[sq["id"]] >= 0.5) == (p >= 0.5)
+            st["shuffled_yes"] += shuf[sq["id"]] >= 0.5
+            st["real_yes"] += p >= 0.5
+            p = shuf[sq["id"]]
         out.append(Example(SUBQ_TEMPLATE.format(problem=problem, question=sq["question"], a=a, b=b), ["A", "B"],
-                           _soft(_node_p(sq, tgt), yes_first), wk * wi, "subq", item["item_id"]))
+                           _soft(p, yes_first), wk * wi, "subq", item["item_id"]))
+    return out
+
+
+def shuffled_targets(item: dict, seed: int, subq_target: str = "cot") -> dict:
+    """--tree-target shuffled (GFPSR / GFPQR: the random-label control of GFPS / GFPQ): a random target for every tree
+    node of the item that has one, by node id. Yes/no nodes (a target under subq_target, _node_p): the item's P(Yes)
+    values permuted among them, so the item keeps exactly its multiset of targets (its yes rate, and the soft values if
+    any) while a node's target no longer depends on its question (a node keeps its own value by chance, about half the
+    time on balanced trees). Multiple-choice nodes (is_mc_node): an option index drawn uniformly. Drawn over every
+    node with a target (before the cap, --tree-node-types or --subq-filter select the asked ones), from generators of
+    their own seeded with str keys (sha512, as treeplan.scaffold_rng): (seed, item) for the permutation, (seed, item,
+    node) for an MC draw. The epoch is not in the key: every node keeps one random target over the whole run (a fixed
+    random labelling, as consistent across epochs as the real targets, not noise redrawn each epoch), and the draw
+    depends on nothing else (not the training rng, PYTHONHASHSEED, the cap or the order of the views)."""
+    nodes = [sq for sq in item.get("subqs", []) if "id" in sq]
+    yn = [sq for sq in nodes if not is_mc_node(sq) and _node_p(sq, subq_target) is not None]
+    ps = [_node_p(sq, subq_target) for sq in yn]
+    random.Random(f"tree-target|{seed}|{item['item_id']}").shuffle(ps)
+    out = {sq["id"]: p for sq, p in zip(yn, ps)}
+    for sq in nodes:
+        if is_mc_node(sq):
+            out[sq["id"]] = random.Random(f"tree-target|{seed}|{item['item_id']}|{sq['id']}").randrange(
+                len(sq["options"]))
     return out
 
 

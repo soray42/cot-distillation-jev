@@ -43,7 +43,7 @@ RESUME_FREE = {"stop_after_h", "ckpt_every_min", "ckpt_single", "stop_at_step", 
 # Training arguments added after checkpoints may have been written: a checkpoint without the key had this value.
 NEW_ARG_DEFAULTS = {"tree_view": "problem", "tree_sources": "", "tree_node_weight": 0.0, "attn_impl": "", "fsdp": False,
                     "fsdp_optim": None, "tree_mix_p": 0.5, "tree_scaffold": 0.0, "tree_depth_weight": 0.0,
-                    "chat_template": False, "tree_pack": 0, "tree_node_types": ""}
+                    "chat_template": False, "tree_pack": 0, "tree_node_types": "", "tree_target": "real"}
 
 LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj",
                 "in_proj_qkv", "in_proj_z", "in_proj_a", "in_proj_b", "out_proj"]
@@ -150,6 +150,14 @@ def main() -> None:
                          "(their results may still be stated as parents in --tree-full true / matched / GTF); the "
                          "per-problem weight convention is unchanged, so the kept views share the same total; only the "
                          "items of --tree-sources are affected; empty = every node type")
+    ap.add_argument("--tree-target", default="real", choices=["real", "shuffled"],
+                    help="full-tree groups: the node targets. real = the data's (--subq-target); shuffled = GFPSR / "
+                         "GFPQR, the random-label control (--tree-full plain, views problem / statements / "
+                         "statements+question, yes/no nodes): each problem's node targets permuted among its nodes "
+                         "(the yes rate per problem unchanged), a multiple-choice node's answer drawn uniformly, by "
+                         "generators keyed by --seed and the item (not the training rng: the same nodes, order, option "
+                         "orders and weights as the real-target arm; fixed over the epochs); the final question is "
+                         "untouched")
     ap.add_argument("--tree-node-weight", type=float, default=0.0,
                     help="full-tree groups: loss weight of every node view (times the item weight); 0 = the per-problem "
                          "convention, --aux-total split evenly over the problem's views")
@@ -250,10 +258,17 @@ def main() -> None:
     ap.add_argument("--log-every", type=int, default=20)
     args = ap.parse_args()
     tree_opts = (args.tree_view != "problem" or args.tree_sources or args.tree_node_weight or args.tree_cap == 0 or
-                 args.tree_scaffold or args.tree_depth_weight or args.tree_pack or args.tree_node_types)
+                 args.tree_scaffold or args.tree_depth_weight or args.tree_pack or args.tree_node_types or
+                 args.tree_target != "real")
     if tree_opts and not args.tree_full:
         raise SystemExit("--tree-view / --tree-sources / --tree-node-weight / --tree-cap 0 / --tree-scaffold / "
-                         "--tree-depth-weight / --tree-pack / --tree-node-types need --tree-full")
+                         "--tree-depth-weight / --tree-pack / --tree-node-types / --tree-target need --tree-full")
+    if args.tree_target != "real" and (args.tree_full != "plain" or args.node_format != "yesno" or
+                                       args.tree_view not in ("problem", "statements", "statements+question") or
+                                       args.tree_eligible_only or args.tree_scaffold):
+        raise SystemExit(f"--tree-target {args.tree_target}: for --tree-full plain (GF / GFP / GFPS / GFPQ: views "
+                         "problem, statements, statements+question) with yes/no nodes, without --tree-eligible-only "
+                         "or --tree-scaffold")
     if args.tree_pack and (args.tree_pack < 2 or (args.tree_full, args.tree_view) != ("plain", "statements") or
                            args.tree_scaffold or args.fsdp or args.chat_template):
         raise SystemExit(f"--tree-pack {args.tree_pack}: at least 2 views per pack, for --tree-full plain --tree-view "
@@ -494,7 +509,8 @@ def main() -> None:
                                 subq_filter=args.subq_filter, view=args.tree_view,
                                 sources=tree_sources, node_weight=args.tree_node_weight, stats=st,
                                 mix_p=args.tree_mix_p, mix_seed=args.seed, mix_epoch=ep, scaffold_p=p_sc,
-                                depth_weight=args.tree_depth_weight, node_types=node_types)
+                                depth_weight=args.tree_depth_weight, node_types=node_types,
+                                target_seed=args.seed if args.tree_target == "shuffled" else None)
             if g and args.tree_pack and any(e.kind == "subq" for e in g):   # GFPSP: the GFPS views, packed
                 g = pack_views(g, tok, statement_block(it), max_len=args.max_len, max_nodes=args.tree_pack,
                                rng=pack_rng(args.seed, ep, it["item_id"]), stats=st)
