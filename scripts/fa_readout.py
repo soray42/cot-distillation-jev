@@ -94,6 +94,13 @@ DEFAULT_EVAL = {
     "fa1dv": "data/student_fa1d/val.jsonl", "fa1dva": "data/student_fa1d/val_agent.jsonl",
     # StepFinder protocol (scripts/build_fa_sf.py): Who&When step items without the reference answer
     "sfalg": "data/eval/fa_sf_ww_alg.jsonl", "sfhc": "data/eval/fa_sf_ww_hc.jsonl",
+    # StepFinder protocol, the public test sets without StepFinder-overlapping tasks (scripts/build_fa_sf_x.py)
+    "xwwpro": "data/eval/fa_sf_x_wwpro_sfclean.jsonl", "xaftraj": "data/eval/fa_sf_x_aftraj_sfclean.jsonl",
+    "xagtr": "data/eval/fa_sf_x_agentracer_sfclean.jsonl", "xte": "data/eval/fa_sf_x_traceelephant_sfclean.jsonl",
+    "xce": "data/eval/fa_sf_x_correct_sfclean.jsonl",
+    "xwwprogt": "data/eval/fa_sf_x_wwpro_gt_sfclean.jsonl", "xaftrajgt": "data/eval/fa_sf_x_aftraj_gt_sfclean.jsonl",
+    "xagtrgt": "data/eval/fa_sf_x_agentracer_gt_sfclean.jsonl",
+    "xtegt": "data/eval/fa_sf_x_traceelephant_gt_sfclean.jsonl",
 }
 VAL_BY_PREFIX = {"fa0-val": "data/student_fa0/val.jsonl", "fa1-val": "data/student_fa1/val.jsonl"}
 RUN_RE = re.compile(r"^(?P<arm>[^-]+)-(?P<tag>[^-]+)-(?P<model>.+)-(?P<data>student_[^-]+)-s(?P<seed>\d+)$")
