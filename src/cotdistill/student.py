@@ -419,7 +419,8 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
                     view: str = "problem", sources: set | None = None, node_weight: float = 0.0,
                     stats: dict | None = None, mix_p: float = 0.5, mix_seed: int = 0,
                     mix_epoch: int = 0, scaffold_p: float | None = None, depth_weight: float = 0.0,
-                    node_types: set | frozenset | None = None, target_seed: int | None = None) -> list[Example]:
+                    node_types: set | frozenset | None = None, target_seed: int | None = None,
+                    target_kind: str = "shuffled", placebo_bank: PlaceboBank | None = None) -> list[Example]:
     """One problem with ALL its tree nodes (up to `cap`) instead of k sampled ones: [final] + one view per node.
     mode "true": eligible nodes are asked with their parents' results stated; "matched": with the same number of
     depth-matched non-parent results (see full_tree_plan); "plain": every node asked without facts; "placebo": the
@@ -466,7 +467,15 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
     is the real one), shuffled_yes and real_yes (yes/no views with P(Yes) >= .5).
     Why not --aux-kind cot_randlabel (G3R) or a --subq-target value: cot_randlabel is the grouped loop's (build_group),
     draws from the training rng (breaking the lockstep) and redraws a uniform 50/50 label per view and epoch;
-    --subq-target picks which real field is the target and also feeds the non-tree loops."""
+    --subq-target picks which real field is the target and also feeds the non-tree loops.
+    target_kind "placebo" (with target_seed; --tree-target placebo = GFPSX / GFPQX, the placebo control): the same
+    scope, but every asked node keeps its view, option order, weight and answer while its question is replaced by its
+    placebo_questions one (a surface question about the problem text with a correct answer, keyed by target_seed and
+    the item; placebo_bank supplies the "no" sentences of other problems); the target is the hard answer (with hard node
+    targets, every view's target vector is GFPS's). Nothing is drawn from rng (rng lockstep with GFPS / GFPQ). An asked
+    multiple-choice node raises ValueError. stats counts placebo_views, placebo_yes, real_yes, placebo_words /
+    real_words (whitespace words of the placebo / node questions) and placebo_<template> per template. (Unrelated to
+    mode "placebo", the zero-weight plain views.)"""
     fin = [e for e in build_examples(item, final=final, subq="none", subq_target=subq_target, lambda_sub=0.0, rng=rng,
                                      permute_final=permute_final) if e.kind == "final"]
     if not fin:
@@ -479,10 +488,12 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
         raise ValueError("--tree-depth-weight needs tree nodes: control questions have no depth")
     if node_types is not None and mode == "control":
         raise ValueError("--tree-node-types needs tree nodes: control questions have no type")
+    if target_seed is not None and target_kind not in ("shuffled", "placebo"):
+        raise ValueError(f"target_kind {target_kind}: shuffled or placebo")
     if target_seed is not None and (mode != "plain" or view not in ("problem", "statements", "statements+question")
                                     or node_format != "yesno" or eligible_only or scaffold_p is not None):
-        raise ValueError("--tree-target shuffled is implemented for --tree-full plain, views problem / statements / "
-                         "statements+question, yes/no node format, without --tree-eligible-only or --tree-scaffold")
+        raise ValueError(f"--tree-target {target_kind} is implemented for --tree-full plain, views problem / statements "
+                         "/ statements+question, yes/no node format, without --tree-eligible-only or --tree-scaffold")
     if view not in ("problem", "statements", "statements+question"):
         return fin + _local_views(item, mode=mode, view=view, rng=rng, cap=cap, aux_total=aux_total,
                                   subq_target=subq_target, node_format=node_format, eligible_only=eligible_only,
@@ -524,8 +535,14 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
         if scaffold_p is not None:
             for key in ("scaffold_views", "scaffold_lines", "scaffold_eligible"):
                 stats[key] = stats.get(key, 0)
-    shuf = None
-    if target_seed is not None:                             # GFPSR / GFPQR: the random targets, drawn off rng
+    shuf = plc = None
+    if target_seed is not None and target_kind == "placebo":    # GFPSX / GFPQX: the placebo questions, drawn off rng
+        plc = placebo_questions(item, target_seed, placebo_bank, subq_target) if views else {}
+        st = stats if stats is not None else {}
+        for key in ("placebo_views", "placebo_yes", "real_yes", "placebo_words", "real_words",
+                    *(f"placebo_{t}" for t in PLACEBO_TEMPLATES)):
+            st[key] = st.get(key, 0)
+    elif target_seed is not None:                           # GFPSR / GFPQR: the random targets, drawn off rng
         shuf = shuffled_targets(item, target_seed, subq_target)
         st = stats if stats is not None else {}
         for key in ("shuffled_views", "shuffled_agree", "shuffled_yes", "real_yes"):
@@ -547,6 +564,8 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
             if sc:
                 problem = context + f"\n\n{LOCAL_HEADER}\n" + "\n".join(sc)
         if mc:                                              # its options and answer, as a final question; no draw
+            if plc is not None:
+                raise ValueError(f"--tree-target placebo: {item['item_id']} node {sq['id']} is multiple-choice")
             if shuf is not None:                            # GFPSR / GFPQR: a random option
                 st["shuffled_views"] += 1
                 st["shuffled_agree"] += shuf[sq["id"]] == sq["answer"]
@@ -556,13 +575,23 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
         yes_first = rng.random() < 0.5
         a, b = ("Yes", "No") if yes_first else ("No", "Yes")
         p = _node_p(sq, tgt)
+        question = sq["question"]
         if shuf is not None:                                # GFPSR / GFPQR: the permuted target, same view and draws
             st["shuffled_views"] += 1
             st["shuffled_agree"] += (shuf[sq["id"]] >= 0.5) == (p >= 0.5)
             st["shuffled_yes"] += shuf[sq["id"]] >= 0.5
             st["real_yes"] += p >= 0.5
             p = shuf[sq["id"]]
-        out.append(Example(SUBQ_TEMPLATE.format(problem=problem, question=sq["question"], a=a, b=b), ["A", "B"],
+        elif plc is not None:                               # GFPSX / GFPQX: the placebo question, its correct answer
+            q, yes, kind = plc[sq["id"]]
+            st["placebo_views"] += 1
+            st["placebo_yes"] += yes
+            st["real_yes"] += p >= 0.5
+            st["placebo_words"] += len(q.split())
+            st["real_words"] += len(question.split())
+            st[f"placebo_{kind}"] += 1
+            question, p = q, float(yes)
+        out.append(Example(SUBQ_TEMPLATE.format(problem=problem, question=question, a=a, b=b), ["A", "B"],
                            _soft(p, yes_first), wk * wi, "subq", item["item_id"]))
     return out
 
@@ -587,6 +616,393 @@ def shuffled_targets(item: dict, seed: int, subq_target: str = "cot") -> dict:
         if is_mc_node(sq):
             out[sq["id"]] = random.Random(f"tree-target|{seed}|{item['item_id']}|{sq['id']}").randrange(
                 len(sq["options"]))
+    return out
+
+
+# ---- --tree-target placebo (GFPSX / GFPQX): surface questions about the problem text instead of the node questions ----
+PLACEBO_TEMPLATES = ("name", "number", "word", "sentence")    # this order breaks ties and orders the fallbacks
+PLACEBO_MIN_K = 3              # a sentence question quotes at least this many words (or the whole, shorter sentence)
+PLACEBO_OVERLAP = 0.5          # a foreign sentence may share at most this share of its content tokens with the prompt
+PLACEBO_FOREIGN = 24           # other problems drawn per problem for its "no" sentences and words
+_PL_FIXED = {"name": 6, "number": 7, "word": 8}      # words of the fixed templates (a sentence: 7 + k)
+_PL_STOP = frozenset("""a about above after again against all also am an and any are as at be because been before
+being below between both but by can could did do does doing down during each either else every few for from further
+had has have having he her here hers herself him himself his how i if in into is it its itself just let me more most
+much must my myself neither no nor not now of off on only or other our ours ourselves out over own per same she should
+so some such than that the their theirs them themselves then there these they this those through to too under until
+up upon us very was we were what when where whether which while who whom whose why will with within without would yet
+you your yours yourself""".split())
+_PL_ONES = ("zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen "
+            "seventeen eighteen nineteen").split()
+_PL_TENS = dict(zip(range(20, 100, 10), "twenty thirty forty fifty sixty seventy eighty ninety".split()))
+_PL_ORD = ("zeroth first second third fourth fifth sixth seventh eighth ninth tenth eleventh twelfth thirteenth "
+           "fourteenth fifteenth sixteenth seventeenth eighteenth nineteenth").split()
+_PL_NUMX = {1: "once single", 2: "twice double doubled half halves pair pairs", 3: "thrice triple tripled thirds",
+            4: "quarter quarters", 12: "dozen dozens", 100: "hundred", 1000: "thousand", 10 ** 6: "million"}
+_PL_NUMWORDS = frozenset(_PL_ONES + _PL_ORD + list(_PL_TENS.values()) + [w[:-1] + "ieth" for w in _PL_TENS.values()]
+                         + " ".join(_PL_NUMX.values()).split() + ["billion", "percent", "hundredth", "thousandth"])
+# Names with no other English reading (Will, Max, Grace, Rose, Mark, Bill, ... left out): numgen, K&K (sources.NAMES and
+# scripts/build_kk_deep.py's EXTRA_NAMES), PrOntoQA's entities and frequent GSM8K names.
+_PL_NAME_X = ("Quinn Rosa Sam Tina Umar Vera Yara John Mary Mike Peter Sarah Jerry Martha Harry Lisa Steve Janet Joe "
+              "Kevin Carl Jill Ryan Michael Jim Jason Carla Jenny Ben Andrew Anna Jane Jimmy Billy Tony Julia Adam Emily "
+              "Jake Susan Lucy Jacob Jeff Dave Betty Monica Kim Gerald Amanda Kyle Rick Rachel Nancy Andy Jose").split()
+_PL_NOT_NAMES = frozenset("Will Max Kit Ivy Opal Hope Ray Pip Wren Sally Grace Rose Mark Bill May June Bo Mo Cy Ty "
+                          "Val".split())
+# "No" words when no other problem of the source has one (e.g. the K&K and Lean vocabularies are shared by all items).
+_PL_WORD_POOL = ("anchor basket blanket bridge candle carpet castle cherry compass copper cotton desert engine feather "
+                 "forest garden glacier hammer harbor helmet island jacket kettle ladder lantern lemon market meadow "
+                 "mirror needle orchard paddle parade pencil pepper pillow planet pocket puzzle rabbit ribbon river "
+                 "saddle saucer shovel silver spider stable tablet ticket timber tunnel valley violin wagon walnut "
+                 "window winter").split()
+_PL_NUM = re.compile(r"\d+(?:,\d{3})*(?:\.\d+)?")
+_PL_WORD = re.compile(r"[A-Za-z]+(?:'[A-Za-z]+)?")
+_PL_SENT = re.compile(r"(?<=[.!?])\s+(?=[A-Z\"'])")
+_PL_NAMES: list = []
+
+
+def _pl_names() -> list[str]:
+    """The name pool of the name questions, sorted (built once)."""
+    if not _PL_NAMES:
+        from . import numgen, pronto, sources
+        pool = set(sources.NAMES) | {n for n, _ in numgen.NAMES} | set(pronto.ENTITIES) | set(_PL_NAME_X)
+        _PL_NAMES.extend(sorted(pool - _PL_NOT_NAMES))
+    return _PL_NAMES
+
+
+def _pl_val(tok: str):
+    """A number token's value ("1,200" -> 1200, "2.50" -> 2.5, 24.0 -> 24): what number questions compare."""
+    v = float(str(tok).replace(",", ""))
+    return int(v) if v == int(v) else v
+
+
+def _pl_nums(text: str) -> set:
+    return {_pl_val(x) for x in _PL_NUM.findall(text)}
+
+
+def _pl_words(text: str) -> list[str]:
+    """The word tokens of a text: letters only, a possessive 's dropped, other contractions skipped."""
+    out = []
+    for m in _PL_WORD.finditer(text.replace("’", "'")):
+        w = m.group()
+        if "'" in w:
+            if not w.lower().endswith("'s"):
+                continue
+            w = w[:-2]
+        out.append(w)
+    return out
+
+
+def _pl_variants(w: str) -> set:
+    """w lower-cased with its plural / singular look-alikes (candle ~ candles, snarpus ~ snarpuses, city ~ cities)."""
+    w = w.lower()
+    v = {w, w + "s", w + "es"}
+    if w.endswith("s"):
+        v.add(w[:-1])
+    if w.endswith("es"):
+        v.add(w[:-2])
+    if w.endswith("ies"):
+        v.add(w[:-3] + "y")
+    if w.endswith("y"):
+        v.add(w[:-1] + "ies")
+    return v
+
+
+def _pl_spelled(n: int) -> list[str]:
+    """Word forms of a whole number that a text may use instead of digits (four, fourth, quarter, sixty-one, ...)."""
+    out = list(_PL_NUMX.get(n, "").split())
+    if 0 <= n < 20:
+        out += [_PL_ONES[n], _PL_ORD[n]]
+    elif 20 <= n < 100:
+        t = _PL_TENS[n - n % 10]
+        out += [t, t[:-1] + "ieth"] if n % 10 == 0 else [f"{t}-{_PL_ONES[n % 10]}", f"{t} {_PL_ONES[n % 10]}",
+                                                         f"{t}-{_PL_ORD[n % 10]}", f"{t} {_PL_ORD[n % 10]}"]
+    return out
+
+
+def _pl_sentences(text: str) -> list[str]:
+    """The sentences of a text, each an exact substring of it: per line, a K&K "- " bullet dropped, split after . ! ?"""
+    out = []
+    for line in text.split("\n"):
+        line = line.strip()
+        if line.startswith("- "):
+            line = line[2:]
+        out += [s for s in _PL_SENT.split(line) if s.strip()]
+    return out
+
+
+def _pl_prefix(s: str, k: int) -> tuple[str, int]:
+    """The first k words of sentence s, cut at the k-th word's last character (an exact substring of s), with "..."
+    when words are left out; and the number of words quoted."""
+    ws = list(re.finditer(r"\S+", s))
+    k = min(k, len(ws))
+    return s[:ws[k - 1].end()] + ("..." if k < len(ws) else ""), k
+
+
+def placebo_text(item: dict) -> str:
+    """The text a placebo question is about: the statement block (treeplan.statement_block, GFP-S's context), or for a
+    gsm8k_tf item without a clean statement / question cut (about 60% of GSM8K) the whole problem text (GFPQ's context
+    minus the "Question: " label). Inside every view's context (problem / statements / statements+question) wherever
+    that view exists. Other sources without a statement block raise ValueError."""
+    from .treeplan import GSM8K_TF, _gsm8k_tf_problem
+    try:
+        return statement_block(item)
+    except ValueError:
+        if item.get("source") != GSM8K_TF:
+            raise
+        return _gsm8k_tf_problem(item)
+
+
+def placebo_tree_numbers(item: dict) -> set:
+    """Every number of the item's reasoning tree and answer: in the node questions, the nodes' value / probe fields, the
+    numgen program's quantities and the answer options. A number question never asks one of them; a tree number that
+    the statement block does not state (a derived value, a wrong probe, an option) occurs in no placebo question."""
+    out = set()
+    for sq in item.get("subqs", []):
+        if "id" not in sq:
+            continue
+        out |= _pl_nums(sq.get("question", ""))
+        for key in ("value", "probe"):
+            if isinstance(sq.get(key), (int, float)) and not isinstance(sq.get(key), bool):
+                out.add(_pl_val(sq[key]))
+    prog = item.get("program")
+    for q in (prog.get("quantities") or []) if isinstance(prog, dict) else []:
+        if isinstance(q, dict) and isinstance(q.get("value"), (int, float)) and not isinstance(q.get("value"), bool):
+            out.add(_pl_val(q["value"]))
+    out |= _pl_nums(item.get("prompt", "").partition("\nOptions:\n")[2])
+    return out
+
+
+class PlaceboBank:
+    """--tree-target placebo: the placebo texts (placebo_text) of a set of problems by source, sorted by item id (not by
+    file order): another problem of the same source is where a placebo "no" sentence (and a "no" word) comes from.
+    train_student builds it from the training items of --tree-sources; items without a placebo text are left out."""
+
+    def __init__(self, items):
+        by: dict = {}
+        for it in items:
+            try:
+                t = placebo_text(it)
+            except ValueError:
+                continue
+            by.setdefault(it.get("source"), []).append((str(it["item_id"]), t))
+        self.texts = {s: sorted(v) for s, v in by.items()}
+
+    def draw(self, item: dict, text: str, rng: random.Random, n: int) -> list[str]:
+        """Up to n texts of other problems of item's source (not the item, not the same text), drawn by rng."""
+        pool = self.texts.get(item.get("source"), [])
+        out = []
+        for _ in range(n if len(pool) > 1 else 0):
+            iid, t = pool[rng.randrange(len(pool))]
+            if iid != str(item["item_id"]) and t != text:
+                out.append(t)
+        return out
+
+
+def placebo_questions(item: dict, seed: int, bank: PlaceboBank | None = None, subq_target: str = "cot") -> dict:
+    """--tree-target placebo (GFPSX / GFPQX: the placebo control of GFPS / GFPQ): for every yes/no tree node of the item
+    with a target, by node id, (question, answer, template): a surface question about the problem's text (placebo_text)
+    with a correct answer, in place of the node question. The answer is the node's own (P(Yes) >= .5), so a problem's
+    yes rate, and with hard targets every view's target, is GFPS's.
+    Templates:
+    - name: "Is <Name> mentioned in the problem?": a name of the pool that the text has (case-sensitive whole word), or
+      one the whole prompt does not have (any case, plural look-alikes too);
+    - number: "Does the problem mention the number N?": a number token of the text, or a nearby whole number the whole
+      prompt has neither as a number nor in words (four / fourth / quarter / sixty-one ...);
+    - word: "Does the word '<w>' appear in the problem?": a lower-case content word of the text (not a stop word, number
+      word or name; at least 3 letters), or one of another problem of the source (else of a fixed pool) that the whole
+      prompt does not have in any case or plural form;
+    - sentence: "Is the sentence '<first k words...>' part of the problem?": the first k words of a sentence of the text
+      (an exact substring), or of a sentence of another problem of the source (bank) that is not a substring of the
+      prompt, shares no capitalised word (names) and no single letter (variables) with the prompt, at most
+      PLACEBO_OVERLAP of its content tokens with the prompt (no paraphrase of a premise: "Every X is Y" vs "Each X is
+      Y"), and contains no tree number.
+    Never about the tree: a name, number or word question never uses a token of any node question (any node, asked or
+    not; words by plural look-alikes) nor a tree number (placebo_tree_numbers); a sentence question quotes this
+    problem's own text or holds no tree number. Absent tokens are checked against the whole prompt (final question and
+    options included), so the answer is right in every view (GFPQ shows the final question).
+    Length: a node of L words gets a template whose length (name 6, number 7, word 8, sentence 7 + k words, k >= 3) is
+    within max(2, L / 4) of L, at random among those that fit (else the nearest); a sentence question quotes
+    k = L - 7 words where its sentence allows. Templates are picked among those the problem can ask with both answers,
+    so the template does not tell the answer; a problem's questions are distinct where its supply allows.
+    Drawn over every yes/no node with a target (before the cap or filters select the asked ones), in node order, from a
+    generator of its own keyed by (seed, item) (sha512 of a str key, as shuffled_targets): nothing from the training
+    rng, no epoch (each node keeps its placebo question over the run). With the same bank the questions depend on
+    nothing else; without a bank (None) no "no" sentence exists and "no" words come from the fixed pool.
+    Multiple-choice nodes get none (build_full_tree refuses them under placebo). ValueError if the item has no
+    placebo_text."""
+    text = placebo_text(item)
+    prompt = item.get("prompt", "")
+    nodes = [sq for sq in item.get("subqs", []) if "id" in sq]
+    yn = [sq for sq in nodes if not is_mc_node(sq) and _node_p(sq, subq_target) is not None]
+    if not yn:
+        return {}
+    rng = random.Random(f"tree-placebo|{seed}|{item['item_id']}")
+    tree_nums = placebo_tree_numbers(item)
+    node_words = {w.lower() for sq in nodes for w in _pl_words(sq.get("question", ""))}
+    p_words = {w.lower() for w in _pl_words(prompt)}
+    p_nums = _pl_nums(prompt)
+    names = _pl_names()
+    name_set = set(names)
+    lower_names = {n.lower() for n in names}
+
+    def in_tree(w):
+        return bool(_pl_variants(w) & node_words)
+
+    def in_prompt(w):
+        return bool(_pl_variants(w) & p_words)
+
+    def content(w):
+        lw = w.lower()
+        return len(w) >= 3 and w.isalpha() and lw not in _PL_STOP and lw not in _PL_NUMWORDS and lw not in lower_names
+
+    def uniq(xs):
+        return list(dict.fromkeys(xs))
+
+    tw = _pl_words(text)
+    yes_num, seen = [], set()
+    for x in _PL_NUM.findall(text):                     # surface form as in the text, one per value, text order
+        if _pl_val(x) not in tree_nums and _pl_val(x) not in seen:
+            seen.add(_pl_val(x))
+            yes_num.append(x)
+    supply = {True: {"name": uniq(w for w in tw if w in name_set and not in_tree(w)),
+                     "word": uniq(w for w in tw if w == w.lower() and content(w) and not in_tree(w))},
+              False: {"name": [n for n in names if not in_prompt(n) and not in_tree(n)]}}
+    supply[True]["number"] = yes_num
+    own = _pl_sentences(text)
+
+    def foreign_ok(q: str) -> bool:
+        """A "no" sentence quote: absent, about other entities, not a paraphrase, no tree number."""
+        if q in prompt or q in text:
+            return False
+        nums = _pl_nums(q)
+        if nums & tree_nums:
+            return False
+        ws = _pl_words(q)
+        for w in ws:
+            if len(w) == 1 and w not in ("a", "A", "I") and w.lower() in p_words:
+                return False                             # a variable of this problem (Lean)
+            if w[0].isupper() and w.lower() not in _PL_STOP and in_prompt(w):
+                return False                             # a name / proper noun of this problem
+        toks = [w for w in ws if w.lower() not in _PL_STOP]
+        if not toks and not nums:
+            return False
+        shared = sum(in_prompt(w) for w in toks) + len(nums & p_nums)
+        return shared <= PLACEBO_OVERLAP * (len(toks) + len(nums))
+
+    # Other problems of the source: PLACEBO_FOREIGN of them, more (up to 4x) until there is a "no" sentence per "no"
+    # node (sources with few passing sentences, e.g. Lean, stop at the cap).
+    need = sum(_node_p(sq, subq_target) < 0.5 for sq in yn)
+    foreign_texts, foreign = [], []
+    for j in range(4 * PLACEBO_FOREIGN if bank is not None else 0):
+        if j >= PLACEBO_FOREIGN and len(foreign) >= need:
+            break
+        for t in bank.draw(item, text, rng, 1):
+            foreign_texts.append(t)
+            ss = _pl_sentences(t)
+            for x in rng.sample(ss, min(4, len(ss))):
+                if foreign_ok(x) and x not in foreign:
+                    foreign.append(x)
+    no_words = uniq(w for t in foreign_texts for w in _pl_words(t)
+                    if w == w.lower() and content(w) and not in_tree(w) and not in_prompt(w))
+    supply[False]["word"] = no_words + [w for w in _PL_WORD_POOL if w not in no_words and not in_tree(w)
+                                        and not in_prompt(w)]
+    supply[True]["sentence"], supply[False]["sentence"] = own, foreign
+    ok = {y: {t: bool(supply[y].get(t)) or (t == "number" and not y) for t in PLACEBO_TEMPLATES} for y in (True, False)}
+    both = [t for t in PLACEBO_TEMPLATES if ok[True][t] and ok[False][t]]
+
+    def nwords(x):
+        return len(x.split())
+
+    smax = {y: max((nwords(x) for x in supply[y]["sentence"]), default=0) for y in (True, False)}
+    used: set = set()                                   # questions asked so far
+    taken: dict = {}                                    # (template, answer) -> the supply items used so far
+
+    uses: dict = {}                                     # template -> nodes given it so far
+
+    def room(t, y_ok):
+        """Whether the template has room for one more node without looking at its answer: its uses stay under
+        len(y_ok) x the smaller supply of the answers in y_ok (an absent number is always new)."""
+        cap = min(float("inf") if (t == "number" and not y) else len(supply[y].get(t, ())) for y in y_ok)
+        return uses.get(t, 0) < len(y_ok) * cap
+
+    def pick(t, y, render):
+        xs = supply[y][t]
+        new = [x for x in xs if x not in taken.get((t, y), ())]
+        x = (new or xs)[rng.randrange(len(new or xs))]
+        taken.setdefault((t, y), set()).add(x)
+        return render(x)
+
+    def absent_number() -> str:
+        low = prompt.lower()
+        bases = sorted({int(abs(v)) for v in _pl_nums(text)} - {0}) or list(range(2, 13))
+
+        def fits(c):
+            return (c >= 1 and c not in p_nums and c not in tree_nums and f"Does the problem mention the number {c}?"
+                    not in used and not any(re.search(rf"\b{re.escape(w)}\b", low) for w in _pl_spelled(c)))
+        for _ in range(60):
+            b = bases[rng.randrange(len(bases))]
+            c = b + rng.choice((-1, 1)) * rng.randint(1, max(3, b // 10))
+            if fits(c):
+                return str(c)
+        c = max(bases) + 1
+        while not fits(c):
+            c += 1
+        return str(c)
+
+    def make(t, yes, L):
+        if t == "name":
+            return pick(t, yes, lambda x: f"Is {x} mentioned in the problem?")
+        if t == "number":
+            if yes:
+                return pick(t, yes, lambda x: f"Does the problem mention the number {x}?")
+            return f"Does the problem mention the number {absent_number()}?"
+        if t == "word":
+            return pick(t, yes, lambda x: f"Does the word '{x}' appear in the problem?")
+        k = max(PLACEBO_MIN_K, L - 7)                   # sentence: 7 + k words
+        ss = supply[yes]["sentence"]
+        tk = taken.setdefault((t, yes), set())
+        fallback = None                                 # random order: unused sentences of k words or more first
+        for x in sorted(rng.sample(ss, len(ss)), key=lambda x: (x in tk, nwords(x) < k)):
+            q, _ = _pl_prefix(x, k)
+            if not yes and not foreign_ok(q.removesuffix("...")):
+                continue
+            qq = f"Is the sentence '{q}' part of the problem?"
+            if qq not in used:
+                tk.add(x)
+                return qq
+            fallback = fallback or qq
+        return fallback
+
+    def span(t, y_ok):
+        if t != "sentence":
+            return _PL_FIXED[t], _PL_FIXED[t]
+        hi = min(smax[y] for y in y_ok)
+        return 7 + min(PLACEBO_MIN_K, hi), 7 + hi
+
+    out = {}
+    for sq in rng.sample(yn, len(yn)):                  # random order: which nodes meet a used-up supply is by chance,
+        yes = _node_p(sq, subq_target) >= 0.5           # not by the node order (e.g. pronto's first node is always Yes)
+        L = nwords(sq["question"])
+        avail, y_ok = (both, (True, False)) if both else ([t for t in PLACEBO_TEMPLATES if ok[yes][t]], (yes,))
+
+        def dist(t):
+            lo, hi = span(t, y_ok)
+            return max(lo - L, 0, L - hi)
+        pool = ([t for t in avail if room(t, y_ok)]                      # templates with unused items first (by
+                or [t for t in avail if t == "sentence"] or avail)       # counts, not this node's answer); then a
+        tol = max(2.0, L / 4)                                            # sentence quoted at another length
+        cands = [t for t in pool if dist(t) <= tol] or [t for t in pool if dist(t) == min(map(dist, pool))]
+        first = cands[rng.randrange(len(cands))]
+        q = None
+        for t in [first] + sorted((t for t in PLACEBO_TEMPLATES if ok[yes][t] and t != first), key=dist):
+            q = make(t, yes, L)
+            if q is not None:
+                break
+        if q is None:
+            raise ValueError(f"{item['item_id']}: no placebo question for node {sq['id']}")
+        uses[t] = uses.get(t, 0) + 1
+        used.add(q)
+        out[sq["id"]] = (q, yes, t)
     return out
 
 

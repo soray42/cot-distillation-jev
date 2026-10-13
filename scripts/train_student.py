@@ -150,14 +150,20 @@ def main() -> None:
                          "(their results may still be stated as parents in --tree-full true / matched / GTF); the "
                          "per-problem weight convention is unchanged, so the kept views share the same total; only the "
                          "items of --tree-sources are affected; empty = every node type")
-    ap.add_argument("--tree-target", default="real", choices=["real", "shuffled"],
+    ap.add_argument("--tree-target", default="real", choices=["real", "shuffled", "placebo"],
                     help="full-tree groups: the node targets. real = the data's (--subq-target); shuffled = GFPSR / "
                          "GFPQR, the random-label control (--tree-full plain, views problem / statements / "
                          "statements+question, yes/no nodes): each problem's node targets permuted among its nodes "
                          "(the yes rate per problem unchanged), a multiple-choice node's answer drawn uniformly, by "
                          "generators keyed by --seed and the item (not the training rng: the same nodes, order, option "
                          "orders and weights as the real-target arm; fixed over the epochs); the final question is "
-                         "untouched")
+                         "untouched. placebo = GFPSX / GFPQX, the placebo control (same scope): each node question "
+                         "replaced by a surface question about the problem text with a correct answer and the node's "
+                         "own yes/no (is a name / number / word / sentence in the problem; never a tree token or a "
+                         "derived number; student.placebo_questions, keyed by --seed and the item, fixed over the "
+                         "epochs; the \"no\" sentences come from other training problems of the same source); same "
+                         "views, weights, option orders and targets as the real-target arm (unrelated to --tree-full "
+                         "placebo, the zero-weight views)")
     ap.add_argument("--tree-node-weight", type=float, default=0.0,
                     help="full-tree groups: loss weight of every node view (times the item weight); 0 = the per-problem "
                          "convention, --aux-total split evenly over the problem's views")
@@ -474,6 +480,23 @@ def main() -> None:
                     view_fn(it)
                 except ValueError as e:
                     raise SystemExit(f"--tree-view {args.tree_view}: {e}")
+    placebo_kw = {}
+    if args.tree_target == "placebo":       # GFPSX / GFPQX: every asked item needs a placebo text, no MC node; the bank
+        from cotdistill.student import PlaceboBank, placebo_text      # of "no" sentences: the training items of
+        from cotdistill.treeplan import is_mc_node                    # --tree-sources
+        tree_items = [it for it in train_items if tree_sources is None or it.get("source") in tree_sources]
+        for it in tree_items:
+            if any(is_mc_node(sq) for sq in it.get("subqs") or [] if "id" in sq):
+                raise SystemExit(f"--tree-target placebo: {it['item_id']} has multiple-choice nodes")
+            if any("id" in sq for sq in it.get("subqs") or []):
+                try:
+                    placebo_text(it)
+                except ValueError as e:
+                    raise SystemExit(f"--tree-target placebo: {e}")
+        bank = PlaceboBank(tree_items)
+        placebo_kw = {"target_kind": "placebo", "placebo_bank": bank}
+        print("placebo bank:", ", ".join(f"{k} {len(bank.texts[k])}" for k in sorted(bank.texts, key=str)), "problems",
+              flush=True)
     tree_stats: dict = {}
     # GTF's scaffold fades with the update index t = epoch x U + (position of the problem's group in the epoch) // b
     # over T updates. U (updates per pass) and T are counted here, before the plan's counting pass, from the problems
@@ -510,7 +533,8 @@ def main() -> None:
                                 sources=tree_sources, node_weight=args.tree_node_weight, stats=st,
                                 mix_p=args.tree_mix_p, mix_seed=args.seed, mix_epoch=ep, scaffold_p=p_sc,
                                 depth_weight=args.tree_depth_weight, node_types=node_types,
-                                target_seed=args.seed if args.tree_target == "shuffled" else None)
+                                target_seed=args.seed if args.tree_target != "real" else None,
+                                **placebo_kw)
             if g and args.tree_pack and any(e.kind == "subq" for e in g):   # GFPSP: the GFPS views, packed
                 g = pack_views(g, tok, statement_block(it), max_len=args.max_len, max_nodes=args.tree_pack,
                                rng=pack_rng(args.seed, ep, it["item_id"]), stats=st)

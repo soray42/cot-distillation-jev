@@ -208,6 +208,8 @@ arm_config() {           # sets F S T RLM DS for arm $1
     GFPSP) F=teacher; S=cot; T=cot; DX="--tree-full plain --tree-view statements --tree-cap 0 --tree-sources knights_knaves --tree-pack 8" ;;  # GFPS, up to 8 node questions per sequence (one pass, no answers)
     GFPSR) F=teacher; S=cot; T=cot; DX="--tree-full plain --tree-view statements --tree-cap 0 --tree-sources knights_knaves --tree-target shuffled" ;;  # GFPS, node targets permuted within each problem (random-label control)
     GFPQR) F=teacher; S=cot; T=cot; DX="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --tree-target shuffled" ;;  # GFPQ, node targets permuted within each problem (random-label control)
+    GFPSX) F=teacher; S=cot; T=cot; DX="--tree-full plain --tree-view statements --tree-cap 0 --tree-sources knights_knaves --tree-target placebo" ;;  # GFPS, node questions replaced by surface questions about the problem text, correct answers (placebo control)
+    GFPQX) F=teacher; S=cot; T=cot; DX="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --tree-target placebo" ;;  # GFPQ, node questions replaced by surface questions about the problem text, correct answers (placebo control)
     *) echo "unknown ARM $1"; return 1 ;;
   esac
 }
