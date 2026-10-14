@@ -22,4 +22,5 @@ nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
 bash repo/hpc/train_arm.sbatch > "logs/$NAME${SMOKE:+-smoke}.out" 2>&1
 rc=$?
 echo "exit $rc ($(date))"; tail -n 5 "logs/$NAME${SMOKE:+-smoke}.out"
+[ -n "${DRY_RUN:-}" ] || bash condor/push_results.sh "$ENVF" || true    # results -> GitHub (never fails the job)
 exit $rc

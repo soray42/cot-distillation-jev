@@ -15,6 +15,15 @@ bash condor/setup.sh        # google/gemma-4-12B 是 Apache-2.0、不需要登�
 ```
 需要 python3.11。没有的话，用 `module load` 或 conda 装一个 3.11。
 
+## 1b. 结果自动推到 GitHub（一次）
+每个任务跑完会自动把结果（指标和预测文件，几 MB，不含权重）推到一个私有仓库，Sora 那边直接就能看到。
+```bash
+ssh-keygen -t ed25519 -N "" -f ~/.ssh/cotd_results -C "cotd-results-condor"
+cat ~/.ssh/cotd_results.pub      # 把这一行公钥发给 Sora，由 Sora 加到仓库的 deploy key（只对这一个仓库有写权限）
+```
+Sora 加好以后，测试一下：`GIT_SSH_COMMAND="ssh -i ~/.ssh/cotd_results" git ls-remote git@github.com:soray42/cot-distillation-jev-results.git`
+（22 端口不通的话会自动改走 443 端口。）没有这个 key 也能跑，结果留在 `~/cotd/runs/`，之后再推或用第 4 步打包。
+
 ## 2. 冒烟测试（先跑这个，几分钟）
 ```bash
 cd ~/cotd && mkdir -p logs
@@ -34,10 +43,11 @@ cd ~/cotd && condor_submit condor/job.sub
 - 跑完的任务会自动跳过：重新提交不会重复跑。
 
 ## 4. 发回结果
+自动推送配好的话不用做任何事。没配好或推送失败时，二选一：
 ```bash
-cd ~/cotd && bash condor/pack_results.sh     # 生成 results_12b_<日期>.tgz（几十 MB）
+cd ~/cotd && bash condor/push_results.sh condor/jobs/<任务名>.env   # 手动补推某个任务
+cd ~/cotd && bash condor/pack_results.sh                            # 或打包成 results_12b_<日期>.tgz 发给 Sora
 ```
-把这个 tgz 发给我就行。随时可以打包，已经跑完的部分都在里面。
 
 ## 出问题时
 发我对应的 `logs/<任务名>.out` 和 `logs/condor_*.err`。

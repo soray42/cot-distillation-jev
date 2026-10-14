@@ -111,7 +111,8 @@ The README is updated with every push.
   and paired statistics (`build_fa_sf_x.py`, `fa_pool.py`); failure-attribution builders for AFTraj in-domain,
   observed-failure data and LongRCA, with the tree tools extended to them; StrategyQA domain; data-efficiency figure;
   HTCondor bundle for Gemma-4-12B (`cloud/condor`); status rewritten with tuned and schedule-matched baselines and the
-  placebo results.
+  placebo results. Each HTCondor job pushes its outputs (no weights) to the private repo
+  soray42/cot-distillation-jev-results through a write deploy key (`cloud/condor/push_results.sh`).
 
 - 2026-10-12: Lean F1 pilot (`leangen.py`, `build_lean_tf.py`, a `lean_f1` statement block; 2,400 certified items,
   surface-tell battery near chance); status rewritten with the four-domain results at tuned learning rates.
