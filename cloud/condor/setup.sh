@@ -3,7 +3,7 @@
 #   bash condor/setup.sh
 # 1. a Python 3.11 venv at ~/cotd/envs/cotd with the exact package versions of the original runs;
 # 2. google/gemma-4-12B (base) at the pinned revision into ~/cotd/models/gemma-4-12B, checked by sha256.
-# Gemma may be gated on Hugging Face: accept its licence on the model page and `export HF_TOKEN=...` first.
+# google/gemma-4-12B is Apache-2.0 and not gated (checked 2026-10-14): no Hugging Face login or token is needed.
 # Disk: venv ~10 GB, model 24 GB, data < 1 GB.
 set -euo pipefail
 cd "$(dirname "$0")/.."

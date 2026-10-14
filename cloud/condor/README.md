@@ -11,9 +11,7 @@
 ## 1. 安装（一次，在能联网的登录节点上）
 ```bash
 cd ~/cotd
-# Gemma 在 Hugging Face 上可能需要先在模型页面点同意许可，然后：
-export HF_TOKEN=<你的 Hugging Face token>
-bash condor/setup.sh        # 建 envs/cotd 环境并下载 google/gemma-4-12B（固定版本，自动校验 sha256）
+bash condor/setup.sh        # google/gemma-4-12B 是 Apache-2.0、不需要登录或 token
 ```
 需要 python3.11。没有的话，用 `module load` 或 conda 装一个 3.11。
 
