@@ -122,7 +122,7 @@ def summarize(records: list[dict], views: dict, src_chars: dict, mtimes: dict, s
     s["pass_rate"] = round(s["passed"] / max(1, s["n"]), 4)
     s["by_subset"] = {sub: {"n": sum(r["subset"] == sub for r in records),
                             "passed": sum(r["subset"] == sub and r["checks"]["pass"] for r in records)}
-                      for sub in ("alg", "hc")}
+                      for sub in sorted({r["subset"] for r in records})}
     fail_codes = collections.Counter(f.split(":")[0] for r in records for f in r["checks"]["failures"])
     s["failures_by_code"] = dict(fail_codes.most_common())
     s["drops_by_reason"] = dict(collections.Counter(r["checks"]["failures"][0].split(":")[0]
@@ -254,7 +254,7 @@ def main() -> None:
     prefix = args.prefix
     Path(prefix).parent.mkdir(parents=True, exist_ok=True)
     outs = {}
-    for subset in ("alg", "hc"):
+    for subset in sorted({rec["subset"] for rec in records}):
         path = Path(f"{prefix}{subset}.jsonl")
         with open(path, "w") as f:
             for rec in records:

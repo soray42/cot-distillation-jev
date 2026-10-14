@@ -47,7 +47,7 @@ import re
 import unicodedata
 from pathlib import Path
 
-SUBSET_DIRS = {"alg": "Algorithm-Generated", "hc": "Hand-Crafted"}
+SUBSET_DIRS = {"alg": "Algorithm-Generated", "hc": "Hand-Crafted", "aftraj": "AFTraj"}   # aftraj: scripts/build_fa_aftraj.py --export-sf
 STEP_CAP = 1500
 TASK_CAP = 1500
 NODE_TYPES = ("answer_step", "provenance", "content", "conflict", "agent")
