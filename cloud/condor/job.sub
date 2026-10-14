@@ -1,0 +1,21 @@
+# HTCondor submit file: every line of condor/joblist.txt is one job (env file, priority). From ~/cotd:
+#   condor_submit condor/job.sub                     # all 27 jobs (higher priority starts first among ours)
+# Each job: 2 GPUs with >= 80 GB, 12 CPUs, 230 GB host RAM (FSDP + CPU AdamW of 12B). If the pool cannot give that much
+# RAM, set FSDP_OPTIM_OVERRIDE=8bit-sr in `environment` below and lower request_memory to 100GB.
+universe       = vanilla
+executable     = /bin/bash
+arguments      = condor/run_job.sh $(envfile)
+initialdir     = $ENV(HOME)/cotd
+getenv         = True
+environment    = "REQUEST_CPUS=12"
+request_gpus   = 2
+request_cpus   = 12
+request_memory = 230GB
+request_disk   = 20GB
+requirements   = (TARGET.GPUs_GlobalMemoryMb >= 80000)
+priority       = $(prio)
+output         = logs/condor_$(Cluster)_$(Process).out
+error          = logs/condor_$(Cluster)_$(Process).err
+log            = logs/condor.log
+should_transfer_files = NO
+queue envfile, prio from condor/joblist.txt

@@ -1,0 +1,18 @@
+# Smoke test (a few minutes once it starts): the smoke stage of job 02 (Tree Forcing, GSM8K) on 2 GPUs, no training run.
+#   condor_submit condor/smoke.sub      then read logs/02_12b_gsm_GFPQ-c4lr3g12_s12_fsdp-smoke.out
+universe       = vanilla
+executable     = /bin/bash
+arguments      = condor/run_job.sh condor/jobs/02_12b_gsm_GFPQ-c4lr3g12_s12_fsdp.env
+initialdir     = $ENV(HOME)/cotd
+getenv         = True
+environment    = "SMOKE_ONLY=1 REQUEST_CPUS=12"
+request_gpus   = 2
+request_cpus   = 12
+request_memory = 230GB
+request_disk   = 20GB
+requirements   = (TARGET.GPUs_GlobalMemoryMb >= 80000)
+output         = logs/condor_smoke_$(Cluster).out
+error          = logs/condor_smoke_$(Cluster).err
+log            = logs/condor.log
+should_transfer_files = NO
+queue

@@ -1,0 +1,45 @@
+# Gemma-4-12B 实验包（HTCondor）
+
+这个包里有：训练代码（固定版本）、3 个任务的数据（GSM8K、数学链、K&K）、27 个训练任务的配置。
+每个任务就是一次完整训练，跑完会自动评测。结果只有指标和预测文件，不保存模型权重。
+
+## 0. 前提
+- 解压到 `~/cotd`：`mkdir -p ~/cotd && tar xzf cotd_condor_bundle.tgz -C ~/cotd`
+- 计算节点要能读写 `~/cotd`（共享文件系统）。如果不能，请告诉我，我改成 HTCondor 传文件的方式。
+- 磁盘：大约 35 GB（Python 环境约 10 GB，模型 24 GB）。
+
+## 1. 安装（一次，在能联网的登录节点上）
+```bash
+cd ~/cotd
+# Gemma 在 Hugging Face 上可能需要先在模型页面点同意许可，然后：
+export HF_TOKEN=<你的 Hugging Face token>
+bash condor/setup.sh        # 建 envs/cotd 环境并下载 google/gemma-4-12B（固定版本，自动校验 sha256）
+```
+需要 python3.11。没有的话，用 `module load` 或 conda 装一个 3.11。
+
+## 2. 冒烟测试（先跑这个，几分钟）
+```bash
+cd ~/cotd && mkdir -p logs
+condor_submit condor/smoke.sub
+```
+跑完后看 `logs/02_12b_gsm_GFPQ-c4lr3g12_s12_fsdp-smoke.out`，里面应该有 `smoke ok GFPQ` 和 `smoke ok base eval`。
+把这个文件发给我确认一下。
+
+## 3. 提交全部 27 个任务
+```bash
+cd ~/cotd && condor_submit condor/job.sub
+```
+- 每个任务申请 2 张 80 GB 以上的卡、12 个 CPU、230 GB 内存，预计 3–8 小时。
+- `joblist.txt` 里的数字是优先级，越大越先跑。前 9 个最重要。
+- 如果申请不到 230 GB 内存：把 `job.sub` 里的 `environment` 改成 `"REQUEST_CPUS=12 FSDP_OPTIM_OVERRIDE=8bit-sr"`，`request_memory` 改成 `100GB`（显存占用会稍大）。
+- `requirements` 里的显存属性名（`GPUs_GlobalMemoryMb`）不同集群可能不一样，提交报错的话按你们集群的写法改。
+- 跑完的任务会自动跳过：重新提交不会重复跑。
+
+## 4. 发回结果
+```bash
+cd ~/cotd && bash condor/pack_results.sh     # 生成 results_12b_<日期>.tgz（几十 MB）
+```
+把这个 tgz 发给我就行。随时可以打包，已经跑完的部分都在里面。
+
+## 出问题时
+发我对应的 `logs/<任务名>.out` 和 `logs/condor_*.err`。
