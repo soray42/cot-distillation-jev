@@ -9,20 +9,24 @@ system to fail) and the tooling for a causal audit of internal variables.
 
 Owner: Haotian "Sora" Yang. Private research repository; data, results and notes are not tracked (see `.gitignore`).
 
-## Status (2026-10-12)
+## Status (2026-10-14)
 
-- Each method at its own tuned learning rate (3e-6), same hardware, 4B:
-  - arithmetic chains: Tree Forcing ahead in 2 of 2 seeds in range (+3.1, +4.4 points); answer-only training given 20
-    epochs (about Tree Forcing's compute) scores below its 12-epoch run;
-  - GSM8K (trees from GSM8K's own step annotations): +5.6 points [+3.8, +7.3] on GSM8K test + GSM1K, one seed;
-  - single-domain Knights-and-Knaves: +4.5 points over 12-epoch answer-only; 20-epoch answer-only catches up but loses
-    8 points on BIG-Bench Hard;
-  - PrOntoQA-OOD: tie (both near 100% in range, identical decay beyond).
-- The gain tracks what answer-only training leaves unlearned (its accuracy on the tree's node questions: 51% arithmetic,
-  63% GSM8K, 91% PrOntoQA). Depth beyond the training range is not extended so far; data efficiency is untested.
-- Failure attribution follows StepFinder's protocol with reasoning trees for all its training trajectories.
-- A Lean 4 pilot (`leangen.py`) generates certified congruence-chain problems with depth control and "semantic drift"
-  options (true but off-target), as a fifth domain and a possible benchmark.
+- 4B, LR 3e-6 unless noted, seed 12 unless noted:
+  - **GSM8K** (trees from GSM8K's own step annotations), Tree Forcing (`GFPQ`) minus answer-only, on GSM8K test + GSM1K:
+    +5.6 / +3.7 / +2.9 over 12-epoch answer-only (3 seeds); +2.5 [+0.8, +4.1] over answer-only at 1e-6;
+    +2.8 [+1.2, +4.5] over 4-epoch answer-only (Tree Forcing's schedule); +1.5 [-0.2, +3.1] over the placebo control.
+  - **Data efficiency** (GSM8K): with 25% of the data, +9.0 / +6.7 over answer-only (2 seeds) and +1.9 [+0.2, +3.6] over
+    the placebo; Tree Forcing reaches answer-only's full-data accuracy with about 17% of the data.
+  - **Arithmetic chains**: ahead of 12-epoch answer-only (+3.0 to +4.4 in range, 3 seeds), but tied with 4-epoch or
+    1e-6 answer-only and with the placebo at full data; with 25% of the data, +5.8 [+3.9, +7.8] over the placebo.
+  - **Knights-and-Knaves**: +4.5 over 12-epoch answer-only; 20-epoch answer-only catches up in accuracy and loses 8-10
+    points on BIG-Bench Hard (2 seeds).
+- Controls: `GFPSR` / `GFPQR` (node targets shuffled within a problem) and `GFPSX` / `GFPQX` (placebo: surface questions
+  about the problem text, same count, views and yes rate).
+- In progress: StrategyQA, EntailmentBank and QASC as further real-data domains; Gemma-4-12B runs (`cloud/condor`).
+- Failure attribution: AFTraj in-domain (ReCast's protocol) 80.4 Hit@1 for the 0.8B one-pass model (StepFinder 73.8,
+  ReCast 84.1); Tree Forcing +15 on AFTraj's diagnosed (real) agentic errors, -32 on its injected ones (one seed, 46 / 22
+  items); real-failure study on TrajErrBench + AgentProcessBench (train / test by task) with RootSE held out, running.
 
 ## Repository layout
 
@@ -34,7 +38,10 @@ Owner: Haotian "Sora" Yang. Private research repository; data, results and notes
 | `src/cotdistill/fa_tier0.py`, `fa_public.py` | Failure attribution: simulated multi-agent trajectories with replay-verified labels (Tier 0); cleaned public datasets (Tier 1) |
 | `src/cotdistill/fa_trees.py`, `scripts/extract_fa_trees.py` | Failure attribution: multiple-choice reasoning trees on StepFinder's trajectories (answer step, provenance chain, content, conflict, agent) and their automatic checks (chain, quotes, leaks, length / log-overlap / surface-form tells) |
 | `src/cotdistill/leangen.py`, `scripts/build_lean_tf.py` | Lean 4 pilot: generated congruence chains whose answers, distractors (refuted, independent, true-but-off-target) and tree nodes are certified by the Lean kernel |
-| `scripts/build_fa_sf.py` | StepFinder's protocol: one model per Who&When subset, its training trajectories, Who&When test files; `--trees` swaps in the reasoning trees |
+| `scripts/build_fa_sf.py`, `build_fa_sf_x.py`, `fa_pool.py` | StepFinder's protocol: one model per Who&When subset, its training trajectories, Who&When test files (`--trees` swaps in the reasoning trees); the public test sets in the same rendering; seed-averaged paired comparisons |
+| `scripts/build_fa_aftraj.py`, `build_fa_real.py`, `build_fa_longrca.py` | Failure attribution beyond StepFinder: AFTraj in-domain (ReCast's protocol), observed failures (TrajErrBench, AgentProcessBench, RootSE), LongRCA |
+| `scripts/build_strategyqa_tf.py` | StrategyQA with nodes read off its decompositions and annotated facts |
+| `scripts/plot_data_efficiency.py` | Accuracy vs share of the training set (figure) |
 | `src/cotdistill/fsdp.py`, `offload.py` | Two-GPU FSDP2 training and CPU-offloaded AdamW (fp32 master weights) |
 | `src/cotdistill/interchange.py` | Interchange interventions for the causal audit |
 | `src/cotdistill/teacher.py`, `deepseek.py`, `openrouter.py`, `readout.py` | Teacher pipeline (DeepSeek only) and log-probability readout |
@@ -49,7 +56,7 @@ Owner: Haotian "Sora" Yang. Private research repository; data, results and notes
 | `hpc/train_arm.sbatch` | Slurm job for one training run; `arm_config` lists every arm (A2, G3, GFPS, GFPQ, GFPSP, TFL, GTF, ...) |
 | `hpc/*.sbatch`, `hpc/*.sh` | Other jobs (audit, Intern-format eval, gradient subspaces, memory tests) and data push / fetch helpers |
 | `configs/v7`, `configs/v8` | Data-mixture configs for the release model |
-| `cloud/` | Scripts used for one rented-GPU run |
+| `cloud/` | Rented-GPU scripts; `cloud/condor/` + `cloud/pack_condor.sh`: an HTCondor bundle for the Gemma-4-12B runs (pinned code, data, per-job settings dumped from the Slurm relay logic) |
 | `tests/` | CPU unit tests (tiny random models) |
 
 ## Main arms
@@ -64,6 +71,8 @@ Owner: Haotian "Sora" Yang. Private research repository; data, results and notes
 | `GFPSP` | As GFPS, up to 8 node questions packed per sequence | Same; later questions see earlier questions, never answers |
 | `TFL` | Final + every node | Parents' results written as text, no problem |
 | `GTF` | GFPS + fading written parents + depth weights | Statements |
+| `GFPSR` / `GFPQR` | As GFPS / GFPQ with each problem's node targets shuffled among its nodes | Same |
+| `GFPSX` / `GFPQX` | As GFPS / GFPQ with each node question replaced by a surface question about the problem text (placebo) | Same |
 
 ## Setup
 
@@ -89,13 +98,20 @@ python scripts/ladder_readout.py 'results/hpc/l4b/*' --out results/ladder_readou
 ## Data and rules
 
 - Data are not tracked. Builders write to `data/`; raw downloads go to `data/raw/<source>/`.
-- Training data never come from GPT, Codex or Claude outputs; DeepSeek is the only teacher model.
+- Training data never come from GPT or Codex outputs; DeepSeek is the teacher model. Exception by the owner's decision:
+  the failure-attribution reasoning trees are written by Claude Opus and tagged `"teacher": "claude-opus"`.
 - Evaluation sets are evaluation-only and deduplicated against training data (8-gram overlap checks in the builders).
 - Licences of third-party data are recorded per source; some sources are research-only.
 
 ## Changelog
 
 The README is updated with every push.
+
+- 2026-10-14: shuffled-target and placebo controls (`GFPSR`, `GFPQR`, `GFPSX`, `GFPQX`); StepFinder protocol test sets
+  and paired statistics (`build_fa_sf_x.py`, `fa_pool.py`); failure-attribution builders for AFTraj in-domain,
+  observed-failure data and LongRCA, with the tree tools extended to them; StrategyQA domain; data-efficiency figure;
+  HTCondor bundle for Gemma-4-12B (`cloud/condor`); status rewritten with tuned and schedule-matched baselines and the
+  placebo results.
 
 - 2026-10-12: Lean F1 pilot (`leangen.py`, `build_lean_tf.py`, a `lean_f1` statement block; 2,400 certified items,
   surface-tell battery near chance); status rewritten with the four-domain results at tuned learning rates.
