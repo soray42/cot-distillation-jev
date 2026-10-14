@@ -1,0 +1,27 @@
+# One training job (submitted by jobs.dag; for a single job see README). Runs in cotd.sif on 2 GPUs >= 80 GB with
+# CUDA driver >= 12.8. Code + data come as cotd_code_data.tgz (transferred); Gemma is read from /staging; the outputs
+# (no weights) come back as results/results_<name>.tgz.
+include : chtc_settings.inc
+universe = vanilla
+container_image = file://$(STAGING)/cotd.sif
+executable = run_train.sh
+arguments = $(envfile) $(name)
+environment = "STAGING=$(STAGING) SMOKE_ONLY=$(smoke)"
+should_transfer_files = YES
+when_to_transfer_output = ON_EXIT
+transfer_input_files = cotd_code_data.tgz
+transfer_output_files = results_$(name).tgz
+transfer_output_remaps = "results_$(name).tgz = results/results_$(name).tgz"
+requirements = (HasCHTCStaging == true)
+request_gpus = 2
+require_gpus = (GlobalMemoryMb >= 80000) && (DriverVersion >= 12.8)
++WantGPULab = true
++GPUJobLength = "medium"
+request_cpus = 12
+request_memory = 230GB
+request_disk = 80GB
+priority = $(prio)
+log = logs/train.log
+output = logs/$(name).condor.out
+error = logs/$(name).condor.err
+queue

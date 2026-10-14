@@ -1,0 +1,17 @@
+# Apptainer image for the Gemma-4-12B runs on CHTC (build it in an interactive build job, README step 1).
+# torch 2.11.0 + cu128: the newest torch with CUDA 12.8 wheels, so it runs on the 12.8 drivers of most 80 GB machines
+# (torch 2.14.0, used for the 4B runs, ships only cu130 wheels). Within the 12B batch every arm uses this same image.
+Bootstrap: docker
+From: python:3.11-slim
+
+%post
+    apt-get update && apt-get install -y --no-install-recommends ca-certificates tar gzip && rm -rf /var/lib/apt/lists/*
+    pip install --no-cache-dir torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu128
+    pip install --no-cache-dir transformers==5.17.0 accelerate==1.15.0 peft==0.21.1 safetensors==0.8.0 \
+        tokenizers==0.23.2 huggingface_hub==1.33.0 numpy==2.4.6 einops==0.8.2 Jinja2==3.1.6 PyYAML==6.0.3 \
+        regex==2026.9.29
+    python -c "import torch, transformers; print('torch', torch.__version__, torch.version.cuda, 'transformers', transformers.__version__)"
+
+%environment
+    export TOKENIZERS_PARALLELISM=false
+    export HF_HUB_OFFLINE=1

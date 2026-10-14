@@ -56,7 +56,7 @@ Owner: Haotian "Sora" Yang. Private research repository; data, results and notes
 | `hpc/train_arm.sbatch` | Slurm job for one training run; `arm_config` lists every arm (A2, G3, GFPS, GFPQ, GFPSP, TFL, GTF, ...) |
 | `hpc/*.sbatch`, `hpc/*.sh` | Other jobs (audit, Intern-format eval, gradient subspaces, memory tests) and data push / fetch helpers |
 | `configs/v7`, `configs/v8` | Data-mixture configs for the release model |
-| `cloud/` | Rented-GPU scripts; `cloud/condor/` + `cloud/pack_condor.sh`: an HTCondor bundle for the Gemma-4-12B runs (pinned code, data, per-job settings dumped from the Slurm relay logic) |
+| `cloud/` | Rented-GPU scripts; `cloud/condor/` + `cloud/pack_condor.sh`: an HTCondor bundle for the Gemma-4-12B runs (pinned code, data, per-job settings dumped from the Slurm relay logic); `cloud/chtc/` + `cloud/pack_chtc.sh`: its CHTC variant (container, /staging, file transfer, DAG) |
 | `tests/` | CPU unit tests (tiny random models) |
 
 ## Main arms
@@ -112,7 +112,10 @@ The README is updated with every push.
   observed-failure data and LongRCA, with the tree tools extended to them; StrategyQA domain; data-efficiency figure;
   HTCondor bundle for Gemma-4-12B (`cloud/condor`); status rewritten with tuned and schedule-matched baselines and the
   placebo results. Each HTCondor job pushes its outputs (no weights) to the private repo
-  soray42/cot-distillation-jev-results through a write deploy key (`cloud/condor/push_results.sh`).
+  soray42/cot-distillation-jev-results through a write deploy key (`cloud/condor/push_results.sh`). `cloud/chtc/` +
+  `cloud/pack_chtc.sh`: the same batch for CHTC (no shared filesystem): Apptainer image (torch 2.11 + cu128 for CUDA
+  12.8 drivers), Gemma and the image in /staging, code and data transferred per job, a DAG whose POST script pushes
+  each result.
 
 - 2026-10-12: Lean F1 pilot (`leangen.py`, `build_lean_tf.py`, a `lean_f1` statement block; 2,400 certified items,
   surface-tell battery near chance); status rewritten with the four-domain results at tuned learning rates.

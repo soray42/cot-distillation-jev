@@ -1,0 +1,12 @@
+# Interactive build job (CHTC "build an Apptainer container"):  condor_submit -i build.sub
+# Inside the job: see README step 1 (build cotd.sif, fetch Gemma, move both to /staging).
+include : chtc_settings.inc
+universe = vanilla
+log = logs/build.log
++IsBuildJob = true
+requirements = (HasCHTCStaging == true)
+transfer_input_files = cotd.def, fetch_model.sh
+request_cpus = 4
+request_memory = 32GB
+request_disk = 120GB
+queue
