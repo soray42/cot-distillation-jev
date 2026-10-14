@@ -465,9 +465,9 @@ def problem_no_options(item: dict) -> str:
     prompt before "\nOptions:" (K&K: preamble, statement lines and the question line; numgen: the "Question: ..." line
     with the answer quantity's question sentence; FINAL_QUESTION sources: the statement block, a blank line and the
     final question paragraph; gsm8k_tf: the "Question: <problem>" line, for every item, whether or not its last
-    sentence has a clean cut; qasc_tf: the "Question: <question>" line). The final question names what is asked (e.g.
-    which quantity a word problem wants), which GFP-S drops. Defined for the sources statement_block covers, gsm8k_tf
-    and qasc_tf; anything else raises ValueError."""
+    sentence has a clean cut). The final question names what is asked (e.g. which quantity a word problem wants), which
+    GFP-S drops. Defined for the sources statement_block covers and gsm8k_tf; anything else raises ValueError."""
+    # qasc_tf, strategyqa_tf, entailmentbank_tf: the "Question: <question>" line (their own branches below)
     if item.get("source") == GSM8K_TF:                     # own shape check: statement_block may refuse the item
         _gsm8k_tf_problem(item)
         return item["prompt"].partition("\nOptions:")[0]
