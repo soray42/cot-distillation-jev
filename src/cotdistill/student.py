@@ -747,6 +747,9 @@ def placebo_text(item: dict) -> str:
     try:
         return statement_block(item)
     except ValueError:
+        from .treeplan import STRATEGYQA_TF, _strategyqa_tf_question
+        if item.get("source") == STRATEGYQA_TF:          # no statement block: the problem is its question alone
+            return _strategyqa_tf_question(item)
         if item.get("source") != GSM8K_TF:
             raise
         return _gsm8k_tf_problem(item)

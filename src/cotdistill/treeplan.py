@@ -270,6 +270,8 @@ def statement_block(item: dict) -> str:
     - fa_public (data/student_fa1, public failure-attribution logs): the log before the step or agent question (exact
       text, the last occurrence) and its options; the log may contain "Question:" (tasks of MC benchmarks) but never a
       line opening with "Options:" (fa_public.sanitize).
+    - strategyqa_tf (data/student_strategyqa_tf, StrategyQA with decomposition step nodes): none, the problem is its
+      question alone (no fact or passage is shown); raises ValueError (GFPQ, problem_no_options, is defined).
     - the sources of FINAL_QUESTION: the prompt before its last paragraph, which must be that source's final question
       (the only "Options:" block follows it; no earlier paragraph opens with "Question: ").
     - lean_f1 (data/student_lean_tf_pilot, Lean-certified congruence chains, cotdistill.leangen): as pronto, the prompt
@@ -324,6 +326,10 @@ def statement_block(item: dict) -> str:
             raise ValueError(f"{iid}: no statement block: the lean_f1 prompt is not <preamble + premises> + its final "
                              "question paragraph + options")
         return body
+    if src == STRATEGYQA_TF:
+        _strategyqa_tf_question(item)                     # its own shape check first (the clearer refusal)
+        raise ValueError(f"{iid}: no statement block: a strategyqa_tf problem is its question alone; GFPQ "
+                         "(--tree-view statements+question) uses problem_no_options")
     if src in FINAL_QUESTION:
         head, sep, opts = p.partition("\nOptions:\n")
         body, cut, last = head.rpartition("\n\n")
@@ -341,6 +347,24 @@ def statement_block(item: dict) -> str:
 # the question names the asked variable and divisor (leangen.QUESTION / leangen.FINAL_RE, checked equal in the tests).
 LEAN_F1 = "lean_f1"
 LEAN_F1_QUESTION = r"Question: What is the remainder when [a-z] is divided by [1-9][0-9]*\?"
+
+# StrategyQA with Tree Forcing nodes (scripts/build_strategyqa_tf.py): "Question: <question>\nOptions:\nA) Yes\nB) No",
+# the question one line and the whole problem (the annotated facts are never shown), so GFPQ (problem_no_options) is
+# the question line, GFP-S (statement_block) is not defined, and the placebo text (student.placebo_text) is the question.
+STRATEGYQA_TF = "strategyqa_tf"
+_STRATEGYQA_OPTIONS = "A) Yes\nB) No"
+
+
+def _strategyqa_tf_question(item: dict) -> str:
+    """The question of a strategyqa_tf prompt ("Question: <one line>\nOptions:\nA) Yes\nB) No"), else ValueError."""
+    p, iid = item.get("prompt", ""), item.get("item_id")
+    head, sep, opts = p.partition("\nOptions:\n")
+    body = head[len("Question: "):]
+    if (not sep or opts != _STRATEGYQA_OPTIONS or not head.startswith("Question: ") or "\n" in head
+            or not body.strip() or "Question:" in body):
+        raise ValueError(f"{iid}: strategyqa_tf prompt is not 'Question: <question>' + the options A) Yes / B) No")
+    return body
+
 
 _FA_HEADER = "The log below comes from a multi-agent system that failed to solve its task.\n\nTask: "
 _FA_Q_STEP = ("Question: Which step contains the decisive error, i.e. the earliest mistake whose correction would have "
@@ -398,6 +422,9 @@ def problem_no_options(item: dict) -> str:
     GFP-S drops. Defined for the sources statement_block covers and gsm8k_tf; anything else raises ValueError."""
     if item.get("source") == GSM8K_TF:                     # own shape check: statement_block may refuse the item
         _gsm8k_tf_problem(item)
+        return item["prompt"].partition("\nOptions:")[0]
+    if item.get("source") == STRATEGYQA_TF:                # the "Question: <question>" line; statement_block refuses
+        _strategyqa_tf_question(item)                      # every strategyqa_tf item
         return item["prompt"].partition("\nOptions:")[0]
     statement_block(item)                                  # same sources and shape checks as GFP-S
     head, sep, _ = item["prompt"].partition("\nOptions:")
