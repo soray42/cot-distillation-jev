@@ -293,9 +293,9 @@ OTHER_FILES = ["student_v3sl/val.jsonl", "student_v3sl/train.jsonl", "student_nu
 
 
 class TestOtherSourcesUnchanged(unittest.TestCase):
-    """treeplan.py at 9f03003 vs now: the diff only inserts (lean_f1) lines, FINAL_QUESTION is the same object
-    content, and statement_block / problem_no_options give the same outcome (text or refusal) on fixtures and on up to
-    800 rows of every local data file of every other source."""
+    """treeplan.py at 9f03003 vs now: the diff only inserts (lean_f1, entailmentbank_tf) lines, FINAL_QUESTION is the
+    same object content, and statement_block / problem_no_options give the same outcome (text or refusal) on fixtures
+    and on up to 800 rows of every local data file of every other source."""
 
     @classmethod
     def setUpClass(cls):
@@ -308,7 +308,7 @@ class TestOtherSourcesUnchanged(unittest.TestCase):
         self.assertTrue(ops)
         for tag, i1, i2, j1, j2 in ops:
             self.assertEqual(tag, "insert", (a[i1:i2], b[j1:j2]))
-            self.assertTrue(any("lean_f1" in x.lower() or "LEAN_F1" in x for x in b[j1:j2]), b[j1:j2])
+            self.assertTrue(any(k in x.lower() for x in b[j1:j2] for k in ("lean_f1", "entailmentbank_tf")), b[j1:j2])
         self.assertEqual(self.old.FINAL_QUESTION, FINAL_QUESTION)
 
     def test_fixtures(self):

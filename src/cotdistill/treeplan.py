@@ -282,6 +282,8 @@ def statement_block(item: dict) -> str:
       3 more, how many ...?", about 60% of GSM8K train) raises ValueError, as gsm8k_soc does for every item.
     - qasc_tf (data/student_qasc_tf, QASC with fact nodes): none, the problem is its question alone; raises ValueError
       (GFPQ, problem_no_options, is defined for every item).
+    - entailmentbank_tf (data/student_entailmentbank_tf, ARC questions with EntailmentBank tree nodes): none, as
+      arc_challenge / arc_easy (the question is the whole problem); raises ValueError (GFPQ only).
     Any other source, or a prompt that does not have this shape, raises ValueError (no clean definition)."""
     src, p, iid = item.get("source"), item.get("prompt", ""), item.get("item_id")
     if src == "knights_knaves":
@@ -336,6 +338,10 @@ def statement_block(item: dict) -> str:
         _strategyqa_tf_question(item)                     # its own shape check first (the clearer refusal)
         raise ValueError(f"{iid}: no statement block: a strategyqa_tf problem is its question alone; GFPQ "
                          "(--tree-view statements+question) uses problem_no_options")
+    if src == ENTAILMENTBANK_TF:
+        _entailmentbank_tf_problem(item)                  # its own shape check first (the clearer refusal)
+        raise ValueError(f"{iid}: no statement block: an entailmentbank_tf item is one ARC question, the whole "
+                         "problem; GFPQ (--tree-view statements+question) uses problem_no_options")
     if src in FINAL_QUESTION:
         head, sep, opts = p.partition("\nOptions:\n")
         body, cut, last = head.rpartition("\n\n")
@@ -436,6 +442,24 @@ def _qasc_tf_question(item: dict) -> str:
     return body
 
 
+# EntailmentBank with Tree Forcing nodes (scripts/build_entailmentbank_tf.py): "Question: <ARC question>\nOptions:
+# \nA) ..\nD) ..", the question one line. As arc_challenge / arc_easy the question is the whole problem (the tree's
+# leaf facts are never shown): no statement block (GFP-S raises), GFPQ (problem_no_options: the "Question: <question>"
+# line) for every item, and the placebo text (student.placebo_text) is the question. entailmentbank_tf.
+ENTAILMENTBANK_TF = "entailmentbank_tf"
+
+
+def _entailmentbank_tf_problem(item: dict) -> str:
+    """The question of an entailmentbank_tf prompt ("Question: <one line>\nOptions:\n<options>"), else ValueError."""
+    p, iid = item.get("prompt", ""), item.get("item_id")
+    head, sep, opts = p.partition("\nOptions:\n")
+    body = head[len("Question: "):]
+    if (not sep or "\nOptions:" in opts or not head.startswith("Question: ") or "\n" in head or not body.strip()
+            or "Question:" in body):
+        raise ValueError(f"{iid}: entailmentbank_tf prompt is not 'Question: <question>' + options")
+    return body
+
+
 def problem_no_options(item: dict) -> str:
     """The problem WITHOUT its answer options but WITH its final question (--tree-view statements+question, GFPQ): the
     prompt before "\nOptions:" (K&K: preamble, statement lines and the question line; numgen: the "Question: ..." line
@@ -452,6 +476,9 @@ def problem_no_options(item: dict) -> str:
         return item["prompt"].partition("\nOptions:")[0]
     if item.get("source") == STRATEGYQA_TF:                # the "Question: <question>" line; statement_block refuses
         _strategyqa_tf_question(item)                      # every strategyqa_tf item
+        return item["prompt"].partition("\nOptions:")[0]
+    if item.get("source") == ENTAILMENTBANK_TF:            # entailmentbank_tf: the question line, for every item
+        _entailmentbank_tf_problem(item)
         return item["prompt"].partition("\nOptions:")[0]
     statement_block(item)                                  # same sources and shape checks as GFP-S
     head, sep, _ = item["prompt"].partition("\nOptions:")
