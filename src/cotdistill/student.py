@@ -741,15 +741,18 @@ def _pl_prefix(s: str, k: int) -> tuple[str, int]:
 def placebo_text(item: dict) -> str:
     """The text a placebo question is about: the statement block (treeplan.statement_block, GFP-S's context), or for a
     gsm8k_tf item without a clean statement / question cut (about 60% of GSM8K) the whole problem text (GFPQ's context
-    minus the "Question: " label). Inside every view's context (problem / statements / statements+question) wherever
-    that view exists. Other sources without a statement block raise ValueError."""
-    from .treeplan import GSM8K_TF, _gsm8k_tf_problem
+    minus the "Question: " label); for a qasc_tf item (no statement block: the problem is its question) the question
+    text. Inside every view's context (problem / statements / statements+question) wherever that view exists. Other
+    sources without a statement block raise ValueError."""
+    from .treeplan import GSM8K_TF, QASC_TF, _gsm8k_tf_problem, _qasc_tf_question
     try:
         return statement_block(item)
     except ValueError:
         from .treeplan import STRATEGYQA_TF, _strategyqa_tf_question
         if item.get("source") == STRATEGYQA_TF:          # no statement block: the problem is its question alone
             return _strategyqa_tf_question(item)
+        if item.get("source") == QASC_TF:
+            return _qasc_tf_question(item)
         if item.get("source") != GSM8K_TF:
             raise
         return _gsm8k_tf_problem(item)

@@ -280,6 +280,8 @@ def statement_block(item: dict) -> str:
     - gsm8k_tf (data/student_gsm8k_tf, GSM8K with Socratic step nodes): the problem before its last sentence, only when
       that sentence is a bare question (gsm8k_question_cut); a question sentence that carries premises ("If she sells
       3 more, how many ...?", about 60% of GSM8K train) raises ValueError, as gsm8k_soc does for every item.
+    - qasc_tf (data/student_qasc_tf, QASC with fact nodes): none, the problem is its question alone; raises ValueError
+      (GFPQ, problem_no_options, is defined for every item).
     Any other source, or a prompt that does not have this shape, raises ValueError (no clean definition)."""
     src, p, iid = item.get("source"), item.get("prompt", ""), item.get("item_id")
     if src == "knights_knaves":
@@ -318,6 +320,10 @@ def statement_block(item: dict) -> str:
             raise ValueError(f"{iid}: no statement block: the last sentence of this gsm8k_tf problem is not a bare "
                              "question (it carries a number, a condition or a clause; GFPQ uses problem_no_options)")
         return cut[0]
+    if src == QASC_TF:
+        _qasc_tf_question(item)
+        raise ValueError(f"{iid}: no statement block: a qasc_tf problem is its question alone (the facts are not "
+                         "shown); GFPQ (--tree-view statements+question) uses problem_no_options")
     if src == LEAN_F1:
         head, sep, opts = p.partition("\nOptions:\n")
         body, cut, last = head.rpartition("\n\n")
@@ -413,15 +419,36 @@ def gsm8k_question_cut(problem: str) -> tuple[str, str] | None:
     return body, ask
 
 
+# QASC with Tree Forcing nodes (scripts/build_qasc_tf.py): "Question: <question>\nOptions:\nA) ...\n...\nH) ...", the
+# question one line and the whole problem (QASC's two facts are asked as nodes, never shown), so GFPQ
+# (problem_no_options) is the question line and GFP-S (statement_block) has nothing to show, as for arc.
+QASC_TF = "qasc_tf"
+
+
+def _qasc_tf_question(item: dict) -> str:
+    """The question text of a qasc_tf prompt ("Question: <one line>\nOptions:\n<options>"), else ValueError."""
+    p, iid = item.get("prompt", ""), item.get("item_id")
+    head, sep, opts = p.partition("\nOptions:\n")
+    body = head[len("Question: "):]
+    if (not sep or "\nOptions:" in opts or not head.startswith("Question: ") or "\n" in head or not body.strip()
+            or "Question:" in body):
+        raise ValueError(f"{iid}: qasc_tf prompt is not 'Question: <question>' + options")
+    return body
+
+
 def problem_no_options(item: dict) -> str:
     """The problem WITHOUT its answer options but WITH its final question (--tree-view statements+question, GFPQ): the
     prompt before "\nOptions:" (K&K: preamble, statement lines and the question line; numgen: the "Question: ..." line
     with the answer quantity's question sentence; FINAL_QUESTION sources: the statement block, a blank line and the
     final question paragraph; gsm8k_tf: the "Question: <problem>" line, for every item, whether or not its last
-    sentence has a clean cut). The final question names what is asked (e.g. which quantity a word problem wants), which
-    GFP-S drops. Defined for the sources statement_block covers and gsm8k_tf; anything else raises ValueError."""
+    sentence has a clean cut; qasc_tf: the "Question: <question>" line). The final question names what is asked (e.g.
+    which quantity a word problem wants), which GFP-S drops. Defined for the sources statement_block covers, gsm8k_tf
+    and qasc_tf; anything else raises ValueError."""
     if item.get("source") == GSM8K_TF:                     # own shape check: statement_block may refuse the item
         _gsm8k_tf_problem(item)
+        return item["prompt"].partition("\nOptions:")[0]
+    if item.get("source") == QASC_TF:                      # statement_block refuses every qasc_tf item
+        _qasc_tf_question(item)
         return item["prompt"].partition("\nOptions:")[0]
     if item.get("source") == STRATEGYQA_TF:                # the "Question: <question>" line; statement_block refuses
         _strategyqa_tf_question(item)                      # every strategyqa_tf item
