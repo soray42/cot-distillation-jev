@@ -18,6 +18,10 @@ Writes
                                                                  the rest
   data/student_fa_aftraj_t2/train.jsonl, val.jsonl               with --trees: the MC reasoning-tree nodes (traj_id
                                                                  "aftraj/<uid>"), converted and checked as build_fa_sf
+With --export-sf (and nothing else): the pool (train + val) in StepFinder's file format for the tree teachers,
+data/raw/aftraj_sf/AFTraj/train/<uid>.json (mistake_reason from the parquet), plus data/raw/aftraj_trees/all_ids.json
+and --shards work lists with balanced length-rank targets (scripts/extract_fa_trees.py render / assemble --raw
+data/raw/aftraj_sf).
 """
 from __future__ import annotations
 
@@ -80,6 +84,41 @@ def val_groups(pool: list[dict], frac: float, seed: int) -> set:
     return chosen
 
 
+def export_sf(args) -> None:
+    import pandas as pd                       # python3's user site, as fa_public.read_aftraj
+    df = pd.read_parquet(ROOT / "data/raw/aftraj/aftraj_unsafe.parquet")
+    reason = {str(r["conv_id"]): (r["mistake_reason"] if isinstance(r["mistake_reason"], str) else "")
+              for _, r in df.iterrows()}
+    out = ROOT / "data/raw/aftraj_sf/AFTraj/train"
+    out.mkdir(parents=True, exist_ok=True)
+    ids = []
+    with open(ROOT / args.norm) as f:
+        for r in map(json.loads, f):
+            r2, why = fp.clean_record(r, "v1", drop_groups={})
+            if r["split"] != "pool" or why or not 2 <= len(r2["steps"]) <= fp.MAX_STEPS:
+                continue
+            hist = [{"step_id": k, "name": st["agent"], "role": st["agent"], "content": st["text"]}
+                    for k, st in enumerate(r2["steps"])]
+            assert hist[r2["dec"]]["name"] == r2["gold_agent"], r["uid"]
+            rs = reason.get(r["uid"], "").strip()
+            d = {"question": r2["task"], "ground_truth": r2["answer"], "history": hist,
+                 "mistake_agent": r2["gold_agent"], "mistake_step": r2["dec"],
+                 "mistake_reason": rs or "(not given: an injected error; find it from the log and the ground truth)"}
+            (out / f"{r['uid']}.json").write_text(json.dumps(d, ensure_ascii=False, indent=1))
+            ids.append({"traj_id": f"{SUBSET}/{r['uid']}", "subset": SUBSET, "n_steps": len(hist),
+                        "mistake_step": r2["dec"], "tercile": None, "in_fa1_pool": None})
+    random.Random("aftraj-trees|20261014").shuffle(ids)
+    for i, x in enumerate(ids):           # balanced length-rank targets of the content and conflict nodes
+        x["target_len_rank"] = {"content": i % 4, "conflict": (i // 4 + i) % 4}
+    base = ROOT / "data/raw/aftraj_trees"
+    (base / "shards").mkdir(parents=True, exist_ok=True)
+    (base / "src").mkdir(exist_ok=True)
+    (base / "all_ids.json").write_text(json.dumps(ids, indent=0))
+    for k in range(args.shards):
+        (base / "shards" / f"shard_{k:02d}.json").write_text(json.dumps(ids[k::args.shards], indent=0))
+    print(f"exported {len(ids)} trajectories, {args.shards} shards")
+
+
 def main(argv=None) -> dict:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--norm", default="data/student_fa1/norm/aftraj.jsonl")
@@ -95,7 +134,11 @@ def main(argv=None) -> dict:
     ap.add_argument("--trees", default="")
     ap.add_argument("--trees-keep-failed", action="store_true")
     ap.add_argument("--drop-groups", action="store_true", help="also drop clean v1's groups from train / val")
+    ap.add_argument("--export-sf", action="store_true", help="only export the pool for the tree teachers")
+    ap.add_argument("--shards", type=int, default=14)
     args = ap.parse_args(argv)
+    if args.export_sf:
+        return export_sf(args)
 
     counts: collections.Counter = collections.Counter()
     recs = []
