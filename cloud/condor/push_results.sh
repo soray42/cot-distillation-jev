@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pushes one finished job's outputs (no weights) to the private GitHub repo soray42/cot-distillation-jev-results.
+# Pushes one finished job's outputs (no weights) to the private GitHub repo tree-forcing-lab/cot-distillation-jev-results.
 # Called by run_job.sh after every job; safe to rerun by hand: bash condor/push_results.sh <env file>
 # Needs the write deploy key ~/.ssh/cotd_results (README step 1b). Several jobs may finish at once: a lock serialises
 # the pushes and every push rebases on the remote first.
@@ -12,8 +12,8 @@ OUTD=$(cat "logs/.$NAME.outdir"); rm -f "logs/.$NAME.outdir"
 KEY=$HOME/.ssh/cotd_results
 [ -f "$KEY" ] || { echo "push_results: no deploy key $KEY, results stay in $ROOT/$OUTD"; exit 0; }
 REPO_DIR=$ROOT/results_repo
-URLS=("git@github.com:soray42/cot-distillation-jev-results.git"
-      "ssh://git@ssh.github.com:443/soray42/cot-distillation-jev-results.git")   # port 443 if 22 is blocked
+URLS=("git@github.com:tree-forcing-lab/cot-distillation-jev-results.git"
+      "ssh://git@ssh.github.com:443/tree-forcing-lab/cot-distillation-jev-results.git")   # port 443 if 22 is blocked
 [ -n "${RESULTS_URL:-}" ] && URLS=("$RESULTS_URL")                               # tests: a local bare repo
 export GIT_SSH_COMMAND="ssh -i $KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30"
 exec 8> "$ROOT/.results_push.lock"; flock -w 1800 8 || { echo "push_results: lock timeout"; exit 0; }

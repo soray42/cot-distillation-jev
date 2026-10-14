@@ -30,7 +30,7 @@ exit
 ssh-keygen -t ed25519 -N "" -f ~/.ssh/cotd_results -C "cotd-results-chtc"
 cat ~/.ssh/cotd_results.pub      # 把这一行公钥发给 Sora，由 Sora 加到结果仓库的 deploy key（只对这一个仓库有写权限）
 ```
-Sora 加好以后测试一下：`GIT_SSH_COMMAND="ssh -i ~/.ssh/cotd_results" git ls-remote git@github.com:soray42/cot-distillation-jev-results.git`
+Sora 加好以后测试一下：`GIT_SSH_COMMAND="ssh -i ~/.ssh/cotd_results" git ls-remote git@github.com:tree-forcing-lab/cot-distillation-jev-results.git`
 22 端口不通的话会自动改走 443 端口。没有这个 key 也能跑，结果都在 `results/` 里。
 
 ## 3. 冒烟测试（先跑这个）

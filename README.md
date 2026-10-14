@@ -112,7 +112,7 @@ The README is updated with every push.
   observed-failure data and LongRCA, with the tree tools extended to them; StrategyQA domain; data-efficiency figure;
   HTCondor bundle for Gemma-4-12B (`cloud/condor`); status rewritten with tuned and schedule-matched baselines and the
   placebo results. Each HTCondor job pushes its outputs (no weights) to the private repo
-  soray42/cot-distillation-jev-results through a write deploy key (`cloud/condor/push_results.sh`). `cloud/chtc/` +
+  tree-forcing-lab/cot-distillation-jev-results through a write deploy key (`cloud/condor/push_results.sh`). `cloud/chtc/` +
   `cloud/pack_chtc.sh`: the same batch for CHTC (no shared filesystem): Apptainer image (torch 2.11 + cu128 for CUDA
   12.8 drivers), Gemma and the image in /staging, code and data transferred per job, a DAG whose POST script pushes
   each result.

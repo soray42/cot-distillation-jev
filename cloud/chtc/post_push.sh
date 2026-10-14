@@ -1,6 +1,6 @@
 #!/bin/bash
 # DAG POST script, on the submit server after each job:  post_push.sh <name> <job exit code>
-# Unpacks results/results_<name>.tgz and pushes it to the private repo soray42/cot-distillation-jev-results with the
+# Unpacks results/results_<name>.tgz and pushes it to the private repo tree-forcing-lab/cot-distillation-jev-results with the
 # write deploy key ~/.ssh/cotd_results (README step 2). Never blocks: without the key the files stay in results/.
 # Returns the job's exit code, so a failed job is retried by the DAG.
 NAME=$1; RC=${2:-0}
@@ -8,8 +8,8 @@ cd "$(dirname "$0")" || exit "$RC"
 F=results/results_$NAME.tgz; KEY=$HOME/.ssh/cotd_results
 [ -f "$F" ] && [ -f "$KEY" ] || exit "$RC"
 export GIT_SSH_COMMAND="ssh -i $KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30"
-URLS=("git@github.com:soray42/cot-distillation-jev-results.git"
-      "ssh://git@ssh.github.com:443/soray42/cot-distillation-jev-results.git")
+URLS=("git@github.com:tree-forcing-lab/cot-distillation-jev-results.git"
+      "ssh://git@ssh.github.com:443/tree-forcing-lab/cot-distillation-jev-results.git")
 [ -n "${RESULTS_URL:-}" ] && URLS=("$RESULTS_URL")
 exec 8> .results_push.lock; flock -w 1800 8 || exit "$RC"
 if [ ! -d results_repo/.git ]; then
