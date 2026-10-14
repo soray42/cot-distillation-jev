@@ -48,16 +48,16 @@ accuracy of answer-only training on the full training set with about a sixth of 
 arithmetic-chain data it outperforms a placebo control that asks the same number of content-free questions by a wide
 margin. With the full
 training set, it remains ahead of answer-only baselines tuned for learning rate and training length on GSM8K, and it
-avoids the loss of general reasoning ability that longer answer-only training incurs. Finally, we show that the same
-recipe transfers to failure attribution in multi-agent systems, where a 0.8B single-pass model trained with reasoning
-trees locates real errors more reliably and generalizes better to unseen agent frameworks.
+avoids the loss of general reasoning ability that longer answer-only training incurs. Our results suggest that
+reasoning annotations are best spent at training time, where they buy data efficiency without changing the deployed
+single-pass interface.
 \end{abstract}
 
 \section{Introduction}
 
 Large language models are increasingly used as components that make decisions rather than write text: they route
 requests, flag policy violations, choose tools and judge the outputs of other models
-\citep{ldm2026,zhang2025whowhen}. In these roles, a growing body of work replaces generated answers with a
+\citep{ldm2026}. In these roles, a growing body of work replaces generated answers with a
 \emph{single-pass} readout, i.e., the model reads the problem once and the probability it assigns to each option
 letter is taken as its decision \citep{ldm2026}. Such single-pass decision models are cheap, return a full
 distribution over the options and can be calibrated, which is why hosted decision services and recent open models
@@ -102,9 +102,6 @@ language models \citep{xie2024kk}. Our main findings are:
   \item \textbf{Accuracy and retention.} With the full training set, \tf{} stays ahead of answer-only baselines tuned
   for learning rate and training length on GSM8K, and it keeps general reasoning ability that longer answer-only
   training loses (\cref{sec:accuracy}).
-  \item \textbf{Transfer to failure attribution.} Applied to locating the decisive error in multi-agent logs, \tf{}
-  improves a 0.8B single-pass model on real (as opposed to injected) errors and on agent frameworks it has never seen
-  (\cref{sec:fa}).
 \end{itemize}
 
 \section{Tree Forcing}
@@ -113,7 +110,7 @@ language models \citep{xie2024kk}. Our main findings are:
 \paragraph{Single-pass decisions.} We consider problems with a fixed set of options. The model reads the prompt,
 i.e., the problem followed by the options labelled A, B, \ldots, and the string ``Answer:''; its decision is the
 distribution over the option letters at the next position. Training minimizes the KL divergence between this
-distribution and a target, which for the final question is the gold option (with light label smoothing). Thus,
+distribution and a target, which for the final question is the gold option (with light label smoothing; \cref{app:hparams}). Thus,
 answer-only training, the standard way of building such a model, uses only these final examples.
 
 \paragraph{Reasoning trees.} For each training problem, we assume a reasoning tree, i.e., a set of intermediate
@@ -179,7 +176,7 @@ $10^{-6}$, which improves answer-only training on both domains where we tried it
 epochs, and 4 epochs, which matches the schedule of \tf{}). As a control for the extra questions themselves, the \emph{placebo} variant keeps the schedule, the number
 of questions, their position in the prompt and their yes rate, but replaces each node question with a question about
 the surface of the problem (e.g., whether a sentence or a number appears in it), which has a correct answer and no
-reasoning content.
+reasoning content (\cref{app:placebo}).
 
 \begin{table}[t]
 \centering
@@ -297,54 +294,6 @@ model scores 8.4 and 9.8 points below \tf{} in the two seeds we ran. \tf{} reach
 fewer passes over the final questions, and its node questions keep the model busy with statements about the problem
 rather than with the label alone; we hypothesize that this is why it forgets less.
 
-\section{Application: Failure Attribution in Multi-Agent Systems}
-\label{sec:fa}
-
-Failure attribution asks which step of a failed multi-agent log caused the failure \citep{zhang2025whowhen}. It is a
-natural single-pass decision, since the options are the steps of the log, and the answer depends on a chain of
-evidence: which step produced the final answer, where the information it used came from, and what the responsible
-step did wrong. We therefore apply \tf{} with a 0.8B model and trees that follow this chain backwards, from the step
-that gives the team's answer to the decisive error. The trees were written by a frontier language model (Claude Opus)
-and checked automatically against the log (\cref{app:fa}); each tree contributes multiple-choice node questions in
-the same format as the final question.
-
-\paragraph{Unseen frameworks.} Following the protocol of StepFinder \citep{stepfinder2026}, we train on its public
-training trajectories of algorithm-generated agent teams and test on public sets that come from other agent frameworks and tasks
-\citep{agentracer2025,agentforesight2026}, after removing every test task that overlaps with the training data. On the
-two largest of these sets, we find that \tf{} improves over answer-only training by 6.9 points on AgenTracer and by
-7.9 points on AFTraj (averaged over two seeds; \cref{tab:fa}). We take this as evidence that following the evidence
-backwards transfers better across frameworks than the label alone.
-
-\paragraph{Real and injected errors.} We also train on AFTraj itself, under the protocol of recent work
-\citep{recast2026}, where our 0.8B single-pass model reaches 80.4\% on the 163 failed test logs, above the 73.8\% that
-StepFinder obtains in the same setting and below the 84.1\% of ReCast, which reads features from a 27B model
-\citep{recast2026}. The aggregate hides an interesting split. On agentic tasks whose errors were diagnosed in real
-runs, \tf{} raises accuracy from 60.9\% to 76.1\%; on agentic tasks whose errors were injected, answer-only training
-is better. Injected errors often leave surface traces that a classifier can exploit, and in our tree authoring about
-half of the injected agentic training labels could not be supported from the log at all. We suspect that
-answer-only training exploits such traces, whereas \tf{}, which is trained to follow the evidence in the log, gives up
-these shortcuts and gains where the error has to be found by reasoning.
-\todo{add the real-failure study (TrajErrBench + AgentProcessBench, held-out RootSE) once the runs are read out}
-
-\begin{table}[t]
-\centering
-\small
-\caption{Failure attribution with a 0.8B single-pass model (accuracy, \%). Top: trained on StepFinder's data, tested
-on unseen frameworks (algorithm-generated subset, two seeds). Bottom: trained and tested on AFTraj (seed 12), split by the origin of the error.}
-\label{tab:fa}
-\begin{tabular}{lcc}
-\toprule
-Test set & Answer-only & \tf{} \\
-\midrule
-AgenTracer (484) & 30.9 & \textbf{37.8} \\
-AFTraj (146) & 40.8 & \textbf{48.6} \\
-\midrule
-AFTraj, real agentic errors (46) & 60.9 & \textbf{76.1} \\
-AFTraj, all failed logs (163) & 80.4 & 80.4 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
 \section{Related Work}
 \label{sec:related}
 
@@ -379,8 +328,8 @@ identifies when content does matter.
 
 Our main experiments use one model of 4B parameters and, for most settings, a single seed; we report multiple seeds
 for the central comparisons and leave a second model family to future versions. \tf{} needs a reasoning tree for each
-training problem; our domains provide trees through annotations or exact generators, and the failure-attribution
-trees were written by a language model and checked automatically. The benefit of the tree's content is clearest when
+training problem; our domains provide trees through annotations or exact generators, and building trees for
+domains without them is left to future work. The benefit of the tree's content is clearest when
 data are scarce; with plentiful data on synthetic arithmetic chains, a placebo with the same schedule, or answer-only
 training tuned for length, recovers most of the gain. Finally, a single pass remains limited on problems that need
 long exact computation, which \tf{} narrows but does not remove.
@@ -391,8 +340,8 @@ We introduce \tf{}, a training recipe that turns the intermediate conclusions of
 asked in the context of the problem, while the deployed model keeps answering in a single pass. We find that it makes
 single-pass decision models markedly more data-efficient, that the content of the tree is what matters when data are
 scarce, and that it improves accuracy and retention against tuned answer-only baselines on real math word problems.
-The same recipe carries over to failure attribution in multi-agent systems, where it helps most on real errors and
-on frameworks the model has never seen.
+Since the deployed model is unchanged, \tf{} composes with other ways of improving single-pass decision models, such as
+distilling a reasoning teacher's answer distributions \citep{ldm2026}.
 
 \bibliography{refs}
 \bibliographystyle{icml2026}
@@ -404,18 +353,143 @@ on frameworks the model has never seen.
 \section{Training Details}
 \label{app:hparams}
 
-All runs fine-tune every parameter with AdamW, fp32 master weights and bf16 computation, sharded over two GPU slices
-(a few runs use one 80GB A100 with the same recipe); each optimizer update covers 32 problems (8 for
-Knights-and-Knaves, whose training set is smaller), for \tf{} with all their node questions, the learning rate follows a
-cosine schedule after a 5\% linear warm-up, targets use label smoothing of 0.1 and sequences are cut at 1,536 tokens.
-The node loss has the same weight as the final loss. Learning rates were compared on validation sets of the same
-domains; \tf{} is best at $3\cdot10^{-6}$ and insensitive between $10^{-6}$ and $3\cdot10^{-6}$. The failure
-attribution models (0.8B) use one GPU slice each, six epochs for answer-only training and three for \tf{};
-checkpoints are selected on validation. All experiments,
-including exploratory runs, used about 900 hours of A100 GPU slices (4g.40gb MIG slices and one full 80GB A100).
-\todo{per-domain token and update counts}
+All runs fine-tune every parameter of the model; \cref{tab:hparams} lists the settings. Answer-only training and \tf{}
+use the same data loader, optimizer and schedule; they differ only in whether node questions are added to each update
+and in the number of epochs. Within an update, the final question and the node questions of a problem have the same
+loss weight, and every node question is a separate example whose prompt is the problem context followed by the node
+question, the options ``A) Yes'' and ``B) No'', and ``Answer:''.
 
-\section{Per-Seed Results}
+\begin{table}[h]
+\centering
+\small
+\caption{Training settings shared by all main runs.}
+\label{tab:hparams}
+\begin{tabular}{ll}
+\toprule
+Model & Qwen3.5-4B (post-trained release), full fine-tuning \\
+Optimizer & AdamW, fp32 master weights, bf16 computation \\
+Learning rate & $3\cdot10^{-6}$ (answer-only also at $10^{-6}$ and $10^{-5}$; \cref{app:tuning}) \\
+Schedule & 5\% linear warm-up, then cosine decay to zero \\
+Update size & 32 problems (8 for Knights-and-Knaves); \tf{} adds all node questions of each problem \\
+Epochs & \tf{}: 4; answer-only: 12 (also 4 and 20; \cref{app:tuning}) \\
+Targets & gold option with label smoothing 0.1; node questions: exact Yes/No with the same smoothing \\
+Node loss weight & 1 (same as the final question) \\
+Maximum length & 1,536 tokens \\
+Hardware & two A100 MIG slices (4g.40gb) with FSDP, or one 80GB A100 with the same recipe \\
+Model selection & last checkpoint \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Data and Reasoning Trees}
+\label{app:data}
+
+\paragraph{GSM8K.} Each training problem becomes a five-option decision whose options are the gold answer and four
+plausible numbers; problems whose text overlaps with any test-derived set (GSM8K test, GSM1K and several GSM8K
+variants) are removed. The tree is read off the two annotations that GSM8K provides for each solution step: the
+Socratic sub-question and the calculator note \citep{cobbe2021gsm8k}. A step becomes a pair of nodes, ``<sub-question>
+Is it <value>?'' with the answer Yes, and the same sub-question with a wrong value and the answer No. The wrong value
+comes from a planted slip in the computation (an operator or an operand changed and propagated through the graph),
+from the value of another step, or from a perturbation that keeps the value's parity and roundness; it is never the
+gold answer. We do not build nodes for the step that yields the final answer, for steps whose value equals the
+answer, or for sub-questions that would ask the final question in disguise. Every node is re-checked by executing its
+calculator note. The training set has 5,923 problems (5,468 with at least one node), and the validation set 393.
+
+\paragraph{Arithmetic chains.} A generator writes a short story about a person and a few named quantities, each
+introduced by one sentence that states it or derives it from earlier quantities by an operation (addition,
+subtraction, multiplication or division, with a constant or another quantity), plus sentences with irrelevant numbers;
+the question asks for the last quantity, and the depth of a problem is its number of operations. The tree has three
+kinds of nodes for each quantity: whether a stated quantity has its stated value, whether an operation is the right
+formula over its inputs, and whether a derived quantity has its value; each has a false twin (a wrong value, the
+inverse operation, or a constant off by one). We train on 11,000 problems of depth one to four and test on 400
+problems at each depth from one to eight.
+
+\paragraph{Knights-and-Knaves.} A generator produces puzzles with four to ten inhabitants (256 per size), each making
+one statement, often compound; the six options are the solution and five near-misses, and a small share of the
+items carries a ``None of the above'' option. A deterministic solver provides the tree: whether an inhabitant's role
+matches the truth of their statement, what each hypothesis about an inhabitant implies, and which assignments are
+ruled out, with 43.7 nodes per puzzle on average. We test on 2,000 puzzles with 4 to 20 inhabitants from separate
+generator seeds, 1,300 of them with more than ten inhabitants, and on a diagnostic set of 450 puzzles.
+
+\paragraph{Examples.} \Cref{tab:node-examples} shows node questions of the arithmetic chains and Knights-and-Knaves;
+\cref{fig:example} in the main text shows GSM8K.
+
+\begin{table}[h]
+\centering
+\small
+\caption{Node questions (answers in brackets). Arithmetic chain: ``Ravi harvested 18 pumpkins in the first week. In the
+second week, Ravi harvested half as many pumpkins as in the first week. \ldots{} How many pumpkins did Ravi harvest in
+the second week?'' Knights-and-Knaves: a four-inhabitant puzzle in which Alice says ``If Karen is a knight, then Grace
+is a knave.''}
+\label{tab:node-examples}
+\begin{tabular}{p{0.95\linewidth}}
+\toprule
+Is the number of pumpkins Ravi harvested in the first week equal to 18? [Yes] \\
+Is the number of pumpkins Ravi harvested in the first week equal to 36? [No] \\
+Is the number of pumpkins Ravi harvested in the second week equal to the number of pumpkins Ravi harvested in the
+first week divided by 2? [Yes] \\
+\midrule
+Is Alice a knave exactly when ``If Karen is a knight, then Grace is a knave.'' is true? [No] \\
+If Alice were a knight, would Alice's role require the statement ``If Karen is a knight, then Grace is a knave.'' to
+be true? [Yes] \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{The Placebo Control}
+\label{app:placebo}
+
+The placebo keeps everything of \tf{} except the content of the node questions: the same problems and updates, the
+same number of extra questions per problem, the same context (the problem without its options), the same loss weights
+and the same Yes/No target of each replaced node. Each node question is replaced by a question about the surface of
+the problem text whose correct answer is that target: whether a given name, number, word or sentence appears in the
+problem. Questions with the answer Yes pick an item that does appear; questions with the answer No pick a name from a
+pool, a nearby number that the problem does not mention, or a word or sentence from another problem of the same
+domain. A placebo question never uses a token of the node it replaces or a number from the reasoning tree, and never
+mentions a derived quantity, so it carries no information about the solution. The template is chosen by the length of
+the replaced node and the available material, not by its answer, and the questions are fixed per seed and problem
+across epochs.
+
+\section{Tuning the Baselines}
+\label{app:tuning}
+
+\Cref{tab:tuning} reports the learning-rate and training-length variants behind \cref{tab:main}, with validation
+accuracy, which is what one would use to choose among them. Answer-only training improves when it trains for fewer
+epochs or with a smaller learning rate, while its 20-epoch run on arithmetic chains is worse than the 12-epoch one; we
+read this as overfitting to the final labels, which \tf{} avoids at a quarter of the epochs.
+
+\begin{table}[h]
+\centering
+\small
+\caption{Baseline tuning (seed 12, accuracy \%). Arithmetic chains: validation, in range and beyond. GSM8K:
+validation and GSM8K test + GSM1K. Knights-and-Knaves: validation and 4--20 people.}
+\label{tab:tuning}
+\begin{tabular}{llccc}
+\toprule
+Domain & Run & Validation & Test & Beyond \\
+\midrule
+Arithmetic chains & answer-only, 12 ep., LR $10^{-5}$ & 75.7 & 74.4 & 40.4 \\
+& answer-only, 12 ep., LR $3\cdot10^{-6}$ & 83.6 & 81.9 & 43.0 \\
+& answer-only, 12 ep., LR $10^{-6}$ & 85.4 & 84.1 & 44.8 \\
+& answer-only, 20 ep., LR $3\cdot10^{-6}$ & 84.0 & 80.1 & 42.6 \\
+& answer-only, 4 ep., LR $3\cdot10^{-6}$ & 86.2 & 84.6 & 47.4 \\
+& \tf{}, 4 ep., LR $10^{-5}$ & 79.9 & 78.8 & 44.1 \\
+& \tf{}, 4 ep., LR $3\cdot10^{-6}$ & \textbf{88.8} & 84.9 & 47.5 \\
+& \tf{}, 4 ep., LR $10^{-6}$ & 88.4 & \textbf{86.4} & 47.1 \\
+\midrule
+GSM8K & answer-only, 12 ep., LR $3\cdot10^{-6}$ & 68.2 & 63.7 & -- \\
+& answer-only, 12 ep., LR $10^{-6}$ & 69.7 & 66.8 & -- \\
+& answer-only, 4 ep., LR $3\cdot10^{-6}$ & 69.5 & 66.5 & -- \\
+& \tf{}, 4 ep., LR $3\cdot10^{-6}$ & \textbf{72.3} & \textbf{69.3} & -- \\
+\midrule
+Knights-and-Knaves & answer-only, 12 ep., LR $3\cdot10^{-6}$ & 77.0 & 68.2 & -- \\
+& answer-only, 20 ep., LR $3\cdot10^{-6}$ & \textbf{82.7} & 72.3 & -- \\
+& \tf{}, 4 ep., LR $3\cdot10^{-6}$ & 82.3 & \textbf{72.8} & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Per-Seed Results and Data Efficiency}
 \label{app:seeds}
 
 \begin{table}[h]
@@ -437,10 +511,30 @@ GSM8K, 25\% of the data & +9.0 [7.3, 11.0] & +6.7 [4.8, 8.5] & -- \\
 \end{tabular}
 \end{table}
 
-\section{Failure Attribution Details}
-\label{app:fa}
+\begin{table}[h]
+\centering
+\small
+\caption{Accuracy (\%) against the share of the training set (seed 12), the values behind \cref{fig:efficiency}.
+Subsets are drawn per difficulty stratum with a fixed seed.}
+\label{tab:efficiency}
+\begin{tabular}{lcccc}
+\toprule
+& 10\% & 25\% & 50\% & 100\% \\
+\midrule
+GSM8K, answer-only & 51.0 & 55.6 & 63.5 & 63.7 \\
+GSM8K, \tf{} & \textbf{62.4} & \textbf{64.6} & \textbf{66.9} & \textbf{69.3} \\
+Arithmetic chains (in range), answer-only & 68.1 & 72.6 & -- & 81.9 \\
+Arithmetic chains (in range), \tf{} & \textbf{68.7} & \textbf{79.9} & -- & \textbf{84.9} \\
+\bottomrule
+\end{tabular}
+\end{table}
 
-\todo{tree schema (answer step, provenance chain, content, conflict, agent), automatic checks, drop rates, test-set
-decontamination, the full table over all public test sets}
+\section{Compute}
+\label{app:compute}
+
+A single 4B run takes between half an hour and seven hours on two 4g.40gb A100 MIG slices, depending on the domain, the share
+of the data and the method (\tf{} processes more examples per epoch but runs a third as many epochs). All experiments
+of this project, including exploratory runs, used about 900 slice-hours.
+
 
 \end{document}
