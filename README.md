@@ -9,24 +9,27 @@ system to fail) and the tooling for a causal audit of internal variables.
 
 Owner: Haotian "Sora" Yang. Private research repository; data, results and notes are not tracked (see `.gitignore`).
 
-## Status (2026-10-14)
+## Status (2026-10-15)
 
-- 4B, LR 3e-6 unless noted, seed 12 unless noted:
+- Preprint: `paper/tree_forcing_v1/main.tex` (ICML 2026 preprint style; numbers in `numbers.json`), going to arXiv (cs.AI).
+- 4B (Qwen3.5-4B), LR 3e-6 unless noted, seed 12 unless noted:
   - **GSM8K** (trees from GSM8K's own step annotations), Tree Forcing (`GFPQ`) minus answer-only, on GSM8K test + GSM1K:
-    +5.6 / +3.7 / +2.9 over 12-epoch answer-only (3 seeds); +2.5 [+0.8, +4.1] over answer-only at 1e-6;
-    +2.8 [+1.2, +4.5] over 4-epoch answer-only (Tree Forcing's schedule); +1.5 [-0.2, +3.1] over the placebo control.
+    +5.6 / +3.7 / +2.9 over 12-epoch answer-only (3 seeds); +2.5 [+0.8, +4.1] over the tuned answer-only (1e-6, best of
+    the 1e-5 ... 3e-7 sweep on validation); +2.8 [+1.2, +4.5] over 4-epoch answer-only; +1.5 [-0.2, +3.1] over the placebo.
   - **Data efficiency** (GSM8K): with 25% of the data, +9.0 / +6.7 over answer-only (2 seeds) and +1.9 [+0.2, +3.6] over
-    the placebo; Tree Forcing reaches answer-only's full-data accuracy with about 17% of the data.
-  - **Arithmetic chains**: ahead of 12-epoch answer-only (+3.0 to +4.4 in range, 3 seeds), but tied with 4-epoch or
-    1e-6 answer-only and with the placebo at full data; with 25% of the data, +5.8 [+3.9, +7.8] over the placebo.
+    the placebo; Tree Forcing reaches answer-only's full-data accuracy with about 17% of the data (arithmetic chains: 43%).
+  - **Arithmetic chains**: ahead of 12-epoch answer-only (+3.0 to +4.4 in range, 3 seeds), tied with tuned answer-only and
+    with the placebo at full data; with 25% of the data, +5.8 [+3.9, +7.8] over the placebo.
   - **Knights-and-Knaves**: +4.5 over 12-epoch answer-only; 20-epoch answer-only catches up in accuracy and loses 8-10
     points on BIG-Bench Hard (2 seeds).
+  - **EntailmentBank**: at ceiling for every arm (96%), not usable as a domain. QASC and extra GSM8K baseline seeds running.
+- **Gemma-4-12B** (`cloud/condor`, results repo `tree-forcing-lab/cot-distillation-jev-results`), GSM8K: Tree Forcing 65.9
+  vs tuned 4-epoch answer-only 62.8 (+3.0 [+1.1, +4.8]) and placebo 63.7 (+2.2 [+0.5, +3.8]).
 - Controls: `GFPSR` / `GFPQR` (node targets shuffled within a problem) and `GFPSX` / `GFPQX` (placebo: surface questions
   about the problem text, same count, views and yes rate).
-- In progress: StrategyQA, EntailmentBank and QASC as further real-data domains; Gemma-4-12B runs (`cloud/condor`).
-- Failure attribution: AFTraj in-domain (ReCast's protocol) 80.4 Hit@1 for the 0.8B one-pass model (StepFinder 73.8,
-  ReCast 84.1); Tree Forcing +15 on AFTraj's diagnosed (real) agentic errors, -32 on its injected ones (one seed, 46 / 22
-  items); real-failure study on TrajErrBench + AgentProcessBench (train / test by task) with RootSE held out, running.
+- Failure attribution (separate collaboration, not in the preprint): AFTraj in-domain 80.4-83.4 Hit@1 for the 0.8B
+  one-pass model (StepFinder 73.8, ReCast 84.1); real-failure study (TrajErrBench + AgentProcessBench, split by task):
+  Tree Forcing 45.9 vs answer-only 40.4 in domain (+5.5 [-0.9, +12.4]); RootSE held out at chance for both.
 
 ## Repository layout
 
@@ -106,6 +109,11 @@ python scripts/ladder_readout.py 'results/hpc/l4b/*' --out results/ladder_readou
 ## Changelog
 
 The README is updated with every push.
+
+- 2026-10-15: preprint draft completed (ablations in the appendix; main table default / tuned / Tree Forcing; Gemma-4-12B
+  comparison; corresponding-author email); answer-only LR sweep down to 3e-7; EntailmentBank and QASC builders and runs
+  (`notes/tmp/relay98.sh`, `relay99.sh`); nested 50% arithmetic-chain subset; data-efficiency figure reads the same
+  arithmetic-chain run as the tables.
 
 - 2026-10-14: shuffled-target and placebo controls (`GFPSR`, `GFPQR`, `GFPSX`, `GFPQX`); StepFinder protocol test sets
   and paired statistics (`build_fa_sf_x.py`, `fa_pool.py`); failure-attribution builders for AFTraj in-domain,
