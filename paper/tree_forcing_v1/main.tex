@@ -68,7 +68,10 @@ letting the model write intermediate results before it answers \citep{wei2022cot
 a fixed-depth transformer can compute strictly more when it may condition on its own intermediate tokens
 \citep{feng2023mystery,merrill2024expressive}. A decision model that answers in one forward pass cannot use this
 scratchpad, and recent work on single-pass decision models reports that reasoning rollouts remain clearly more
-accurate on problems that require exact multi-step computation \citep{ldm2026}. The question we ask is therefore not
+accurate on problems that require exact multi-step computation \citep{ldm2026}. Behavioral studies point the same way:
+a deployed single-pass decision model answers a familiar probability problem correctly every time, yet violates the
+same rule on an adapted version, and its answers shift with irrelevant numbers and with the order of the options
+\citep{imperatrice2026jevbias}. The question we ask is therefore not
 whether a single pass can replace chain-of-thought reasoning, but how much of the benefit of reasoning data can be
 moved into training, so that the deployed model still answers in one pass.
 
