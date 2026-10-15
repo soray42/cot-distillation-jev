@@ -47,8 +47,9 @@ alone. Across grade-school math word problems, synthetic arithmetic chains and K
 accuracy of answer-only training on the full training set with about a sixth of the data, and with a quarter of the
 arithmetic-chain data it outperforms a placebo control that asks the same number of content-free questions by a wide
 margin. With the full
-training set, it remains ahead of answer-only baselines tuned for learning rate and training length on GSM8K, and it
-avoids the loss of general reasoning ability that longer answer-only training incurs. Our results suggest that
+training set, it remains ahead of answer-only baselines tuned for learning rate and training length on GSM8K, also
+with a 12B model of a different family, and it avoids the loss of general reasoning ability that longer answer-only
+training incurs. Our results suggest that
 reasoning annotations are best spent at training time, where they buy data efficiency without changing the deployed
 single-pass interface.
 \end{abstract}
@@ -103,8 +104,8 @@ language models \citep{xie2024kk}. Our main findings are:
   clearly outperforms a placebo control that asks the same number of questions about the surface of the problem
   (\cref{sec:content}).
   \item \textbf{Accuracy and retention.} With the full training set, \tf{} stays ahead of answer-only baselines tuned
-  for learning rate and training length on GSM8K, and it keeps general reasoning ability that longer answer-only
-  training loses (\cref{sec:accuracy}).
+  for learning rate and training length on GSM8K, with the 4B model and with a 12B model of a different family, and it
+  keeps general reasoning ability that longer answer-only training loses (\cref{sec:accuracy}).
 \end{itemize}
 
 \section{Tree Forcing}
@@ -170,7 +171,9 @@ which none of them is trained on, as a measure of general reasoning ability.
 
 \paragraph{Model and training.} All main experiments fine-tune Qwen3.5-4B, the post-trained release\footnote{\url{https://huggingface.co/Qwen/Qwen3.5-4B}, revision
 \texttt{851bf6e8}.} with full-parameter AdamW, fp32 master weights and a cosine schedule after
-a 5\% warm-up; details are in \cref{app:hparams}. We train \tf{} for four epochs over the problems.
+a 5\% warm-up; details are in \cref{app:hparams}. We train \tf{} for four epochs over the problems. To test a second
+model family and size, we repeat the GSM8K comparison with Gemma-4-12B\footnote{\url{https://huggingface.co/google/gemma-4-12B},
+revision \texttt{023679ed}.} under the same recipe.
 
 \paragraph{Baselines.} The main baseline is answer-only training on the same problems with the same gold targets. To
 make sure that the comparison is not won by an under-tuned baseline, we tune it along the two axes that matter most,
@@ -283,6 +286,28 @@ Answer-only, tuned & 66.8 & 84.6 & 47.4 & 72.3 & \textbf{72.2} & 52.0 \\
 \end{tabular}
 \end{table*}
 
+\paragraph{A second model.} We repeat the GSM8K comparison with Gemma-4-12B (\cref{tab:gemma}). Here we train
+answer-only for four epochs at learning rates of $3\cdot10^{-6}$ and $10^{-6}$ and keep the better one on validation.
+\tf{} is ahead of this tuned baseline by 3.0 points (95\% CI [1.1, 4.8]) and of the placebo by 2.2 points
+([0.5, 3.8]), a margin similar to that of the 4B model, so the gain is not specific to one model family or size.
+
+\begin{table}[t]
+\centering
+\small
+\caption{GSM8K with Gemma-4-12B (seed 12, accuracy \%). Answer-only: 4 epochs at the learning rate with the best
+validation accuracy ($3\cdot10^{-6}$; $10^{-6}$ reaches 54.5). BBH: 500-question BIG-Bench Hard sample.}
+\label{tab:gemma}
+\begin{tabular}{lcc}
+\toprule
+Method & test+GSM1K & BBH \\
+\midrule
+Answer-only, tuned & 62.8 & 52.8 \\
+Placebo & 63.7 & 53.6 \\
+\tf{} & \textbf{65.9} & \textbf{55.0} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
 \paragraph{Retention of general ability.} Narrow fine-tuning can erode what a model knew before, and the clearest
 case in our data is Knights-and-Knaves. When answer-only training is run longer, for twenty epochs instead of twelve
 (its tuned setting in \cref{tab:main}), it reaches the in-domain accuracy of \tf{}, but it does so at a cost: on BIG-Bench Hard, the twenty-epoch answer-only
@@ -322,8 +347,8 @@ identifies when content does matter.
 \section{Limitations}
 \label{sec:limitations}
 
-Our main experiments use one model of 4B parameters and, for most settings, a single seed; we report multiple seeds
-for the central comparisons and leave a second model family to future versions. \tf{} needs a reasoning tree for each
+Most of our experiments use one model of 4B parameters and a single seed; we report multiple seeds for the central
+comparisons, and a second model family and size, Gemma-4-12B, on GSM8K only. \tf{} needs a reasoning tree for each
 training problem; our domains provide trees through annotations or exact generators, and building trees for
 domains without them is left to future work. The benefit of the tree's content is clearest when
 data are scarce; with plentiful data on synthetic arithmetic chains, a placebo with the same schedule, or answer-only
@@ -362,7 +387,7 @@ question, the options ``A) Yes'' and ``B) No'', and ``Answer:''.
 \label{tab:hparams}
 \begin{tabular}{ll}
 \toprule
-Model & Qwen3.5-4B (post-trained release), full fine-tuning \\
+Model & Qwen3.5-4B (post-trained release), full fine-tuning; Gemma-4-12B for \cref{tab:gemma} \\
 Optimizer & AdamW, fp32 master weights, bf16 computation \\
 Learning rate & $3\cdot10^{-6}$ (answer-only also from $10^{-5}$ to $3\cdot10^{-7}$; \cref{app:tuning}) \\
 Schedule & 5\% linear warm-up, then cosine decay to zero \\
@@ -560,7 +585,8 @@ Arithmetic chains (in range), \tf{} & \textbf{68.7} & \textbf{79.9} & -- & \text
 
 A single 4B run takes between half an hour and seven hours on two 4g.40gb A100 MIG slices, depending on the domain, the share
 of the data and the method (\tf{} processes more examples per epoch but runs a third as many epochs). All experiments
-of this project, including exploratory runs, used about 900 slice-hours.
+of this project, including exploratory runs, used about 900 slice-hours. The Gemma-4-12B runs use the same recipe
+(FSDP over two GPUs, AdamW with fp32 master weights kept on the CPU) on a separate cluster.
 
 
 \end{document}

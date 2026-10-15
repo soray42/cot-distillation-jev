@@ -322,5 +322,43 @@
    2.1,
    7.5
   ]
+ },
+ "gsm_gemma12b_s12": {
+  "A2c4_lr3": {
+   "val": 64.6,
+   "test": 62.8,
+   "bbh": 52.8
+  },
+  "A2c4_lr1": {
+   "val": 55.5,
+   "test": 54.5,
+   "bbh": 56.0
+  },
+  "placebo": {
+   "val": 60.3,
+   "test": 63.7,
+   "bbh": 53.6
+  },
+  "TF": {
+   "val": 68.2,
+   "test": 65.9,
+   "bbh": 55.0
+  },
+  "TF-A2c4lr3": [
+   3.0,
+   1.1,
+   4.8
+  ],
+  "TF-placebo": [
+   2.2,
+   0.5,
+   3.8
+  ],
+  "TF-A2c4lr1": [
+   11.3,
+   9.4,
+   13.3
+  ],
+  "source": "results/chtc/*-gemma-4-12B-student_gsm8k_tf-s12 (tree-forcing-lab/cot-distillation-jev-results)"
  }
 }
