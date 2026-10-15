@@ -3,7 +3,8 @@
 Reads the prediction dumps under results/hpc/l4b (argmax over the option letters, as every readout here):
   GSM8K  test + GSM1K (gsm8kv2, gsm1k); A2-c12lr3 vs GFPQ-c4lr3 on data/student_gsm8k_tf{_f10,_f25,_f50,}
   math   numgen depths 1-4 (in range); A2-c12lr3 vs GFPS-c4lr3 on data/student_numgen_tf{_f10,_f25,}
-Lines are seed 12 (every fraction); the other seeds at 100% are drawn as small points; grey numbers = Tree Forcing
+Lines are seed 12 (every fraction; math at 100% is the re-run GFPS-c4lr3b, the run the paper's tables use); the other
+seeds at 100% are drawn as small points; grey numbers = Tree Forcing
 minus answer-only at each share; the dotted line = the share at which Tree Forcing reaches answer-only's 100% accuracy
 (linear interpolation in log share).
 
@@ -28,7 +29,7 @@ PANELS = [
     {"title": "GSM8K (test + GSM1K)", "data": "Qwen3.5-4B-student_gsm8k_tf", "a2": "A2-c12lr3", "tf": "GFPQ-c4lr3",
      "evals": ["gsm8kv2", "gsm1k"], "fracs": [10, 25, 50, 100], "note_x": 32, "gap_left": [25]},
     {"title": "Math chains (depth 1-4)", "data": "Qwen3.5-4B-student_numgen_tf", "a2": "A2-c12lr3", "tf": "GFPS-c4lr3",
-     "evals": [f"ng_d{d}" for d in range(1, 5)], "fracs": [10, 25, 100]},
+     "evals": [f"ng_d{d}" for d in range(1, 5)], "fracs": [10, 25, 100], "tf_full_s12": "GFPS-c4lr3b"},
 ]
 
 
@@ -70,7 +71,8 @@ def main() -> None:
     for ax, pn in zip(axes, PANELS):
         fr = pn["fracs"]
         a2 = [acc(run_name(pn["a2"], pn["data"], f, 12), pn["evals"]) for f in fr]
-        tf = [acc(run_name(pn["tf"], pn["data"], f, 12), pn["evals"]) for f in fr]
+        tf = [acc(run_name(pn.get("tf_full_s12", pn["tf"]) if f == 100 else pn["tf"], pn["data"], f, 12), pn["evals"])
+              for f in fr]
         if None in a2 or None in tf:
             raise SystemExit(f"{pn['title']}: missing runs (A2 {a2}, TF {tf})")
         ax.plot(fr, a2, "-o", color=PALETTE["red_strong"], lw=2.4, ms=7, label="Answer only")

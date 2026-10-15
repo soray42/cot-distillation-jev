@@ -27,7 +27,7 @@
   \end{icmlauthorlist}
 
   \icmlaffiliation{boc}{Bocconi University, Milan, Italy}
-  \icmlcorrespondingauthor{Haotian Yang}{\todo{email}}
+  \icmlcorrespondingauthor{Haotian Yang}{haotian.yang@studbocconi.it}
   \icmlkeywords{single-pass decision models, reasoning, intermediate supervision, data efficiency}
   \vskip 0.3in
 ]
@@ -173,10 +173,9 @@ which none of them is trained on, as a measure of general reasoning ability.
 a 5\% warm-up; details are in \cref{app:hparams}. We train \tf{} for four epochs over the problems.
 
 \paragraph{Baselines.} The main baseline is answer-only training on the same problems with the same gold targets. To
-make sure that the comparison is not won by an under-tuned baseline, we tune it along the two axes that matter most:
-the learning rate (we sweep answer-only training from $10^{-5}$ down to $3\cdot10^{-7}$; on both arithmetic chains and
-GSM8K, $10^{-6}$ is best on validation, and we report it as the tuned baseline) and the training length (12 epochs,
-and 4 epochs, which matches the schedule of \tf{}). As a control for the extra questions themselves, the \emph{placebo} variant keeps the schedule, the number
+make sure that the comparison is not won by an under-tuned baseline, we tune it along the two axes that matter most,
+the learning rate (from $10^{-5}$ down to $3\cdot10^{-7}$) and the training length (4, 12 or 20 epochs), and report
+the variant with the best validation accuracy in each domain as the tuned baseline (\cref{app:tuning}). As a control for the extra questions themselves, the \emph{placebo} variant keeps the schedule, the number
 of questions, their position in the prompt and their yes rate, but replaces each node question with a question about
 the surface of the problem (e.g., whether a sentence or a number appears in it), which has a correct answer and no
 reasoning content (\cref{app:placebo}).
@@ -208,7 +207,7 @@ of the GSM8K problems, and on 10\%, 25\% and all of the arithmetic chains. Overa
 methods widens as data become scarcer: on GSM8K, \tf{} trained on a quarter of the problems is already more accurate
 than answer-only training on all of them; interpolating the curve, it reaches the full-data accuracy of answer-only
 training with about 17\% of the data. On arithmetic chains, where the intermediate quantities are simpler, the
-corresponding share is about 41\%. The
+corresponding share is about 43\%. The
 gain at a quarter of the GSM8K data holds across seeds (+9.0 and +6.7 points). This makes intuitive sense: when few
 problems are available, each node question adds a supervised signal about a quantity the final answer depends on,
 which answer-only training has to infer from the final label alone.
@@ -230,27 +229,22 @@ of the tree from the act of asking, we compare \tf{} with the placebo control, w
 but about the surface of the problem (\cref{tab:placebo}). With a quarter of the training data, the content clearly
 matters: on arithmetic chains, \tf{} is ahead of the placebo by 5.8 points in range, while the placebo itself barely
 improves on answer-only training, and on GSM8K the content adds a further 1.9 points on top of the placebo. With the
-full training set, in contrast, the picture changes: the placebo recovers most of the gain of \tf{} on arithmetic
-chains and much of it on GSM8K. We interpret this as two effects of different size. Asking questions in the context of the problem
-regularizes training in its own right, which matters most when answer-only training would otherwise overfit; the
-reasoning content of the questions adds information that matters most when data are scarce, which is exactly the
-regime in which reasoning annotations are worth their cost.
+full training set, the gap to the placebo narrows, since asking questions in the context of the problem also
+regularizes training in its own right (\cref{app:placebo}). The reasoning content of the questions matters most when
+data are scarce, which is exactly the regime in which reasoning annotations are worth their cost.
 
 \begin{table}[t]
 \centering
 \small
-\caption{\tf{} against the placebo control and answer-only training (seed 12, learning rate $3\cdot10^{-6}$).
-Accuracy (\%); arithmetic chains in range (depth 1--4).}
+\caption{\tf{} against the placebo control and answer-only training with a quarter of the training data (seed 12,
+learning rate $3\cdot10^{-6}$). Accuracy (\%); arithmetic chains in range (depth 1--4).}
 \label{tab:placebo}
-\begin{tabular}{llccc}
+\begin{tabular}{lccc}
 \toprule
-Domain & Data & Answer-only & Placebo & \tf{} \\
+Domain & Answer-only & Placebo & \tf{} \\
 \midrule
-Arithmetic chains & 25\% & 72.6 & 74.1 & \textbf{79.9} \\
-GSM8K & 25\% & 55.6 & 62.7 & \textbf{64.6} \\
-\midrule
-Arithmetic chains & 100\% & 81.9 & 84.4 & \textbf{84.9} \\
-GSM8K & 100\% & 63.7 & 67.8 & \textbf{69.3} \\
+Arithmetic chains & 72.6 & 74.1 & \textbf{79.9} \\
+GSM8K & 55.6 & 62.7 & \textbf{64.6} \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -258,22 +252,23 @@ GSM8K & 100\% & 63.7 & 67.8 & \textbf{69.3} \\
 \subsection{Accuracy and retention with the full training set}
 \label{sec:accuracy}
 
-\paragraph{Against tuned baselines.} \Cref{tab:main} compares \tf{} with answer-only training under each of the tuned
-settings. We observe that on GSM8K, \tf{} is ahead of every answer-only variant, by 2.5 points over the best learning rate and by 2.8
-points over the schedule-matched four-epoch run. Answer-only training benefits from both kinds of tuning, which tells
-us that its default twelve-epoch run overfits; \tf{}, in contrast, is insensitive to the learning rate between
-$10^{-6}$ and $3\cdot10^{-6}$ on the arithmetic chains, which we see as a practical advantage in its own right. Against the default answer-only run, \tf{} is ahead on GSM8K in all three seeds
-(+5.6, +3.7 and +2.9 points) and on arithmetic chains in all three seeds, both in range and beyond it
-(\cref{app:seeds}). On arithmetic chains with the full training set, however, answer-only training tuned for length
-catches up in range: the intermediate quantities of these synthetic chains are easy for the model to learn, and
-asking about them adds little once every pattern has been seen many times.
+\paragraph{Against tuned baselines.} \Cref{tab:main} compares \tf{} with answer-only training in its default setting
+and in its tuned setting, i.e., the learning rate and training length with the best validation accuracy in each
+domain. On GSM8K, \tf{} is ahead of the tuned baseline by 2.5 points (95\% CI [0.8, 4.1]). Answer-only training gains
+from tuning in every domain, which tells us that its default twelve-epoch run overfits the final labels. Against this
+default run, \tf{} is ahead in all three seeds on GSM8K (+5.6, +3.7 and +2.9 points) and on arithmetic chains, and in
+both seeds on Knights-and-Knaves (\cref{app:seeds}). On arithmetic chains, the tuned baseline catches up with the full
+training set: the intermediate quantities of these synthetic chains are easy to learn, and asking about them adds
+little once every pattern has been seen many times; together with \cref{fig:efficiency}, this places the benefit of
+\tf{} where training data are limited.
 
 \begin{table*}[t]
 \centering
 \footnotesize
-\caption{Full-data accuracy (\%, seed 12). ``beyond'' is depth 5--8, outside the training range of the arithmetic
-chains. BBH: 500-question BIG-Bench Hard sample, measured on the GSM8K and Knights-and-Knaves models. A dash marks a
-setting we did not run.}
+\caption{Full-data accuracy (\%, seed 12). \emph{Tuned}: the answer-only variant with the best validation accuracy in
+each domain (GSM8K: learning rate $10^{-6}$; arithmetic chains: 4 epochs; Knights-and-Knaves: 20 epochs;
+\cref{app:tuning}). ``beyond'' is depth 5--8, outside the training range of the arithmetic chains. BBH: 500-question
+BIG-Bench Hard sample, measured on the Knights-and-Knaves models.}
 \label{tab:main}
 \begin{tabular}{lcccccc}
 \toprule
@@ -281,18 +276,16 @@ setting we did not run.}
 \cmidrule(lr){3-4}\cmidrule(lr){5-6}
 Method & test+GSM1K & in range & beyond & 4--20 people & diagnostic & K\&K models \\
 \midrule
-Answer-only, 12 epochs & 63.7 & 81.9 & 43.0 & 68.2 & 62.2 & 54.8 \\
-Answer-only, 20 epochs & -- & -- & -- & 72.3 & \textbf{72.2} & 52.0 \\
-Answer-only, 4 epochs & 66.5 & 84.6 & 47.4 & -- & -- & -- \\
-Answer-only, LR $10^{-6}$ & 66.8 & 84.1 & 44.8 & -- & -- & -- \\
+Answer-only, default (12 epochs) & 63.7 & 81.9 & 43.0 & 68.2 & 62.2 & 54.8 \\
+Answer-only, tuned & 66.8 & 84.6 & 47.4 & 72.3 & \textbf{72.2} & 52.0 \\
 \tf{} & \textbf{69.3} & \textbf{84.9} & \textbf{47.5} & \textbf{72.8} & \textbf{72.2} & \textbf{60.4} \\
 \bottomrule
 \end{tabular}
 \end{table*}
 
 \paragraph{Retention of general ability.} Narrow fine-tuning can erode what a model knew before, and the clearest
-case in our data is Knights-and-Knaves. When answer-only training is run longer, for twenty epochs instead of twelve,
-it reaches the in-domain accuracy of \tf{}, but it does so at a cost: on BIG-Bench Hard, the twenty-epoch answer-only
+case in our data is Knights-and-Knaves. When answer-only training is run longer, for twenty epochs instead of twelve
+(its tuned setting in \cref{tab:main}), it reaches the in-domain accuracy of \tf{}, but it does so at a cost: on BIG-Bench Hard, the twenty-epoch answer-only
 model scores 8.4 and 9.8 points below \tf{} in the two seeds we ran. \tf{} reaches the same in-domain accuracy in
 fewer passes over the final questions, and its node questions keep the model busy with statements about the problem
 rather than with the label alone; we hypothesize that this is why it forgets less.
@@ -453,6 +446,28 @@ mentions a derived quantity, so it carries no information about the solution. Th
 the replaced node and the available material, not by its answer, and the questions are fixed per seed and problem
 across epochs.
 
+\paragraph{Full training set.} \Cref{tab:placebo-full} adds the placebo runs with the full training set. Here the
+placebo recovers most of the gain of \tf{} on arithmetic chains and much of it on GSM8K. We read this as two effects
+of different size: asking questions in the context of the problem regularizes training in its own right, which matters
+most when answer-only training would otherwise overfit, while the reasoning content of the questions adds information
+that matters most when data are scarce (\cref{sec:content}).
+
+\begin{table}[h]
+\centering
+\small
+\caption{\tf{} against the placebo control and answer-only training (12 epochs) with the full training set (seed 12,
+learning rate $3\cdot10^{-6}$). Accuracy (\%); arithmetic chains in range (depth 1--4).}
+\label{tab:placebo-full}
+\begin{tabular}{lccc}
+\toprule
+Domain & Answer-only & Placebo & \tf{} \\
+\midrule
+Arithmetic chains & 81.9 & 84.4 & \textbf{84.9} \\
+GSM8K & 63.7 & 67.8 & \textbf{69.3} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
 \section{Tuning the Baselines}
 \label{app:tuning}
 
@@ -460,7 +475,12 @@ across epochs.
 accuracy, which is what one would use to choose among them. Answer-only training improves when it trains for fewer
 epochs or with a smaller learning rate down to $10^{-6}$ (at $3\cdot10^{-7}$ it gets worse again on both domains), while
 its 20-epoch run on arithmetic chains is worse than the 12-epoch one; we
-read this as overfitting to the final labels, which \tf{} avoids at a quarter of the epochs.
+read this as overfitting to the final labels, which \tf{} avoids at a quarter of the epochs. The grid differs by
+domain because each run is a full fine-tuning of the model; within each domain, the tuned baseline of \cref{tab:main}
+is the row with the best validation accuracy. \tf{} is insensitive to the learning rate between $10^{-6}$ and
+$3\cdot10^{-6}$ on arithmetic chains, the one domain where we varied it, and $3\cdot10^{-6}$, the rate we use
+throughout, is also its best on validation there; selecting \tf{} in the same way as the baselines would therefore not
+change \cref{tab:main}.
 
 \begin{table}[h]
 \centering
