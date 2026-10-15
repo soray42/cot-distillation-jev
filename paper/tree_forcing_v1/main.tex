@@ -168,8 +168,8 @@ with four to ten inhabitants; we test on puzzles with 4 to 20 inhabitants, of wh
 training range, and on a diagnostic set. Every model is also evaluated on a fixed 500-question sample of BIG-Bench Hard \citep{suzgun2022bbh},
 which none of them is trained on, as a measure of general reasoning ability.
 
-\paragraph{Model and training.} All main experiments fine-tune Qwen3.5-4B\footnote{\todo{exact model id and revision
-of the post-trained Qwen3.5-4B checkpoint}} with full-parameter AdamW, fp32 master weights and a cosine schedule after
+\paragraph{Model and training.} All main experiments fine-tune Qwen3.5-4B, the post-trained release\footnote{\url{https://huggingface.co/Qwen/Qwen3.5-4B}, revision
+\texttt{851bf6e8}.} with full-parameter AdamW, fp32 master weights and a cosine schedule after
 a 5\% warm-up; details are in \cref{app:hparams}. We train \tf{} for four epochs over the problems.
 
 \paragraph{Baselines.} The main baseline is answer-only training on the same problems with the same gold targets. To
