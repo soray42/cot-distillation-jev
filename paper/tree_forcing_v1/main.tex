@@ -174,9 +174,9 @@ a 5\% warm-up; details are in \cref{app:hparams}. We train \tf{} for four epochs
 
 \paragraph{Baselines.} The main baseline is answer-only training on the same problems with the same gold targets. To
 make sure that the comparison is not won by an under-tuned baseline, we tune it along the two axes that matter most:
-the learning rate (besides the rate of $3\cdot10^{-6}$ that we use for \tf{}, we train answer-only models at
-$10^{-6}$, which improves answer-only training on both domains where we tried it) and the training length (12
-epochs, and 4 epochs, which matches the schedule of \tf{}). As a control for the extra questions themselves, the \emph{placebo} variant keeps the schedule, the number
+the learning rate (we sweep answer-only training from $10^{-5}$ down to $3\cdot10^{-7}$; on both arithmetic chains and
+GSM8K, $10^{-6}$ is best on validation, and we report it as the tuned baseline) and the training length (12 epochs,
+and 4 epochs, which matches the schedule of \tf{}). As a control for the extra questions themselves, the \emph{placebo} variant keeps the schedule, the number
 of questions, their position in the prompt and their yes rate, but replaces each node question with a question about
 the surface of the problem (e.g., whether a sentence or a number appears in it), which has a correct answer and no
 reasoning content (\cref{app:placebo}).
@@ -371,7 +371,7 @@ question, the options ``A) Yes'' and ``B) No'', and ``Answer:''.
 \toprule
 Model & Qwen3.5-4B (post-trained release), full fine-tuning \\
 Optimizer & AdamW, fp32 master weights, bf16 computation \\
-Learning rate & $3\cdot10^{-6}$ (answer-only also at $10^{-6}$ and $10^{-5}$; \cref{app:tuning}) \\
+Learning rate & $3\cdot10^{-6}$ (answer-only also from $10^{-5}$ to $3\cdot10^{-7}$; \cref{app:tuning}) \\
 Schedule & 5\% linear warm-up, then cosine decay to zero \\
 Update size & 32 problems (8 for Knights-and-Knaves); \tf{} adds all node questions of each problem \\
 Epochs & \tf{}: 4; answer-only: 12 (also 4 and 20; \cref{app:tuning}) \\
@@ -458,7 +458,8 @@ across epochs.
 
 \Cref{tab:tuning} reports the learning-rate and training-length variants behind \cref{tab:main}, with validation
 accuracy, which is what one would use to choose among them. Answer-only training improves when it trains for fewer
-epochs or with a smaller learning rate, while its 20-epoch run on arithmetic chains is worse than the 12-epoch one; we
+epochs or with a smaller learning rate down to $10^{-6}$ (at $3\cdot10^{-7}$ it gets worse again on both domains), while
+its 20-epoch run on arithmetic chains is worse than the 12-epoch one; we
 read this as overfitting to the final labels, which \tf{} avoids at a quarter of the epochs.
 
 \begin{table}[h]
@@ -474,6 +475,7 @@ Domain & Run & Validation & Test & Beyond \\
 Arithmetic chains & answer-only, 12 ep., LR $10^{-5}$ & 75.7 & 74.4 & 40.4 \\
 & answer-only, 12 ep., LR $3\cdot10^{-6}$ & 83.6 & 81.9 & 43.0 \\
 & answer-only, 12 ep., LR $10^{-6}$ & 85.4 & 84.1 & 44.8 \\
+& answer-only, 12 ep., LR $3\cdot10^{-7}$ & 84.0 & 81.9 & 43.0 \\
 & answer-only, 20 ep., LR $3\cdot10^{-6}$ & 84.0 & 80.1 & 42.6 \\
 & answer-only, 4 ep., LR $3\cdot10^{-6}$ & 86.2 & 84.6 & 47.4 \\
 & \tf{}, 4 ep., LR $10^{-5}$ & 79.9 & 78.8 & 44.1 \\
@@ -482,6 +484,7 @@ Arithmetic chains & answer-only, 12 ep., LR $10^{-5}$ & 75.7 & 74.4 & 40.4 \\
 \midrule
 GSM8K & answer-only, 12 ep., LR $3\cdot10^{-6}$ & 68.2 & 63.7 & -- \\
 & answer-only, 12 ep., LR $10^{-6}$ & 69.7 & 66.8 & -- \\
+& answer-only, 12 ep., LR $3\cdot10^{-7}$ & 68.4 & 65.2 & -- \\
 & answer-only, 4 ep., LR $3\cdot10^{-6}$ & 69.5 & 66.5 & -- \\
 & \tf{}, 4 ep., LR $3\cdot10^{-6}$ & \textbf{72.3} & \textbf{69.3} & -- \\
 \midrule
