@@ -9,22 +9,22 @@ system to fail) and the tooling for a causal audit of internal variables.
 
 Owner: Haotian "Sora" Yang. Private research repository; data, results and notes are not tracked (see `.gitignore`).
 
-## Status (2026-10-15)
+## Status (2026-10-17)
 
-- Preprint: `paper/tree_forcing_v1/main.tex` (ICML 2026 preprint style; numbers in `numbers.json`), going to arXiv (cs.AI).
+- Preprint: `paper/tree_forcing_v1/main.tex`. The university HPC has been unreachable since 2026-10-15 afternoon; new runs
+  go to the CHTC batch (`cloud/condor`, `cloud/chtc`; results in `tree-forcing-lab/cot-distillation-jev-results`).
 - 4B (Qwen3.5-4B), LR 3e-6 unless noted, seed 12 unless noted:
-  - **GSM8K** (trees from GSM8K's own step annotations), Tree Forcing (`GFPQ`) minus answer-only, on GSM8K test + GSM1K:
-    +5.6 / +3.7 / +2.9 over 12-epoch answer-only (3 seeds); +2.5 [+0.8, +4.1] over the tuned answer-only (1e-6, best of
-    the 1e-5 ... 3e-7 sweep on validation); +2.8 [+1.2, +4.5] over 4-epoch answer-only; +1.5 [-0.2, +3.1] over the placebo.
-  - **Data efficiency** (GSM8K): with 25% of the data, +9.0 / +6.7 over answer-only (2 seeds) and +1.9 [+0.2, +3.6] over
-    the placebo; Tree Forcing reaches answer-only's full-data accuracy with about 17% of the data (arithmetic chains: 43%).
-  - **Arithmetic chains**: ahead of 12-epoch answer-only (+3.0 to +4.4 in range, 3 seeds), tied with tuned answer-only and
-    with the placebo at full data; with 25% of the data, +5.8 [+3.9, +7.8] over the placebo.
-  - **Knights-and-Knaves**: +4.5 over 12-epoch answer-only; 20-epoch answer-only catches up in accuracy and loses 8-10
-    points on BIG-Bench Hard (2 seeds).
-  - **EntailmentBank**: at ceiling for every arm (96%), not usable as a domain. QASC and extra GSM8K baseline seeds running.
-- **Gemma-4-12B** (`cloud/condor`, results repo `tree-forcing-lab/cot-distillation-jev-results`), GSM8K: Tree Forcing 65.9
-  vs tuned 4-epoch answer-only 62.8 (+3.0 [+1.1, +4.8]) and placebo 63.7 (+2.2 [+0.5, +3.8]).
+  - **GSM8K**: Tree Forcing (`GFPQ`) minus answer-only on GSM8K test + GSM1K: +5.6 / +3.7 / +2.9 over 12-epoch
+    answer-only (3 seeds); +2.5 [+0.8, +4.1] over the tuned answer-only (1e-6, best of the 1e-5 ... 3e-7 sweep).
+  - **Data efficiency** (GSM8K): +11.4 at 10%, +9.0 / +6.7 at 25% (2 seeds), +1.9 [+0.2, +3.6] over the placebo at 25%.
+  - **Arithmetic chains**: tied with tuned answer-only and the placebo at full data; +5.8 [+3.9, +7.8] over the placebo at 25%.
+  - **Knights-and-Knaves**: +4.5 over 12-epoch answer-only; 20-epoch answer-only ties in accuracy and loses 8-10 BBH points.
+  - EntailmentBank at ceiling (96% every arm). QASC and further seeds finished on the HPC but cannot be pulled yet.
+- **Gemma-4-12B** (seed 12): GSM8K 65.9 vs tuned 62.8 (+3.0 [+1.1, +4.8]), placebo 63.7; arithmetic chains full 83.5 vs
+  tuned 79.9 (+3.6 [+1.8, +5.4]); arithmetic chains 25% 74.2 vs 12-epoch answer-only 65.8 (+8.4) and placebo 54.2.
+  K&K diverges at 3e-6 (rerun at 1e-6). Batch 2 (seed-13 replications, compute-matched 20 epochs) queued.
+- New in this push: MuSiQue domain (`scripts/build_musique_tf.py`, treeplan `musique_tf`), rationale-LM baseline data
+  (`scripts/build_gsm8k_rationale.py`, arm A7), chain-of-thought upper bound (`scripts/eval_cot.py`, `hpc/eval_cot.sbatch`).
 - Controls: `GFPSR` / `GFPQR` (node targets shuffled within a problem) and `GFPSX` / `GFPQX` (placebo: surface questions
   about the problem text, same count, views and yes rate).
 - Failure attribution (separate collaboration, not in the preprint): AFTraj in-domain 80.4-83.4 Hit@1 for the 0.8B
@@ -109,6 +109,9 @@ python scripts/ladder_readout.py 'results/hpc/l4b/*' --out results/ladder_readou
 ## Changelog
 
 The README is updated with every push.
+
+- 2026-10-17: MuSiQue builder and treeplan branch; rationale-LM data builder (A7) and the chain-of-thought evaluation;
+  CHTC batches 1-2 (K&K 3e-6 dropped, 25% 12-epoch baselines, seed-13 replications, compute-matched 20 epochs).
 
 - 2026-10-15: preprint draft completed (ablations in the appendix; main table default / tuned / Tree Forcing; Gemma-4-12B
   comparison; corresponding-author email); answer-only LR sweep down to 3e-7; EntailmentBank and QASC builders and runs
