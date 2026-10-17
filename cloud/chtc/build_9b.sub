@@ -1,0 +1,14 @@
+# Interactive job for batch 4 (README_9b.md step 1):  condor_submit -i build_9b.sub
+# Inside the job: copy the batch-3 image cotd_4b.sif from /staging (no new image: Qwen3.5-9B is the same family as the
+# 4B, flash-linear-attention included), fetch Qwen/Qwen3.5-9B at the pinned revision, move the tar to /staging.
+# Disk: the image + the 19.3 GB model directory + its 19.3 GB tar.
+include : chtc_settings.inc
+universe = vanilla
+log = logs/build9b.log
++IsBuildJob = true
+requirements = (HasCHTCStaging == true)
+transfer_input_files = fetch_model_9b.sh
+request_cpus = 4
+request_memory = 32GB
+request_disk = 80GB
+queue

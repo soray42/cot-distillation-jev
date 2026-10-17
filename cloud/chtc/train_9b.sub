@@ -1,0 +1,30 @@
+# One Qwen3.5-9B training job of batch 4 (submitted by jobs9b.dag / smoke9b.dag; README_9b.md). train_4b.sub with:
+# code + data cotd_code_data_9b.tgz (run_train.sh reads its name from CODE_TGZ), 60 GB disk (the 19.3 GB model is
+# extracted from /staging/Qwen3.5-9B.tar into the job's scratch directory; no weights are written, SAVE is off), its
+# own user log. Same image as batch 3 (cotd_4b.sif). GPUs / CPUs / memory per job from the DAG (2 GPUs >= 40 GB,
+# 12 CPUs, 200 GB: FSDP with cpu-adamw keeps the fp32 master + AdamW states, about 116 GB at 9B, in host memory).
+# The outputs (no weights) come back as results/results_<name>.tgz and the DAG's POST script pushes them (post_push.sh).
+include : chtc_settings.inc
+universe = vanilla
+container_image = file://$(STAGING)/cotd_4b.sif
+executable = run_train.sh
+arguments = $(envfile) $(name)
+environment = "STAGING=$(STAGING) CODE_TGZ=cotd_code_data_9b.tgz SMOKE_ONLY=$(smoke)"
+should_transfer_files = YES
+when_to_transfer_output = ON_EXIT
+transfer_input_files = cotd_code_data_9b.tgz
+transfer_output_files = results_$(name).tgz
+transfer_output_remaps = "results_$(name).tgz = results/results_$(name).tgz"
+requirements = (HasCHTCStaging == true)
+request_gpus = $(ngpu)
+require_gpus = (GlobalMemoryMb >= $(gpumem)) && (DriverVersion >= 12.8)
++WantGPULab = true
++GPUJobLength = "medium"
+request_cpus = $(cpus)
+request_memory = $(mem)
+request_disk = 60GB
+priority = $(prio)
+log = logs/train9b.log
+output = logs/$(name).condor.out
+error = logs/$(name).condor.err
+queue

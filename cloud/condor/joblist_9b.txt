@@ -1,0 +1,7 @@
+condor/jobs9b/62_9b_gsm_GFPQ-c4lr3_s12_fsdp.env, 59, 2
+condor/jobs9b/61_9b_gsm_A2-c4lr3_s12_fsdp.env, 58, 2
+condor/jobs9b/60_9b_gsm_A2-c12lr3_s12_fsdp.env, 57, 2
+condor/jobs9b/63_9b_gsm_GFPQX-c4lr3_s12_fsdp.env, 56, 2
+condor/jobs9b/65_9b_math25_GFPS-c4lr3_s12_fsdp.env, 55, 2
+condor/jobs9b/64_9b_math25_A2-c12lr3_s12_fsdp.env, 54, 2
+condor/jobs9b/66_9b_math25_GFPSX-c4lr3_s12_fsdp.env, 53, 2
