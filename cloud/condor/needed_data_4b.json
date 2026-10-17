@@ -4,7 +4,8 @@
   "data/student_gsm8k_tf",
   "data/student_gsm8k_tf_f25",
   "data/student_gsm8k_tf_rat",
-  "data/student_musique_tf_f25"
+  "data/student_musique_tf_f25",
+  "data/student_gsm8k_tf_s3"
  ],
  "files": [
   "data/eval/bbh_sub500.jsonl",
@@ -52,6 +53,8 @@
   "data/eval/jl_heldout.jsonl": "5472606bf1e6c0b0b81057e2275c48a8",
   "data/eval/jevbench_public.jsonl": "41ec3197c3a77074665dc585bb602f9f",
   "data/eval/typed_decisions_test.jsonl": "b88307e50342af8c840f2b1f61b49379",
-  "data/eval/bbeh.jsonl": "40d9a4d45f497c6edaaa66ed5d02f988"
+  "data/eval/bbeh.jsonl": "40d9a4d45f497c6edaaa66ed5d02f988",
+  "data/student_gsm8k_tf_s3/train.jsonl": "77f89a10ff7ffe5de43211ea135fda9e",
+  "data/student_gsm8k_tf_s3/val.jsonl": "ef38fbcc2060d784b5d3c6ecfef6f755"
  }
 }
