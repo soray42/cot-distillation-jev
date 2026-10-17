@@ -110,6 +110,8 @@ python scripts/ladder_readout.py 'results/hpc/l4b/*' --out results/ladder_readou
 
 The README is updated with every push.
 
+- 2026-10-17 (3): after Milo's review: CHTC batch 2 reordered (compute-matched first), 40 GB GPUs, 12B answer-only at
+  1e-5, weights saved for the 12B GSM8K seed-13 pair, validation tracked in answer-only runs, 4B 25% epoch-selection runs.
 - 2026-10-17 (2): CHTC batch 3 with Qwen3.5-4B (`cloud/chtc/*_4b*`, `cloud/condor/jobs4b`): GSM8K anchors, MuSiQue 25%
   quartet, compute-matched 20 epochs, A7 and its single-GPU twin, GSM8K 25% placebo s14; run tags end in ch / ch1.
 - 2026-10-17: MuSiQue builder and treeplan branch; rationale-LM data builder (A7) and the chain-of-thought evaluation;
