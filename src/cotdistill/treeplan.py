@@ -284,6 +284,8 @@ def statement_block(item: dict) -> str:
       (GFPQ, problem_no_options, is defined for every item).
     - entailmentbank_tf (data/student_entailmentbank_tf, ARC questions with EntailmentBank tree nodes): none, as
       arc_challenge / arc_easy (the question is the whole problem); raises ValueError (GFPQ only).
+    - musique_tf (data/student_musique_tf, MuSiQue with decomposition hop nodes): the paragraphs, i.e. the prompt
+      before its one "\\n\\nQuestion: " line (musique_tf_cut); GFPQ (problem_no_options) adds the question line.
     Any other source, or a prompt that does not have this shape, raises ValueError (no clean definition)."""
     src, p, iid = item.get("source"), item.get("prompt", ""), item.get("item_id")
     if src == "knights_knaves":
@@ -342,6 +344,8 @@ def statement_block(item: dict) -> str:
         _entailmentbank_tf_problem(item)                  # its own shape check first (the clearer refusal)
         raise ValueError(f"{iid}: no statement block: an entailmentbank_tf item is one ARC question, the whole "
                          "problem; GFPQ (--tree-view statements+question) uses problem_no_options")
+    if src == MUSIQUE_TF:                                 # musique_tf: the paragraphs (statements), no question / options
+        return musique_tf_cut(item)[0]
     if src in FINAL_QUESTION:
         head, sep, opts = p.partition("\nOptions:\n")
         body, cut, last = head.rpartition("\n\n")
@@ -458,6 +462,24 @@ def _entailmentbank_tf_problem(item: dict) -> str:
             or "Question:" in body):
         raise ValueError(f"{iid}: entailmentbank_tf prompt is not 'Question: <question>' + options")
     return body
+
+
+# MuSiQue with Tree Forcing nodes (scripts/build_musique_tf.py): "<paragraphs>\n\nQuestion: <question>\nOptions:\nA) ..
+# \nE) ..", one paragraph per block ("Title: <title>" line + text line, blocks separated by a blank line), the question
+# one line. The paragraphs are the statements: statement_block (GFP-S) is the text before the question line, and
+# problem_no_options (GFPQ) is the text before "\nOptions:" through the generic path; placebo_text is the paragraphs.
+MUSIQUE_TF = "musique_tf"
+
+
+def musique_tf_cut(item: dict) -> tuple[str, str]:
+    """(paragraphs, question line "Question: <question>") of a musique_tf prompt, else ValueError (musique_tf)."""
+    p, iid = item.get("prompt", ""), item.get("item_id")
+    head, sep, opts = p.partition("\nOptions:\n")
+    body, cut, ask = head.rpartition("\n\nQuestion: ")       # musique_tf: the last (and only) question line
+    if (not sep or "\nOptions:" in opts or not cut or not body.strip() or not ask.strip() or "\n" in ask
+            or body.startswith("Question:") or "\nQuestion:" in body or "Options:" in body):   # musique_tf shape
+        raise ValueError(f"{iid}: musique_tf prompt is not <paragraphs> + 'Question: <question>' + options")
+    return body, "Question: " + ask                          # musique_tf
 
 
 def problem_no_options(item: dict) -> str:
