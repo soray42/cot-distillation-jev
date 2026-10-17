@@ -1,0 +1,29 @@
+# One Qwen3.5-4B training job of batch 3 (submitted by jobs4b.dag / smoke4b.dag; README_4b.md). train.sub with:
+# image cotd_4b.sif (cotd.sif + flash-linear-attention), code + data cotd_code_data_4b.tgz (run_train.sh reads its name
+# from CODE_TGZ), GPUs / CPUs / memory per job from the DAG (FSDP jobs: 2 GPUs, job 44 / A7: 1 GPU), its own user log.
+# Qwen3.5-4B is read from /staging (Qwen3.5-4B.tar, named after the env file's MODEL); the outputs (no weights) come
+# back as results/results_<name>.tgz and the DAG's POST script pushes them (post_push.sh, as for the 12B jobs).
+include : chtc_settings.inc
+universe = vanilla
+container_image = file://$(STAGING)/cotd_4b.sif
+executable = run_train.sh
+arguments = $(envfile) $(name)
+environment = "STAGING=$(STAGING) CODE_TGZ=cotd_code_data_4b.tgz SMOKE_ONLY=$(smoke)"
+should_transfer_files = YES
+when_to_transfer_output = ON_EXIT
+transfer_input_files = cotd_code_data_4b.tgz
+transfer_output_files = results_$(name).tgz
+transfer_output_remaps = "results_$(name).tgz = results/results_$(name).tgz"
+requirements = (HasCHTCStaging == true)
+request_gpus = $(ngpu)
+require_gpus = (GlobalMemoryMb >= $(gpumem)) && (DriverVersion >= 12.8)
++WantGPULab = true
++GPUJobLength = "medium"
+request_cpus = $(cpus)
+request_memory = $(mem)
+request_disk = 40GB
+priority = $(prio)
+log = logs/train4b.log
+output = logs/$(name).condor.out
+error = logs/$(name).condor.err
+queue

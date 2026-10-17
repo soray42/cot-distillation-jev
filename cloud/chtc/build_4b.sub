@@ -1,0 +1,13 @@
+# Interactive build job for batch 3 (README_4b.md step 1):  condor_submit -i build_4b.sub
+# Inside the job: copy cotd.sif from /staging, build cotd_4b.sif (cotd.sif + flash-linear-attention, a few minutes),
+# fetch Qwen/Qwen3.5-4B at the pinned revision, move both to /staging.
+include : chtc_settings.inc
+universe = vanilla
+log = logs/build4b.log
++IsBuildJob = true
+requirements = (HasCHTCStaging == true)
+transfer_input_files = cotd_4b.def, fetch_model_4b.sh
+request_cpus = 4
+request_memory = 32GB
+request_disk = 80GB
+queue
