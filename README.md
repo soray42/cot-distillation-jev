@@ -110,6 +110,8 @@ python scripts/ladder_readout.py 'results/hpc/l4b/*' --out results/ladder_readou
 
 The README is updated with every push.
 
+- 2026-10-17 (2): CHTC batch 3 with Qwen3.5-4B (`cloud/chtc/*_4b*`, `cloud/condor/jobs4b`): GSM8K anchors, MuSiQue 25%
+  quartet, compute-matched 20 epochs, A7 and its single-GPU twin, GSM8K 25% placebo s14; run tags end in ch / ch1.
 - 2026-10-17: MuSiQue builder and treeplan branch; rationale-LM data builder (A7) and the chain-of-thought evaluation;
   CHTC batches 1-2 (K&K 3e-6 dropped, 25% 12-epoch baselines, seed-13 replications, compute-matched 20 epochs).
 
