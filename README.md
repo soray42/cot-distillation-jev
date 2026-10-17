@@ -110,6 +110,8 @@ python scripts/ladder_readout.py 'results/hpc/l4b/*' --out results/ladder_readou
 
 The README is updated with every push.
 
+- 2026-10-17 (5): paper v2 draft with calibration (Section 4.4); CHTC batch 4 with Qwen3.5-9B (`cloud/chtc/*_9b*`,
+  `cloud/condor/jobs9b`): GSM8K and arithmetic-chain 25% trios for a same-family scale ladder.
 - 2026-10-17 (4): 4B batch update 2: GFPQR, step-capped GSM8K nodes (`scripts/filter_tree_steps.py`), answer-only 1e-5,
   Tree Forcing 25% 12 epochs; anchors save weights; MuSiQue Tree Forcing / placebo held until the node negatives are fixed.
 - 2026-10-17 (3): after Milo's review: CHTC batch 2 reordered (compute-matched first), 40 GB GPUs, 12B answer-only at
