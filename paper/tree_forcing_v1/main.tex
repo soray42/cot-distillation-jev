@@ -49,7 +49,8 @@ arithmetic-chain data it outperforms a placebo control that asks the same number
 margin. With the full
 training set, it remains ahead of answer-only baselines tuned for learning rate and training length on GSM8K, also
 with a 12B model of a different family, and it avoids the loss of general reasoning ability that longer answer-only
-training incurs. Our results suggest that
+training incurs. Its decisions are also better calibrated, in particular on tasks it was not trained on. Our results
+suggest that
 reasoning annotations are best spent at training time, where they buy data efficiency without changing the deployed
 single-pass interface.
 \end{abstract}
@@ -106,6 +107,9 @@ language models \citep{xie2024kk}. Our main findings are:
   \item \textbf{Accuracy and retention.} With the full training set, \tf{} stays ahead of answer-only baselines tuned
   for learning rate and training length on GSM8K, with the 4B model and with a 12B model of a different family, and it
   keeps general reasoning ability that longer answer-only training loses (\cref{sec:accuracy}).
+  \item \textbf{Calibration.} The probabilities of \tf{} models are better calibrated than those of answer-only models,
+  in domain and, by a wide margin, on BIG-Bench Hard (\cref{sec:calibration}); since single-pass decision models are
+  used through their probabilities, this matters in practice.
 \end{itemize}
 
 \section{Tree Forcing}
@@ -129,8 +133,8 @@ with a false one, so that each problem has as many ``Yes'' as ``No'' targets (\c
 variant that is obviously wrong would teach nothing, we build it to be plausible: a value from a planted slip in the computation, the value of another step, or
 a nearby number of the same kind. Crucially, we ask each node question in the context of the problem itself, with
 the options of the final question removed, and \emph{without} the results of its parent nodes. The model therefore
-cannot copy an intermediate result from the prompt; it has to compute it from the problem, which is what we want it
-to learn to do internally. We use the problem
+cannot copy an intermediate result from the prompt; each node question asks about the problem itself, not about a
+value written next to it. We use the problem
 statement alone for arithmetic chains and Knights-and-Knaves, and the statement together with its final question for
 GSM8K, whose problems end in a question sentence that tells the model what to compute. Each node question is a
 separate training example in the same format as the final decision.
@@ -314,6 +318,41 @@ case in our data is Knights-and-Knaves. When answer-only training is run longer,
 model scores 8.4 and 9.8 points below \tf{} in the two seeds we ran. \tf{} reaches the same in-domain accuracy in
 fewer passes over the final questions, and its node questions keep the model busy with statements about the problem
 rather than with the label alone; we hypothesize that this is why it forgets less.
+
+\subsection{Calibration}
+\label{sec:calibration}
+
+Single-pass decision models are used through their probabilities, e.g., a decision is automated when its probability
+exceeds a threshold and escalated otherwise, so how well these probabilities are calibrated matters as much as
+accuracy. \Cref{tab:calibration} reports the expected calibration error (ECE) of the decisions. Overall, \tf{} gives
+the best-calibrated models in every setting of the table, and the gap is largest on BIG-Bench Hard, which none of the
+models is trained on: after Knights-and-Knaves training, the ECE of answer-only models is 31.7 (12 epochs) and 38.7
+(20 epochs) against 7.8 for \tf{}. Longer answer-only training makes it worse on GSM8K as well (17.3 after 4 epochs,
+23.4 after 12). The placebo comes close to \tf{} in domain on GSM8K with the 4B model (15.0 vs.\ 14.4), but not on
+BIG-Bench Hard (17.4 vs.\ 11.8) and not with the 12B model (19.9 vs.\ 16.0), so better calibration is not merely a
+side effect of asking more questions. The largest difference is with a quarter of the arithmetic-chain data at 12B,
+where \tf{} has an ECE of 7.9 in range against 23.1 for answer-only training and 24.8 for the placebo.
+
+\begin{table}[t]
+\centering
+\footnotesize
+\caption{Expected calibration error (\%, 15 bins of the top-option probability; lower is better), seed 12, on the
+in-domain test set (``test'') and the 500-question BIG-Bench Hard sample (``BBH''). Tuned: the answer-only variant of
+\cref{tab:main}. A dash marks a setting we did not run.}
+\label{tab:calibration}
+\begin{tabular}{lcccccc}
+\toprule
+& \multicolumn{2}{c}{GSM8K, 4B} & \multicolumn{2}{c}{K\&K, 4B} & \multicolumn{2}{c}{GSM8K, 12B} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-7}
+Method & test & BBH & test & BBH & test & BBH \\
+\midrule
+Answer-only, default & 23.4 & 29.3 & 21.3 & 31.7 & -- & -- \\
+Answer-only, tuned & 20.7 & 23.1 & 18.6 & 38.7 & 22.4 & 24.4 \\
+Placebo & 15.0 & 17.4 & -- & -- & 19.9 & 28.2 \\
+\tf{} & \textbf{14.4} & \textbf{11.8} & \textbf{11.5} & \textbf{7.8} & \textbf{16.0} & \textbf{15.2} \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \section{Related Work}
 \label{sec:related}
