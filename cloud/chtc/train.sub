@@ -14,7 +14,7 @@ transfer_output_files = results_$(name).tgz
 transfer_output_remaps = "results_$(name).tgz = results/results_$(name).tgz"
 requirements = (HasCHTCStaging == true)
 request_gpus = 2
-require_gpus = (GlobalMemoryMb >= 80000) && (DriverVersion >= 12.8)
+require_gpus = (GlobalMemoryMb >= 40000) && (DriverVersion >= 12.8)
 +WantGPULab = true
 +GPUJobLength = "medium"
 request_cpus = 12

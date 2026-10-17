@@ -1,6 +1,6 @@
 # Qwen3.5-4B 实验包（CHTC 第 3 批）
 
-这一批是 10 个 Qwen3.5-4B 训练任务（GSM8K 和 MuSiQue），每个任务跑完自动评测，结果照旧推到 GitHub。
+这一批是 12 个 Qwen3.5-4B 训练任务（GSM8K 和 MuSiQue），每个任务跑完自动评测，结果照旧推到 GitHub。
 和 12B 共用 `~/cotd_chtc`（同一个 `chtc_settings.inc`、`post_push.sh`、`logs/`、`results/`），代码固定在 commit 5a0460b。
 
 ## 0. 解包（一次）
@@ -36,7 +36,7 @@ cd ~/cotd_chtc && condor_submit_dag smoke4b.dag
 
 把这三个 log 发给 Sora 确认。
 
-## 3. 提交全部 10 个任务
+## 3. 提交全部 12 个任务
 ```bash
 cd ~/cotd_chtc && condor_submit_dag jobs4b.dag
 ```
@@ -61,8 +61,9 @@ cd ~/cotd_chtc && condor_submit_dag jobs4b.dag
 | 48 | MuSiQue 只训答案 4 轮 | 27M | 约 4 h | 约 1.5 h |
 | 49 | GSM8K 25% 对照（placebo）4 轮 | 3M | 0.5 h | 约 0.3 h |
 | 50 | GSM8K 只训答案 12 轮（1 张卡，和 44 同配置） | 7.0M | 约 2.5 h | 约 1–1.5 h |
+| 53、54 | GSM8K 25% 只训答案 4 轮（种子 12、13），训练中评测验证集，用来按验证集挑轮数 | 0.6M | 约 0.3 h | 约 0.2 h |
 
-最重的是 45、46、47（MuSiQue，每条约 1,400 token）。合计约 22 个 2 卡小时。所有 4B 任务的 TAG 都带 `ch`（单卡的是 `ch1`），和我们原来集群上的结果分开。
+最重的是 45、46、47（MuSiQue，每条约 1,400 token）。合计约 23 个 2 卡小时。只训答案的任务在训练中都会评测验证集（EVALMID 里加了 val）。所有 4B 任务的 TAG 都带 `ch`（单卡的是 `ch1`），和我们原来集群上的结果分开。
 
 ## 出问题时
 发 `logs/<任务名>.condor.err` 和 `results/results_<任务名>.tgz` 里的 log 给 Sora。

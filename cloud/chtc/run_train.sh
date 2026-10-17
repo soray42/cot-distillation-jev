@@ -36,5 +36,10 @@ OUTD="runs/${ARMS}${TAG:+-$TAG}-$(basename "$MODEL")-$(basename "$DATA")-s${SEED
 bash repo/hpc/train_arm.sbatch >> "logs/$NAME.out" 2>&1
 rc=$?
 echo "== exit $rc $(date)" >> "logs/$NAME.out"
+if [ -n "${SAVE:-}" ] && [ -z "$SMOKE" ] && [ "$rc" = 0 ] && [ -d "$OUTD/model" ]; then   # SAVE=1: weights -> /staging
+  mkdir -p "$STAGING/weights" && tar cf "$STAGING/weights/$NAME.tar" -C "$OUTD" model \
+    && echo "== weights -> $STAGING/weights/$NAME.tar ($(du -sh "$OUTD/model" | cut -f1))" >> "logs/$NAME.out" \
+    || echo "== weights export to $STAGING/weights failed" >> "logs/$NAME.out"
+fi
 pack
 exit $rc

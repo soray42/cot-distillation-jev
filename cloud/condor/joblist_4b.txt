@@ -1,5 +1,7 @@
 condor/jobs4b/41_4b_gsm_A2-c12lr3_s12_fsdp.env, 75, 2
 condor/jobs4b/42_4b_gsm_GFPQ-c4lr3_s12_fsdp.env, 74, 2
+condor/jobs4b/53_4b_gsm25_A2-c4lr3_s12_fsdp.env, 73, 2
+condor/jobs4b/54_4b_gsm25_A2-c4lr3_s13_fsdp.env, 72, 2
 condor/jobs4b/46_4b_musique25_GFPQ-c4lr3_s12_fsdp.env, 71, 2
 condor/jobs4b/47_4b_musique25_GFPQX-c4lr3_s12_fsdp.env, 71, 2
 condor/jobs4b/45_4b_musique25_A2-c12lr3_s12_fsdp.env, 61, 2
