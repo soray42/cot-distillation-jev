@@ -32,7 +32,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from cotdistill.student import (Example, brier_loss, build_examples, build_fact_examples, build_full_tree, build_group,  # noqa: E402
                                 build_stage_examples, evaluate, evaluate_local, evaluate_subq, kl_loss, label_logits,
                                 lm_loss, load_model, logit_softcap, micro_batches, pack_rng, pack_views, readouts,
-                                scaffold_fade, special_prefix, subq_sets, use_chat_template)
+                                scaffold_fade, si_group, special_prefix, subq_sets, use_chat_template, worked_steps)
 
 
 # Arguments that do not change the training trajectory: a checkpoint may be resumed with different values.
@@ -44,7 +44,8 @@ RESUME_FREE = {"stop_after_h", "ckpt_every_min", "ckpt_single", "stop_at_step", 
 NEW_ARG_DEFAULTS = {"tree_view": "problem", "tree_sources": "", "tree_node_weight": 0.0, "attn_impl": "", "fsdp": False,
                     "fsdp_optim": None, "tree_mix_p": 0.5, "tree_scaffold": 0.0, "tree_depth_weight": 0.0,
                     "chat_template": False, "tree_pack": 0, "tree_node_types": "", "tree_target": "real",
-                    "node_render": "op"}
+                    "node_render": "op", "si_stages": 0, "si_chain": "true", "si_final_only": False, "si_smooth": 0.1,
+                    "si_schedule": "global", "si_keep_optim": False, "si_remove": "front"}
 
 LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj",
                 "in_proj_qkv", "in_proj_z", "in_proj_a", "in_proj_b", "out_proj"]
@@ -184,6 +185,35 @@ def main() -> None:
                          "('What is 4 x 1.5?'), qop = the Socratic sub-question plus the operation, opsel = operation "
                          "selection ('<sub-question> Which computation gives it?', three expressions); nodes without "
                          "the rendering are not asked. --eval-subq scores the value nodes in this rendering")
+    ap.add_argument("--si-stages", type=int, default=0,
+                    help="stepwise internalisation (SI / SIY / SIS; Deng et al. 2024, ICoT-SI; full-tree loop): the "
+                         "final question is trained with the problem's worked steps written between the problem and "
+                         "its options ('Worked steps:' / 'Step 1: 4 + 2 = 6', student.si_group; the item field "
+                         "worked_steps of data/student_gsm8k_tf_si*, or a numgen item's program), over S + 1 stages "
+                         "of --epochs / (S + 1) epochs each; stage k removes the first ceil(k n / S) of the n steps, so "
+                         "stage S trains the test format; the node views of the group are build_full_tree's (SIY: "
+                         "GFPQ's) unless --si-final-only; evaluations stay final-question-only, with a mid-training "
+                         "evaluation (--eval-at mechanism, --eval-mid sets) at the end of every stage but the last; "
+                         "0 = off")
+    ap.add_argument("--si-chain", default="true", choices=["true", "wrong", "wrong-results"],
+                    help="--si-stages: the written steps. true = the solution's operations; wrong = SIS, the "
+                         "wrong-content control: every computed value written wrongly (each result a distractor of "
+                         "the same size, never the truth, and an operand that is an earlier result that result's wrong "
+                         "value), the same lines and counts; wrong-results = only the results wrong")
+    ap.add_argument("--si-final-only", action="store_true",
+                    help="--si-stages: train the final question only (SI / SIS); off = also the node views of the "
+                         "full-tree group (SIY with GFPQ's yes/no views)")
+    ap.add_argument("--si-smooth", type=float, default=0.1,
+                    help="--si-stages: removal smoothing, the probability of removing one more step (a coin per "
+                         "seed, stage, pass and item, not the training rng)")
+    ap.add_argument("--si-schedule", default="global", choices=["global", "stage"],
+                    help="--si-stages: one warmup + cosine schedule over all stages (global) or a fresh one per "
+                         "stage (stage)")
+    ap.add_argument("--si-keep-optim", action="store_true",
+                    help="--si-stages: keep the AdamW state across stages (default: reset at every stage, as ICoT-SI)")
+    ap.add_argument("--si-remove", default="front", choices=["front", "back"],
+                    help="--si-stages: remove the steps from the front (ICoT-SI; the kept steps keep their numbers) "
+                         "or from the back (the steps nearest the answer first)")
     ap.add_argument("--aux-total", type=float, default=1.0,
                     help="full-tree groups: auxiliary weight per problem, split evenly over its node views")
     ap.add_argument("--aux-sources", default="", help="grouped training: comma list of item sources whose auxiliary "
@@ -359,6 +389,17 @@ def main() -> None:
         if resumable and args.fsdp_optim != "8bit-sr":
             raise SystemExit("--fsdp-optim cpu-adamw does not checkpoint (fp32 master + m + v = 12 B/param, 143 GB at "
                              "12B, over the 100 GB quota): no --stop-after-h / --ckpt-every-min / --stop-at-step")
+    si_flags = (args.si_chain != "true" or args.si_final_only or args.si_smooth != 0.1 or args.si_schedule != "global"
+                or args.si_keep_optim or args.si_remove != "front")
+    if args.si_stages < 0 or si_flags and not args.si_stages:
+        raise SystemExit("--si-chain / --si-final-only / --si-smooth / --si-schedule / --si-keep-optim / --si-remove "
+                         "need --si-stages S >= 1")
+    if args.si_stages and (not args.tree_full or args.tree_pack or resumable or args.depth_stages or args.fact_stages
+                           or args.facts_always or not 0.0 <= args.si_smooth <= 1.0):
+        raise SystemExit(f"--si-stages {args.si_stages}: for the full-tree loop (--tree-full; SI / SIS with "
+                         "--si-final-only), without --tree-pack, --stop-after-h / --ckpt-every-min / --stop-at-step "
+                         "(no multi-stage resume), --depth-stages, --fact-stages or --facts-always; --si-smooth a "
+                         "probability")
     if args.ckpt_single and not resumable:
         raise SystemExit("--ckpt-single needs --stop-after-h, --ckpt-every-min or --stop-at-step")
     if args.chat_template and args.rationale_lm:
@@ -546,9 +587,12 @@ def main() -> None:
         upp = math.ceil(n_fin / args.items_per_update)
         fade = {"U": upp, "T": max(1, math.ceil(args.epochs * upp))}
 
-    def fulltree_updates() -> list[list[Example]]:
+    si_log: list[dict] = []                  # --si-stages: the chain counts of every pass
+
+    def fulltree_updates(si_stage: int | None = None) -> list[list[Example]]:
         """Problems in shuffled order, each as [final] + all its node views; items_per_update problems per update
-        (the number of sequences per update varies with tree size)."""
+        (the number of sequences per update varies with tree size). si_stage (--si-stages): the final views carry
+        that stage's worked steps (student.si_group, which draws from no shared generator)."""
         items = train_items[:]
         order_rng.shuffle(items)
         st: dict = {}
@@ -556,6 +600,7 @@ def main() -> None:
         passes["n"] += 1                     # pass is 0)
         b = args.items_per_update
         groups, ps = [], []
+        sst: dict = {}                       # --si-stages: this pass's chain counts
         for it in items:
             p_sc = None
             if fade is not None:             # GTF: p(t) of the update this problem's group lands in
@@ -573,6 +618,10 @@ def main() -> None:
             if g and args.tree_pack and any(e.kind == "subq" for e in g):   # GFPSP: the GFPS views, packed
                 g = pack_views(g, tok, statement_block(it), max_len=args.max_len, max_nodes=args.tree_pack,
                                rng=pack_rng(args.seed, ep, it["item_id"]), stats=st)
+            if g and si_stage is not None and (tree_sources is None or it.get("source") in tree_sources):
+                g = si_group(g, it, stage=si_stage, n_stages=args.si_stages, chain=args.si_chain, seed=args.seed,
+                             epoch=ep, smooth=args.si_smooth, final_only=args.si_final_only, remove=args.si_remove,
+                             stats=sst)
             if g:
                 groups.append(g)
                 ps.append(p_sc)
@@ -582,6 +631,9 @@ def main() -> None:
         if args.tree_view == "mix":
             print(f"mix pass {ep}: {st.get('statements_views', 0)} statements views, {st.get('local_views', 0)} local "
                   "views", flush=True)
+        if si_stage is not None:
+            si_log.append({"pass": ep, "stage": si_stage, **sst})
+            print(f"si pass {ep} stage {si_stage}/{args.si_stages}: {json.dumps(sst, sort_keys=True)}", flush=True)
         if fade is not None:
             print(f"scaffold pass {ep}: {st.get('scaffold_views', 0)} scaffold views of "
                   f"{st.get('scaffold_eligible', 0)} eligible derived nodes, p(t) {ps[0] if ps else 0:.4f} -> "
@@ -589,7 +641,11 @@ def main() -> None:
                   f"{fade['T']})", flush=True)
         return [[e for g in groups[i:i + b] for e in g] for i in range(0, len(groups), b)]
 
-    if args.tree_full:
+    if args.tree_full and args.si_stages:   # SI: S + 1 full-tree stages of epochs / (S + 1) each, steps removed stage by
+        per_step = 1                          # stage
+        stages = [(f"si{k}", (lambda k=k: fulltree_updates(k)), args.epochs / (args.si_stages + 1))
+                  for k in range(args.si_stages + 1)]
+    elif args.tree_full:
         per_step = 1                 # make() returns whole updates
         stages = [("fulltree", fulltree_updates, args.epochs)]
     elif args.grouped_aux:
@@ -620,10 +676,17 @@ def main() -> None:
     else:
         stages = [("all", epoch_examples, args.epochs)]
     plan = []
-    for name, make, epochs in stages:
-        n = len(make())
+    for si_k, (name, make, epochs) in enumerate(stages):
+        # SI: every stage has the same updates per pass (one group per problem with a final), so one counting pass as
+        # in the single-stage full-tree loop (the generators then stand where GFPQ's do: SIY in rng lockstep with it)
+        n = len(make()) if not args.si_stages or si_k == 0 else plan[0][2]
         plan.append((name, make, n, max(1, math.ceil(epochs * n / per_step))))
         print(f"stage {name}: {n} examples per pass, {plan[-1][3]} steps", flush=True)
+    if args.si_stages:
+        si_log.clear()                       # the counting pass is not training
+        if not any(worked_steps(it) for it in train_items if tree_sources is None or it.get("source") in tree_sources):
+            raise SystemExit(f"--si-stages: no {args.tree_sources or 'training'} item of {args.train} has worked "
+                             "steps (field worked_steps: scripts/build_gsm8k_si.py, or a numgen program)")
     total_steps = sum(x[3] for x in plan)
     passes["n"] = 0                  # the counting pass above does not count as training progress
     if fade is not None and (fade["U"], fade["T"]) != (plan[-1][2], total_steps):
@@ -640,6 +703,11 @@ def main() -> None:
     for e in (float(x) for x in args.eval_at.split(",") if x):
         assert epochs_total, "--eval-at needs a single-stage run (no --depth-stages/--fact-stages)"
         eval_steps[max(1, round(e / epochs_total * total_steps))] = e
+    if args.si_stages:                       # the end of every stage but the last (the final evaluation follows it)
+        done = 0
+        for k, (_, _, _, stage_steps) in enumerate(plan[:-1]):
+            done += stage_steps
+            eval_steps[done] = round((k + 1) * args.epochs / (args.si_stages + 1), 6)
     mid_names = [x for x in args.eval_mid.split(",") if x in evals] or list(evals)   # absent names (smoke) skipped
     mid_sets = {}
     for name in mid_names:
@@ -816,15 +884,24 @@ def main() -> None:
 
     last_ckpt = time.time()
     model.train()
+    reset_stages = args.reset_optim or bool(args.si_stages) and not args.si_keep_optim
+    gsched = None                            # --si-stages with --si-schedule global: one schedule over every stage
+    if args.si_stages and args.si_schedule == "global":
+        gwarm = max(1, int(args.warmup * total_steps))
+        gsched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s, w=gwarm, t=total_steps: min(1.0, (s + 1) / w) * 0.5 * (
+            1 + math.cos(math.pi * min(1.0, s / t))))
     for si, (name, make, _, stage_steps) in enumerate(plan):
-        if args.reset_optim and si > 0:
+        if reset_stages and si > 0:
             if trainer is not None:
                 trainer.reset_state()
             else:
                 opt.state.clear()
-        warm = max(1, int(args.warmup * stage_steps))
-        sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s, w=warm, t=stage_steps: min(1.0, (s + 1) / w) * 0.5 * (
-            1 + math.cos(math.pi * min(1.0, s / t))))
+        if gsched is not None:
+            sched = gsched
+        else:
+            warm = max(1, int(args.warmup * stage_steps))
+            sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s, w=warm, t=stage_steps: min(1.0, (s + 1) / w) * 0.5 * (
+                1 + math.cos(math.pi * min(1.0, s / t))))
         ex_iter: list[Example] = []
         end = step + stage_steps
         upd_iter: list[list[Example]] = []
@@ -840,7 +917,7 @@ def main() -> None:
             step, upd_iter = resume["step"], resume["upd_iter"]
             print(f"resumed from {ck_dir} at step {step}", flush=True)
         gwin: list[float] = []           # pre-clip gradient norms since the last log row (Tree Forcing arms)
-        while name == "fulltree" and step < end:
+        while (name == "fulltree" or name.startswith("si")) and step < end:
             # One problem group per update; the loss is scaled by 1 / (3 x items_per_update), the per-sequence
             # normalisation of the 1 final + 2 auxiliary grouped arms, so the learning-rate scale is comparable.
             if not upd_iter:
@@ -1036,6 +1113,8 @@ def main() -> None:
     results = {"args": vars(args), "history": history, "trajectory": trajectory, "eval": {}}
     if tree_opts:
         results["tree_view_stats"] = tree_stats
+    if args.si_stages:
+        results["si"] = si_log
     if fs is not None:
         results["fsdp"] = {"world": fs.world, "optim": args.fsdp_optim}
     for name, items in evals.items():    # (--fsdp: every rank evaluates its share of the batches; rank 0 writes)

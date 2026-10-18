@@ -1440,6 +1440,162 @@ def build_fact_examples(item: dict, *, stage: int, n_stages: int, final: str = "
     return [e for e in ex if e.kind == "final"]
 
 
+# ---- stepwise internalisation (--si-stages; arms SI / SIY / SIS; Deng et al. 2024, ICoT-SI) ------------------------
+# The final question with the problem's worked steps written between the problem and its options; stage k of S removes
+# the first ceil(k n / S) of the n steps (stage S: none left = the test format). Nothing here draws from the training
+# rng: the group is build_full_tree's, only the final view's text changes (si_group).
+CHAIN_HEADER = "Worked steps:"
+CHAIN_FIELD = "worked_steps"          # GSM8K: scripts/build_gsm8k_si.py; numgen: from the item's program (numgen_chain)
+SI_CHAINS = {"true": "text", "wrong": "wrong_text", "wrong-results": "wrong_result_text"}
+SI_REMOVE = ("front", "back")
+
+
+def _ng_expr(cls: str, a: str, b: str | None, c) -> str:
+    return {"ADD": f"{a} + {c}", "SUB": f"{a} − {c}", "MUL": f"{a} × {c}", "DIV": f"{a} ÷ {c}",
+            "PCT": f"{c}% of {a}", "PCTOFF": f"{100 - c if c is not None else c}% of {a}", "SUM": f"{a} + {b}",
+            "DOZEN": f"{c} × 12"}[cls]
+
+
+def numgen_chain(item: dict) -> list[dict] | None:
+    """The worked steps of a numgen item (data/student_numgen*, cotdistill.numgen) from its program: one line per
+    derived quantity in program order (each operation reads the latest quantity, so the order is the evaluation order;
+    the answer quantity last), "a op c = v" with the operation class's symbol (numgen.OPCLS: + − × ÷, "c% of a",
+    PCTOFF as "(100 - c)% of a", SUM "a + b", DOZEN "c × 12"), each line checked against numgen.apply. The fields of
+    scripts/build_gsm8k_si.py: text, value, a_from / b_from (the earlier line an input quantity is; a stated input is
+    written as its number), wrong (the wrong probe of the quantity's derive node "<q>n" when it has one, else a
+    numgen.perturb of the value from random.Random("si-wrong|<item>|<q>"); never the value, positive, and for a line
+    whose value is the answer's never one of the options), wrong_text (results and linked operands written wrongly)
+    and wrong_result_text (results only). None when the item has no program or no derived quantity."""
+    from .numgen import OPCLS, apply, perturb
+    prog = item.get("program")
+    if not prog:
+        return None
+    qs = {q["id"]: q for q in prog["quantities"]}
+    probes = {sq["id"][:-1]: sq.get("probe") for sq in item.get("subqs") or []
+              if sq.get("type") == "derive" and str(sq.get("id", "")).endswith("n")}
+    opts = item.get("options")
+    banned = set(opts.values() if isinstance(opts, dict) else opts or [])
+    lines, at = [], {}
+    for q in prog["quantities"]:
+        if not q.get("op") or q.get("stated"):
+            continue
+        cls = OPCLS[q["op"]]
+        ins = [qs[i] for i in q["inputs"]]
+        got = apply(cls, [x["value"] for x in ins], q["const"])
+        if got is None or got != q["value"]:
+            raise ValueError(f"{item.get('item_id')}: {q['id']} {q['op']} gives {got}, the program says {q['value']}")
+        frm = [at.get(x["id"]) for x in ins] + [None] * (2 - len(ins))
+        vals = [str(x["value"]) for x in ins] + [None] * (2 - len(ins))
+        v = q["value"]
+        rng = random.Random(f"si-wrong|{item.get('item_id')}|{q['id']}")
+        w = probes.get(q["id"])
+        bad = banned if v == qs[prog["answer"]]["value"] else set()        # the answer's value: never an option
+        tries = 0
+        while w is None or w == v or w <= 0 or w in bad:
+            w = perturb(v, rng) if tries < 50 else v + tries - 49
+            tries += 1
+        lines.append({"id": q["id"], "op": q["op"], "cls": cls, "a": vals[0], "b": vals[1], "c": q["const"],
+                      "value": str(v), "a_from": frm[0], "b_from": frm[1], "wrong": str(w),
+                      "text": f"{_ng_expr(cls, vals[0], vals[1], q['const'])} = {v}"})
+        at[q["id"]] = len(lines) - 1
+    for ln in lines:
+        wa = lines[ln["a_from"]]["wrong"] if ln["a_from"] is not None else ln["a"]
+        wb = lines[ln["b_from"]]["wrong"] if ln["b_from"] is not None else ln["b"]
+        ln["wrong_text"] = f"{_ng_expr(ln['cls'], wa, wb, ln['c'])} = {ln['wrong']}"
+        ln["wrong_result_text"] = f"{_ng_expr(ln['cls'], ln['a'], ln['b'], ln['c'])} = {ln['wrong']}"
+    return lines or None
+
+
+def worked_steps(item: dict) -> list[dict] | None:
+    """The item's worked steps: its CHAIN_FIELD (GSM8K rows of data/student_gsm8k_tf_si*, possibly null), else the
+    chain of its numgen program (numgen_chain), else None (the final question is asked without a chain)."""
+    if CHAIN_FIELD in item:
+        return item[CHAIN_FIELD] or None
+    if item.get("source") == "numgen":
+        return numgen_chain(item)
+    return None
+
+
+def si_removed(n: int, stage: int, n_stages: int, coin: float, smooth: float) -> int:
+    """Steps removed at stage (0..n_stages) of a chain of n: ceil(stage x n / n_stages), one more when coin < smooth
+    (removal smoothing), at most n."""
+    m = -(-stage * n // n_stages)
+    return min(n, m + (coin < smooth))
+
+
+def si_rng(seed: int, stage: int, epoch: int, item_id) -> random.Random:
+    """The removal-smoothing coin of one (seed, stage, pass, item), seeded through a str key (sha512, as
+    treeplan.scaffold_rng): it depends on nothing else (not the training rng, the order or the other items)."""
+    return random.Random(f"si|{seed}|{stage}|{epoch}|{item_id}")
+
+
+def chain_block(texts: list[str], first: int = 1) -> str:
+    """'\\n\\nWorked steps:\\nStep <first>: ...\\nStep <first + 1>: ...', or '' without lines."""
+    if not texts:
+        return ""
+    return f"\n\n{CHAIN_HEADER}\n" + "\n".join(f"Step {first + i}: {t}" for i, t in enumerate(texts))
+
+
+def insert_chain(text: str, block: str) -> str:
+    """text with block inserted before its (last) '\\nOptions:\\n' line, i.e. between the problem and its options."""
+    if not block:
+        return text
+    head, sep, tail = text.rpartition("\nOptions:\n")
+    if not sep:
+        raise ValueError("no options block to write the worked steps before")
+    return head + block + sep + tail
+
+
+def si_view(steps: list[dict], *, stage: int, n_stages: int, chain: str, coin: float, smooth: float,
+            remove: str = "front") -> tuple[str, int]:
+    """(the chain block of this stage, steps removed). remove "front" drops the first steps (the steps kept keep their
+    numbers: stage 1 of 4 on six steps shows Step 3 .. Step 6); "back" drops the last ones (Step 1 .. Step n - m)."""
+    n = len(steps)
+    m = si_removed(n, stage, n_stages, coin, smooth)
+    texts = [s[SI_CHAINS[chain]] for s in steps]
+    if remove == "front":
+        return chain_block(texts[m:], m + 1), m
+    return chain_block(texts[:n - m], 1), m
+
+
+def si_group(group: list[Example], item: dict, *, stage: int, n_stages: int, chain: str = "true", seed: int = 0,
+             epoch: int = 0, smooth: float = 0.1, final_only: bool = False, remove: str = "front",
+             stats: dict | None = None) -> list[Example]:
+    """A full-tree group (build_full_tree's [final] + node views) at SI stage `stage` of n_stages: the final view's text
+    gets the item's worked steps of this stage (si_view; worked_steps) before its options, the node views are kept
+    as they are (SIY: GFPQ's views) or dropped (final_only: SI / SIS). chain "true" writes the steps, "wrong" the SIS
+    control (every computed value wrong: results and the operands that are earlier results), "wrong-results" (only
+    the results wrong). The smoothing coin comes from si_rng, never the training rng, so the views, targets, option
+    orders and weights stay build_full_tree's. stats counts si_items (with a chain), si_lines, si_shown, si_smoothed
+    (an extra step removed), si_all_removed (no step left) and si_items_without_chain."""
+    if chain not in SI_CHAINS:
+        raise ValueError(f"--si-chain {chain!r}: one of {', '.join(SI_CHAINS)}")
+    if remove not in SI_REMOVE:
+        raise ValueError(f"--si-remove {remove!r}: one of {', '.join(SI_REMOVE)}")
+    if not 0 <= stage <= n_stages:
+        raise ValueError(f"SI stage {stage} of {n_stages}")
+    steps = worked_steps(item)
+    st = stats if stats is not None else {}
+    out = []
+    block, m = "", 0
+    if steps:
+        coin = si_rng(seed, stage, epoch, item["item_id"]).random()
+        block, m = si_view(steps, stage=stage, n_stages=n_stages, chain=chain, coin=coin, smooth=smooth, remove=remove)
+        st["si_items"] = st.get("si_items", 0) + 1
+        st["si_lines"] = st.get("si_lines", 0) + len(steps)
+        st["si_shown"] = st.get("si_shown", 0) + len(steps) - m
+        st["si_smoothed"] = st.get("si_smoothed", 0) + (m > -(-stage * len(steps) // n_stages))
+        st["si_all_removed"] = st.get("si_all_removed", 0) + (m == len(steps))
+    else:
+        st["si_items_without_chain"] = st.get("si_items_without_chain", 0) + 1
+    for e in group:
+        if e.kind == "final":
+            out.append(dataclasses.replace(e, text=insert_chain(e.text, block)) if block else e)
+        elif not final_only:
+            out.append(e)
+    return out
+
+
 def text_parts(model):
     """(backbone returning last_hidden_state, output embedding) for causal or multimodal wrappers."""
     head = model.get_output_embeddings()

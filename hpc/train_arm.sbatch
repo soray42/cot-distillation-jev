@@ -96,6 +96,20 @@
 # last operation only) · GFPVB = GFPQV's nodes asked alone, no problem text (--tree-view bare) · GFPQVM = GFPQ's yes/no
 # views unchanged plus GFPQV's value views, each format half of the per-problem auxiliary weight. The yes/no arms on
 # the same data train exactly as on data/student_gsm8k_tf (the value nodes are in a field of their own).
+# Stepwise internalisation (Deng et al. 2024, ICoT-SI; DATA=data/student_gsm8k_tf_si*, built by scripts/build_gsm8k_si.py,
+# or data/student_numgen_tf*, whose programs give the steps; XARGS="--tree-sources gsm8k_tf" / "--tree-sources numgen" as
+# for GFPQ): the final question is trained with the problem's worked steps written between the problem and its options
+# ("Worked steps:" / "Step 1: 4 + 2 = 6", one line per atomic operation, the answer's operation last) over SISTAGES + 1
+# stages (default 4 + 1 = 5) of EPOCHS / (SISTAGES + 1) epochs each (EPOCHS defaults to SISTAGES + 1 for these arms);
+# stage k removes the first ceil(k n / SISTAGES) of a problem's n steps (one more with probability 0.1), so the last
+# stage trains the test format; AdamW reset at every stage, one warmup + cosine schedule over all stages; validation and
+# test evaluation final-question-only, with a mid-training evaluation (the --eval-at mechanism, EVALMID sets) at the end
+# of every stage but the last. SI = the final question only · SIY = SI + GFPQ's yes/no node views in every update (the
+# same groups, order and option orders as GFPQ; the last stage is GFPQ) · SIS = SI with every computed value written
+# wrongly (each result a distractor of the same size, never the truth; operands that are earlier results get those
+# wrong values: same lines and counts, wrong content). Knobs: XARGS="--si-smooth P --si-schedule stage --si-keep-optim
+# --si-remove back --si-chain wrong-results" (with TAG). No STOPH / CKPTMIN (multi-stage runs do not resume); relays
+# must put SISTAGES in their reset list.
 # NODEW=w gives every node view weight w (--tree-node-weight; default: the per-problem split, aux 1.0 / views, about
 # .023 per K&K node); set it to the same value for all arms of a comparison. LOCAL_EVAL=path scores the
 # local-step probe (--eval-local: every K&K node in its local view, eval key local_kk); when unset it is
@@ -161,8 +175,8 @@ nvidia-smi -L 2>/dev/null || echo "no nvidia-smi here"
 EVALS="val=$DATA/val.jsonl kk=data/eval/kk_heldout.jsonl jl=data/eval/jl_heldout.jsonl jevbench=data/eval/jevbench_public.jsonl td=data/eval/typed_decisions_test.jsonl bbeh=data/eval/bbeh.jsonl ${EXTRA_EVALS:-}"
 for f in $EVALS; do [ -f "${f#*=}" ] || { echo "missing eval file ${f#*=}"; exit 1; }; done
 
-arm_config() {           # sets F S T RLM DS for arm $1
-  RLM=; DS=; DX=
+arm_config() {           # sets F S T RLM DS DX EPD for arm $1 (EPD: the arm's default EPOCHS, empty = 2)
+  RLM=; DS=; DX=; EPD=
   case "$1" in
     A1) F=gold;    S=none;   T=cot ;;
     A2) F=teacher; S=none;   T=cot ;;
@@ -222,6 +236,12 @@ arm_config() {           # sets F S T RLM DS for arm $1
     GFPQO) F=teacher; S=cot; T=cot; DX="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --node-format value --node-render opsel" ;;  # GFPQ with operation-selection nodes ("Which computation gives it?", 3 expressions)
     GFPVB) F=teacher; S=cot; T=cot; DX="--tree-full plain --tree-view bare --tree-cap 0 --tree-sources knights_knaves --node-format value --node-render op" ;;  # value nodes asked alone (no problem text)
     GFPQVM) F=teacher; S=cot; T=cot; DX="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --node-format yesno+value --node-render op" ;;  # GFPQ's yes/no nodes + the op value nodes, half the per-problem weight each
+    SI) F=teacher; S=cot; T=cot; EPD=$(( ${SISTAGES:-4} + 1 )); DX="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --si-stages ${SISTAGES:-4} --si-final-only" ;;  # stepwise internalisation: the final question with the worked steps, removed front-first stage by stage
+    SIY) F=teacher; S=cot; T=cot; EPD=$(( ${SISTAGES:-4} + 1 )); DX="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --si-stages ${SISTAGES:-4}" ;;  # SI + GFPQ's yes/no node views every update
+    SIS) F=teacher; S=cot; T=cot; EPD=$(( ${SISTAGES:-4} + 1 )); DX="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --si-stages ${SISTAGES:-4} --si-final-only --si-chain wrong" ;;  # SI with every computed value written wrongly (wrong-content control)
+    SIB) F=teacher; S=cot; T=cot; EPD=$(( ${SISTAGES:-4} + 1 )); DX="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --si-stages ${SISTAGES:-4} --si-final-only --si-remove back" ;;  # SI, steps removed from the answer end first
+    SIYB) F=teacher; S=cot; T=cot; EPD=$(( ${SISTAGES:-4} + 1 )); DX="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --si-stages ${SISTAGES:-4} --si-remove back" ;;  # SIB + GFPQ's yes/no node views
+    SISB) F=teacher; S=cot; T=cot; EPD=$(( ${SISTAGES:-4} + 1 )); DX="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --si-stages ${SISTAGES:-4} --si-final-only --si-chain wrong --si-remove back" ;;  # SIB with wrong values (control)
     *) echo "unknown ARM $1"; return 1 ;;
   esac
 }
@@ -262,6 +282,7 @@ for ARM in $ARMS; do
   if [ -n "${STOPH:-}${CKPTMIN:-}" ]; then   # resume needs a full-tree arm (one-slice token budgets work for every arm
     arm_config "$ARM"                         # since e0ca874)
     [[ " $DX ${XARGS:-} " == *" --tree-full "* ]] || { echo "SMOKE FAILED $ARM: STOPH/CKPTMIN need a full-tree arm"; exit 1; }
+    [[ " $DX ${XARGS:-} " != *" --si-stages "* ]] || { echo "SMOKE FAILED $ARM: SI arms (multi-stage) do not resume: no STOPH/CKPTMIN"; exit 1; }
   fi
   SUBQ_EXTRA= le=${LOCAL_EVAL:+$SM/local.jsonl} train "$ARM" "$SM/train.jsonl" "smoke=$SM/eval.jsonl" "$SM/out-$ARM" --epochs 0.5 --micro-bs 2 --grad-accum 2 \
     > "$SM/$ARM.log" 2>&1 || { echo "SMOKE FAILED $ARM"; tail -n 30 "$SM/$ARM.log"; exit 1; }
@@ -319,7 +340,8 @@ for ARM in $ARMS; do
   fi
   echo "=== $ARM -> $OUT  $(date +%T)"
   rc=0
-  le=$LOCAL_EVAL train "$ARM" "$DATA/train.jsonl" "$EVALS" "$OUT" --epochs "${EPOCHS:-2}" --micro-bs "${MBS:-2}" \
+  arm_config "$ARM" || true             # EPD: the arm's default epochs (SI arms: SISTAGES + 1)
+  le=$LOCAL_EVAL train "$ARM" "$DATA/train.jsonl" "$EVALS" "$OUT" --epochs "${EPOCHS:-${EPD:-2}}" --micro-bs "${MBS:-2}" \
     --grad-accum "${GA:-16}" ${SAVE:+--save} ${STOPH:+--stop-after-h "$(stop_h)"} ${CKPTMIN:+--ckpt-every-min "$CKPTMIN"} \
     ${CKPTONE:+--ckpt-single} || rc=$?
   if [ "$rc" = 3 ] || { [ "$rc" != 0 ] && [ -f "$OUT/planned_stop" ]; }; then   # (torchrun: exit 1 + marker)
