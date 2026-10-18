@@ -1,0 +1,8 @@
+JOB smoke154 train6_4b.sub
+VARS smoke154 envfile="condor/jobs6_4b/154_4b_gsmsi_SIB-c5lr3_s12_fsdp.env" name="smoke_154_4b_gsmsi_SIB" prio="0" smoke="1" ngpu="1" cpus="8" mem="80GB" gpumem="40000"
+SCRIPT POST smoke154 post_push.sh smoke_154_4b_gsmsi_SIB $RETURN
+
+JOB smoke155 train6_4b.sub
+VARS smoke155 envfile="condor/jobs6_4b/155_4b_gsmops_GFPQV-c4lr3_s12_fsdp.env" name="smoke_155_4b_gsmops_GFPQV" prio="0" smoke="1" ngpu="1" cpus="8" mem="80GB" gpumem="40000"
+SCRIPT POST smoke155 post_push.sh smoke_155_4b_gsmops_GFPQV $RETURN
+
