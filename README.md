@@ -116,6 +116,8 @@ python scripts/ladder_readout.py 'results/hpc/l4b/*' --out results/ladder_readou
 
 The README is updated with every push.
 
+- 2026-10-18 (3): CHTC batch 6 (`cloud/condor/jobs6_4b`): the new node designs and stepwise internalisation on GSM8K first;
+  batch 5 trimmed to the GSM8K seeds and the answer-only epoch sweep.
 - 2026-10-18 (2): value nodes (`scripts/build_gsm8k_ops.py`, arms GFPQV / GFPQVQ / GFPQO / GFPVB / GFPQVM) and stepwise
   internalisation v1 (`scripts/build_gsm8k_si.py`, arms SI / SIY / SIS and answer-end-first SIB / SIYB / SISB).
 - 2026-10-18: CHTC batch 5 (53 jobs, `cloud/condor/jobs5_*`, `cloud/chtc/*5*`): seeds and epoch sweeps for answer-only and
