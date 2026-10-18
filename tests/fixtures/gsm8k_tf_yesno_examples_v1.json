@@ -1,0 +1,3545 @@
+{
+"commit": "8eea1dd",
+"items": [
+{
+"item_id": "gsm8k-train-3839",
+"source": "gsm8k_tf",
+"group": "gsm8k_tf/s2",
+"type": "choice",
+"prompt": "Question: Quentavious has 5 nickels. His friend offers him some gum and will give him two pieces per nickel. If Quentavious leaves with 2 nickels, how many pieces of gum did he get?\nOptions:\nA) 6\nB) 10\nC) 4\nD) 3\nE) 30",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"gold_label": "A",
+"teacher": {
+"A": 1.0,
+"B": 0.0,
+"C": 0.0,
+"D": 0.0,
+"E": 0.0
+},
+"options": [
+"6",
+"10",
+"4",
+"3",
+"30"
+],
+"option_kinds": [
+"gold",
+"partial_ab",
+"perturb_gold",
+"partial_ab",
+"perturb_p2"
+],
+"recipe": "qo2",
+"depth": 2,
+"dep_level": 1,
+"subqs": [
+{
+"id": "s1v",
+"question": "How many nickels did Quentavious spend? Is it 3?",
+"opposite": "How many nickels did Quentavious spend? Is it different from 3?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 3.0,
+"step": 1,
+"expr": "5-2",
+"value": 3.0,
+"flags": [],
+"gold_ancestor": true,
+"node_depth": 0
+},
+{
+"id": "s1n",
+"question": "How many nickels did Quentavious spend? Is it 2?",
+"opposite": "How many nickels did Quentavious spend? Is it different from 2?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 2.0,
+"step": 1,
+"expr": "5-2",
+"value": 3.0,
+"flags": [],
+"gold_ancestor": true,
+"node_depth": 0,
+"wrong": "slip"
+}
+],
+"random_subqs": [],
+"rationale": "",
+"augment": null,
+"has_tree": true,
+"tree_fix": true,
+"row_kind": "final",
+"problem_id": "gsm8k-train-3839",
+"node_status": "ok",
+"licence_class": "PERM",
+"licence": "MIT (openai/gsm8k)",
+"label_basis": "gold",
+"node_basis": "program",
+"pool_rank": 24,
+"n_steps": 2,
+"tree_source": "gsm8k_socratic_tf"
+},
+{
+"item_id": "gsm8k-train-3075",
+"source": "gsm8k_tf",
+"group": "gsm8k_tf/s3",
+"type": "choice",
+"prompt": "Question: James is running a fundraiser selling candy bars.  Each box has 10 candy bars in it.  He sells 5 boxes.  He sells each candy bar for $1.50 and buys each bar for $1. How much profit does he make from these sales?\nOptions:\nA) 10\nB) 110\nC) 35\nD) 25\nE) 5",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"gold_label": "D",
+"teacher": {
+"A": 0.0,
+"B": 0.0,
+"C": 0.0,
+"D": 1.0,
+"E": 0.0
+},
+"options": [
+"10",
+"110",
+"35",
+"25",
+"5"
+],
+"option_kinds": [
+"primary",
+"perturb_p1",
+"perturb_gold",
+"gold",
+"primary"
+],
+"recipe": "inter",
+"depth": 3,
+"dep_level": 1,
+"subqs": [
+{
+"id": "s1v",
+"question": "How much does he make from each candy bar? Is it 0.5?",
+"opposite": "How much does he make from each candy bar? Is it different from 0.5?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 0.5,
+"step": 1,
+"expr": "1.5-1",
+"value": 0.5,
+"flags": [],
+"gold_ancestor": true,
+"node_depth": 0
+},
+{
+"id": "s1n",
+"question": "How much does he make from each candy bar? Is it 1.5?",
+"opposite": "How much does he make from each candy bar? Is it different from 1.5?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 1.5,
+"step": 1,
+"expr": "1.5-1",
+"value": 0.5,
+"flags": [],
+"gold_ancestor": true,
+"node_depth": 0,
+"wrong": "slip"
+},
+{
+"id": "s2v",
+"question": "How many candy bars does he sell? Is it 50?",
+"opposite": "How many candy bars does he sell? Is it different from 50?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 50.0,
+"step": 2,
+"expr": "5*10",
+"value": 50.0,
+"flags": [],
+"gold_ancestor": true,
+"node_depth": 0
+},
+{
+"id": "s2n",
+"question": "How many candy bars does he sell? Is it 60?",
+"opposite": "How many candy bars does he sell? Is it different from 60?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 60.0,
+"step": 2,
+"expr": "5*10",
+"value": 50.0,
+"flags": [],
+"gold_ancestor": true,
+"node_depth": 0,
+"wrong": "perturb"
+}
+],
+"random_subqs": [],
+"rationale": "",
+"augment": null,
+"has_tree": true,
+"tree_fix": true,
+"row_kind": "final",
+"problem_id": "gsm8k-train-3075",
+"node_status": "ok",
+"licence_class": "PERM",
+"licence": "MIT (openai/gsm8k)",
+"label_basis": "gold",
+"node_basis": "program",
+"pool_rank": 27,
+"n_steps": 3,
+"tree_source": "gsm8k_socratic_tf"
+},
+{
+"item_id": "gsm8k-train-6669",
+"source": "gsm8k_tf",
+"group": "gsm8k_tf/s6",
+"type": "choice",
+"prompt": "Question: Jackson is buying school supplies for his third grade class, which has 30 students. Each student needs 5 pens, 3 notebooks, 1 binder and 2 highlighters. Pens cost $0.50, notebooks cost $1.25, binders cost $4.25, and highlighters cost $0.75. If Jackson gets a $100 teacher discount, how much does he spend on school supplies?\nOptions:\nA) 360\nB) 90\nC) 380\nD) 80\nE) 260",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"gold_label": "E",
+"teacher": {
+"A": 0.0,
+"B": 0.0,
+"C": 0.0,
+"D": 0.0,
+"E": 1.0
+},
+"options": [
+"360",
+"90",
+"380",
+"80",
+"260"
+],
+"option_kinds": [
+"primary",
+"primary",
+"perturb_p1",
+"perturb_p2",
+"gold"
+],
+"recipe": "inter",
+"depth": 6,
+"dep_level": 1,
+"subqs": [
+{
+"id": "s1v",
+"question": "How much do pens cost? Is it 2.5?",
+"opposite": "How much do pens cost? Is it different from 2.5?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 2.5,
+"step": 1,
+"expr": "5*0.5",
+"value": 2.5,
+"flags": [],
+"gold_ancestor": false,
+"node_depth": 0
+},
+{
+"id": "s1n",
+"question": "How much do pens cost? Is it 1.5?",
+"opposite": "How much do pens cost? Is it different from 1.5?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 1.5,
+"step": 1,
+"expr": "5*0.5",
+"value": 2.5,
+"flags": [],
+"gold_ancestor": false,
+"node_depth": 0,
+"wrong": "perturb"
+},
+{
+"id": "s2v",
+"question": "How much do notebooks cost? Is it 3.75?",
+"opposite": "How much do notebooks cost? Is it different from 3.75?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 3.75,
+"step": 2,
+"expr": "3*1.25",
+"value": 3.75,
+"flags": [],
+"gold_ancestor": false,
+"node_depth": 0
+},
+{
+"id": "s2n",
+"question": "How much do notebooks cost? Is it 6.75?",
+"opposite": "How much do notebooks cost? Is it different from 6.75?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 6.75,
+"step": 2,
+"expr": "3*1.25",
+"value": 3.75,
+"flags": [],
+"gold_ancestor": false,
+"node_depth": 0,
+"wrong": "slip"
+},
+{
+"id": "s3v",
+"question": "How much do highlighters cost? Is it 1.5?",
+"opposite": "How much do highlighters cost? Is it different from 1.5?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 1.5,
+"step": 3,
+"expr": "2*0.75",
+"value": 1.5,
+"flags": [
+"ambiguous_q"
+],
+"gold_ancestor": false,
+"node_depth": 0
+},
+{
+"id": "s3n",
+"question": "How much do highlighters cost? Is it 0.5?",
+"opposite": "How much do highlighters cost? Is it different from 0.5?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 0.5,
+"step": 3,
+"expr": "2*0.75",
+"value": 1.5,
+"flags": [
+"ambiguous_q"
+],
+"gold_ancestor": false,
+"node_depth": 0,
+"wrong": "perturb"
+},
+{
+"id": "s4v",
+"question": "How much do pens, notebooks, highlighters and binders cost? Is it 12?",
+"opposite": "How much do pens, notebooks, highlighters and binders cost? Is it different from 12?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [
+"s1v",
+"s2v",
+"s3v"
+],
+"initial": null,
+"status": "direct",
+"probe": 12.0,
+"step": 4,
+"expr": "2.5+3.75+1.5+4.25",
+"value": 12.0,
+"flags": [],
+"gold_ancestor": false,
+"node_depth": 1
+},
+{
+"id": "s4n",
+"question": "How much do pens, notebooks, highlighters and binders cost? Is it 16?",
+"opposite": "How much do pens, notebooks, highlighters and binders cost? Is it different from 16?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [
+"s1v",
+"s2v",
+"s3v"
+],
+"initial": null,
+"status": "direct",
+"probe": 16.0,
+"step": 4,
+"expr": "2.5+3.75+1.5+4.25",
+"value": 12.0,
+"flags": [],
+"gold_ancestor": false,
+"node_depth": 1,
+"wrong": "perturb"
+},
+{
+"id": "s5v",
+"question": "How much do pens, notebooks, highlers and binders cost? Is it 360?",
+"opposite": "How much do pens, notebooks, highlers and binders cost? Is it different from 360?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 360.0,
+"step": 5,
+"expr": "30*12",
+"value": 360.0,
+"flags": [
+"parents_uncertain"
+],
+"gold_ancestor": true,
+"node_depth": 0
+},
+{
+"id": "s5n",
+"question": "How much do pens, notebooks, highlers and binders cost? Is it 310?",
+"opposite": "How much do pens, notebooks, highlers and binders cost? Is it different from 310?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 310.0,
+"step": 5,
+"expr": "30*12",
+"value": 360.0,
+"flags": [
+"parents_uncertain"
+],
+"gold_ancestor": true,
+"node_depth": 0,
+"wrong": "perturb"
+}
+],
+"random_subqs": [],
+"rationale": "",
+"augment": null,
+"has_tree": true,
+"tree_fix": true,
+"row_kind": "final",
+"problem_id": "gsm8k-train-6669",
+"node_status": "ok",
+"licence_class": "PERM",
+"licence": "MIT (openai/gsm8k)",
+"label_basis": "gold",
+"node_basis": "program",
+"pool_rank": 28,
+"n_steps": 6,
+"tree_source": "gsm8k_socratic_tf"
+},
+{
+"item_id": "gsm8k-train-3365",
+"source": "gsm8k_tf",
+"group": "gsm8k_tf/s3",
+"type": "choice",
+"prompt": "Question: John buys 3 dress shirts.  They sell for $20 each.  He also has to pay 10% tax on everything.  How much did he pay in total?\nOptions:\nA) 6\nB) 66\nC) 10\nD) 70\nE) 64",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"gold_label": "B",
+"teacher": {
+"A": 0.0,
+"B": 1.0,
+"C": 0.0,
+"D": 0.0,
+"E": 0.0
+},
+"options": [
+"6",
+"66",
+"10",
+"70",
+"64"
+],
+"option_kinds": [
+"primary",
+"gold",
+"primary",
+"perturb_gold",
+"perturb_gold"
+],
+"recipe": "inter",
+"depth": 3,
+"dep_level": 1,
+"subqs": [
+{
+"id": "s1v",
+"question": "How much did the shirts cost before tax? Is it 60?",
+"opposite": "How much did the shirts cost before tax? Is it different from 60?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 60.0,
+"step": 1,
+"expr": "3*20",
+"value": 60.0,
+"flags": [],
+"gold_ancestor": false,
+"node_depth": 0
+},
+{
+"id": "s1n",
+"question": "How much did the shirts cost before tax? Is it 57?",
+"opposite": "How much did the shirts cost before tax? Is it different from 57?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 57.0,
+"step": 1,
+"expr": "3*20",
+"value": 60.0,
+"flags": [],
+"gold_ancestor": false,
+"node_depth": 0,
+"wrong": "slip"
+},
+{
+"id": "s2v",
+"question": "How much did the tax cost? Is it 6?",
+"opposite": "How much did the tax cost? Is it different from 6?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 6.0,
+"step": 2,
+"expr": "60*.1",
+"value": 6.0,
+"flags": [
+"parents_uncertain"
+],
+"gold_ancestor": true,
+"node_depth": 0
+},
+{
+"id": "s2n",
+"question": "How much did the tax cost? Is it 60?",
+"opposite": "How much did the tax cost? Is it different from 60?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 60.0,
+"step": 2,
+"expr": "60*.1",
+"value": 6.0,
+"flags": [
+"parents_uncertain"
+],
+"gold_ancestor": true,
+"node_depth": 0,
+"wrong": "other"
+}
+],
+"random_subqs": [],
+"rationale": "",
+"augment": null,
+"has_tree": true,
+"tree_fix": true,
+"row_kind": "final",
+"problem_id": "gsm8k-train-3365",
+"node_status": "ok",
+"licence_class": "PERM",
+"licence": "MIT (openai/gsm8k)",
+"label_basis": "gold",
+"node_basis": "program",
+"pool_rank": 29,
+"n_steps": 3,
+"tree_source": "gsm8k_socratic_tf"
+},
+{
+"item_id": "gsm8k-train-263",
+"source": "gsm8k_tf",
+"group": "gsm8k_tf/s3",
+"type": "choice",
+"prompt": "Question: John plants a plot of 3 trees by 4 trees.  Each tree gives 5 apples.  He sells each apple for $.5.  How much money does he make, in dollars?\nOptions:\nA) 20\nB) 27\nC) 30\nD) 10\nE) 37",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"gold_label": "C",
+"teacher": {
+"A": 0.0,
+"B": 0.0,
+"C": 1.0,
+"D": 0.0,
+"E": 0.0
+},
+"options": [
+"20",
+"27",
+"30",
+"10",
+"37"
+],
+"option_kinds": [
+"perturb_p1",
+"primary",
+"gold",
+"primary",
+"perturb_p2"
+],
+"recipe": "inter",
+"depth": 3,
+"dep_level": 0,
+"subqs": [
+{
+"id": "s1v",
+"question": "How many trees does John plant? Is it 12?",
+"opposite": "How many trees does John plant? Is it different from 12?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 12.0,
+"step": 1,
+"expr": "3*4",
+"value": 12.0,
+"flags": [],
+"gold_ancestor": false,
+"node_depth": 0
+},
+{
+"id": "s1n",
+"question": "How many trees does John plant? Is it 15?",
+"opposite": "How many trees does John plant? Is it different from 15?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 15.0,
+"step": 1,
+"expr": "3*4",
+"value": 12.0,
+"flags": [],
+"gold_ancestor": false,
+"node_depth": 0,
+"wrong": "slip"
+},
+{
+"id": "s2v",
+"question": "How many apples does John plant? Is it 60?",
+"opposite": "How many apples does John plant? Is it different from 60?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 60.0,
+"step": 2,
+"expr": "12*5",
+"value": 60.0,
+"flags": [
+"parents_uncertain"
+],
+"gold_ancestor": false,
+"node_depth": 0
+},
+{
+"id": "s2n",
+"question": "How many apples does John plant? Is it 70?",
+"opposite": "How many apples does John plant? Is it different from 70?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 70.0,
+"step": 2,
+"expr": "12*5",
+"value": 60.0,
+"flags": [
+"parents_uncertain"
+],
+"gold_ancestor": false,
+"node_depth": 0,
+"wrong": "perturb"
+}
+],
+"random_subqs": [],
+"rationale": "",
+"augment": null,
+"has_tree": true,
+"tree_fix": true,
+"row_kind": "final",
+"problem_id": "gsm8k-train-263",
+"node_status": "ok",
+"licence_class": "PERM",
+"licence": "MIT (openai/gsm8k)",
+"label_basis": "gold",
+"node_basis": "program",
+"pool_rank": 32,
+"n_steps": 3,
+"tree_source": "gsm8k_socratic_tf"
+},
+{
+"item_id": "gsm8k-train-4379",
+"source": "gsm8k_tf",
+"group": "gsm8k_tf/s4",
+"type": "choice",
+"prompt": "Question: Jeremy is driving 600 miles to visit his parents. His average speed for this trip is 50 miles per hour. Every two hours of driving, he makes a rest stop for 15 minutes. His car gets 18 miles per gallon of gas, and his gas indicator comes on when he's used 15 gallons, at which point he stops to refill, which takes 10 minutes. How long, in minutes, does he take to get to his parents' house, if he starts out with a full tank of gas?\nOptions:\nA) 75\nB) 65\nC) 815\nD) 617\nE) 615",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"gold_label": "C",
+"teacher": {
+"A": 0.0,
+"B": 0.0,
+"C": 1.0,
+"D": 0.0,
+"E": 0.0
+},
+"options": [
+"75",
+"65",
+"815",
+"617",
+"615"
+],
+"option_kinds": [
+"primary",
+"perturb_p1",
+"gold",
+"perturb_p2",
+"primary"
+],
+"recipe": "inter",
+"depth": 4,
+"dep_level": 1,
+"subqs": [
+{
+"id": "s1v",
+"question": "How many minutes will Jeremy spend on rest stops? Is it 75?",
+"opposite": "How many minutes will Jeremy spend on rest stops? Is it different from 75?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 75.0,
+"step": 1,
+"expr": "5*15",
+"value": 75.0,
+"flags": [],
+"gold_ancestor": true,
+"node_depth": 0
+},
+{
+"id": "s1n",
+"question": "How many minutes will Jeremy spend on rest stops? Is it 20?",
+"opposite": "How many minutes will Jeremy spend on rest stops? Is it different from 20?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 20.0,
+"step": 1,
+"expr": "5*15",
+"value": 75.0,
+"flags": [],
+"gold_ancestor": true,
+"node_depth": 0,
+"wrong": "other"
+},
+{
+"id": "s2v",
+"question": "How many miles will Jeremy stop to refill? Is it 270?",
+"opposite": "How many miles will Jeremy stop to refill? Is it different from 270?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 270.0,
+"step": 2,
+"expr": "18*15",
+"value": 270.0,
+"flags": [],
+"gold_ancestor": false,
+"node_depth": 0
+},
+{
+"id": "s2n",
+"question": "How many miles will Jeremy stop to refill? Is it 288?",
+"opposite": "How many miles will Jeremy stop to refill? Is it different from 288?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 288.0,
+"step": 2,
+"expr": "18*15",
+"value": 270.0,
+"flags": [],
+"gold_ancestor": false,
+"node_depth": 0,
+"wrong": "slip"
+},
+{
+"id": "s3v",
+"question": "How many minutes will Jeremy spend refueling? Is it 20?",
+"opposite": "How many minutes will Jeremy spend refueling? Is it different from 20?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 20.0,
+"step": 3,
+"expr": "2*10",
+"value": 20.0,
+"flags": [],
+"gold_ancestor": true,
+"node_depth": 0
+},
+{
+"id": "s3n",
+"question": "How many minutes will Jeremy spend refueling? Is it 10?",
+"opposite": "How many minutes will Jeremy spend refueling? Is it different from 10?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 10.0,
+"step": 3,
+"expr": "2*10",
+"value": 20.0,
+"flags": [],
+"gold_ancestor": true,
+"node_depth": 0,
+"wrong": "perturb"
+}
+],
+"random_subqs": [],
+"rationale": "",
+"augment": null,
+"has_tree": true,
+"tree_fix": true,
+"row_kind": "final",
+"problem_id": "gsm8k-train-4379",
+"node_status": "ok",
+"licence_class": "PERM",
+"licence": "MIT (openai/gsm8k)",
+"label_basis": "gold",
+"node_basis": "program",
+"pool_rank": 34,
+"n_steps": 4,
+"tree_source": "gsm8k_socratic_tf"
+},
+{
+"item_id": "gsm8k-train-660",
+"source": "gsm8k_tf",
+"group": "gsm8k_tf/s4",
+"type": "choice",
+"prompt": "Question: Abe finds 4 ants on the sidewalk.  Beth sees 50% more ants than Abe.  CeCe watches twice as many ants as Abe.  Duke discovers half as many ants as Abe.  How many ants do the four children find together?\nOptions:\nA) 48\nB) 20\nC) 53\nD) 49\nE) 4",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"gold_label": "B",
+"teacher": {
+"A": 0.0,
+"B": 1.0,
+"C": 0.0,
+"D": 0.0,
+"E": 0.0
+},
+"options": [
+"48",
+"20",
+"53",
+"49",
+"4"
+],
+"option_kinds": [
+"partial_ab",
+"gold",
+"perturb_p1",
+"perturb_p1",
+"partial_ab"
+],
+"recipe": "qo2",
+"depth": 4,
+"dep_level": 1,
+"subqs": [
+{
+"id": "s1v",
+"question": "How many ants does Beth see? Is it 6?",
+"opposite": "How many ants does Beth see? Is it different from 6?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 6.0,
+"step": 1,
+"expr": "4+2",
+"value": 6.0,
+"flags": [],
+"gold_ancestor": true,
+"node_depth": 0
+},
+{
+"id": "s1n",
+"question": "How many ants does Beth see? Is it 10?",
+"opposite": "How many ants does Beth see? Is it different from 10?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 10.0,
+"step": 1,
+"expr": "4+2",
+"value": 6.0,
+"flags": [],
+"gold_ancestor": true,
+"node_depth": 0,
+"wrong": "perturb"
+},
+{
+"id": "s2v",
+"question": "How many ants does CeCe see? Is it 8?",
+"opposite": "How many ants does CeCe see? Is it different from 8?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 8.0,
+"step": 2,
+"expr": "4*2",
+"value": 8.0,
+"flags": [],
+"gold_ancestor": true,
+"node_depth": 0
+},
+{
+"id": "s2n",
+"question": "How many ants does CeCe see? Is it 2?",
+"opposite": "How many ants does CeCe see? Is it different from 2?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 2.0,
+"step": 2,
+"expr": "4*2",
+"value": 8.0,
+"flags": [],
+"gold_ancestor": true,
+"node_depth": 0,
+"wrong": "slip"
+},
+{
+"id": "s3v",
+"question": "How many ants does Duke see? Is it 2?",
+"opposite": "How many ants does Duke see? Is it different from 2?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 2.0,
+"step": 3,
+"expr": "4/2",
+"value": 2.0,
+"flags": [],
+"gold_ancestor": false,
+"node_depth": 0
+},
+{
+"id": "s3n",
+"question": "How many ants does Duke see? Is it 8?",
+"opposite": "How many ants does Duke see? Is it different from 8?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 8.0,
+"step": 3,
+"expr": "4/2",
+"value": 2.0,
+"flags": [],
+"gold_ancestor": false,
+"node_depth": 0,
+"wrong": "slip"
+}
+],
+"random_subqs": [],
+"rationale": "",
+"augment": null,
+"has_tree": true,
+"tree_fix": true,
+"row_kind": "final",
+"problem_id": "gsm8k-train-660",
+"node_status": "ok",
+"licence_class": "PERM",
+"licence": "MIT (openai/gsm8k)",
+"label_basis": "gold",
+"node_basis": "program",
+"pool_rank": 4767,
+"n_steps": 4,
+"tree_source": "gsm8k_socratic_tf"
+}
+],
+"examples": {
+"GFPQ": [
+[
+{
+"text": "Question: Quentavious has 5 nickels. His friend offers him some gum and will give him two pieces per nickel. If Quentavious leaves with 2 nickels, how many pieces of gum did he get?\nOptions:\nA) 6\nB) 10\nC) 4\nD) 3\nE) 30\n\nAnswer:",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"target": [
+1.0,
+0.0,
+0.0,
+0.0,
+0.0
+],
+"weight": 1.0,
+"kind": "final",
+"item_id": "gsm8k-train-3839",
+"gold": 0,
+"continuation": null
+},
+{
+"text": "Question: Quentavious has 5 nickels. His friend offers him some gum and will give him two pieces per nickel. If Quentavious leaves with 2 nickels, how many pieces of gum did he get?\n\nIntermediate question: How many nickels did Quentavious spend? Is it 3?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+9.999999999998899e-05
+],
+"weight": 0.5,
+"kind": "subq",
+"item_id": "gsm8k-train-3839",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Quentavious has 5 nickels. His friend offers him some gum and will give him two pieces per nickel. If Quentavious leaves with 2 nickels, how many pieces of gum did he get?\n\nIntermediate question: How many nickels did Quentavious spend? Is it 2?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.5,
+"kind": "subq",
+"item_id": "gsm8k-train-3839",
+"gold": null,
+"continuation": null
+}
+],
+[
+{
+"text": "Question: James is running a fundraiser selling candy bars.  Each box has 10 candy bars in it.  He sells 5 boxes.  He sells each candy bar for $1.50 and buys each bar for $1. How much profit does he make from these sales?\nOptions:\nA) 10\nB) 110\nC) 35\nD) 25\nE) 5\n\nAnswer:",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"target": [
+0.0,
+0.0,
+0.0,
+1.0,
+0.0
+],
+"weight": 1.0,
+"kind": "final",
+"item_id": "gsm8k-train-3075",
+"gold": 3,
+"continuation": null
+},
+{
+"text": "Question: James is running a fundraiser selling candy bars.  Each box has 10 candy bars in it.  He sells 5 boxes.  He sells each candy bar for $1.50 and buys each bar for $1. How much profit does he make from these sales?\n\nIntermediate question: How much does he make from each candy bar? Is it 0.5?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+9.999999999998899e-05,
+0.9999
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-3075",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: James is running a fundraiser selling candy bars.  Each box has 10 candy bars in it.  He sells 5 boxes.  He sells each candy bar for $1.50 and buys each bar for $1. How much profit does he make from these sales?\n\nIntermediate question: How much does he make from each candy bar? Is it 1.5?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.0001,
+0.9999
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-3075",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: James is running a fundraiser selling candy bars.  Each box has 10 candy bars in it.  He sells 5 boxes.  He sells each candy bar for $1.50 and buys each bar for $1. How much profit does he make from these sales?\n\nIntermediate question: How many candy bars does he sell? Is it 50?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+9.999999999998899e-05
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-3075",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: James is running a fundraiser selling candy bars.  Each box has 10 candy bars in it.  He sells 5 boxes.  He sells each candy bar for $1.50 and buys each bar for $1. How much profit does he make from these sales?\n\nIntermediate question: How many candy bars does he sell? Is it 60?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.0001,
+0.9999
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-3075",
+"gold": null,
+"continuation": null
+}
+],
+[
+{
+"text": "Question: Jackson is buying school supplies for his third grade class, which has 30 students. Each student needs 5 pens, 3 notebooks, 1 binder and 2 highlighters. Pens cost $0.50, notebooks cost $1.25, binders cost $4.25, and highlighters cost $0.75. If Jackson gets a $100 teacher discount, how much does he spend on school supplies?\nOptions:\nA) 360\nB) 90\nC) 380\nD) 80\nE) 260\n\nAnswer:",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"target": [
+0.0,
+0.0,
+0.0,
+0.0,
+1.0
+],
+"weight": 1.0,
+"kind": "final",
+"item_id": "gsm8k-train-6669",
+"gold": 4,
+"continuation": null
+},
+{
+"text": "Question: Jackson is buying school supplies for his third grade class, which has 30 students. Each student needs 5 pens, 3 notebooks, 1 binder and 2 highlighters. Pens cost $0.50, notebooks cost $1.25, binders cost $4.25, and highlighters cost $0.75. If Jackson gets a $100 teacher discount, how much does he spend on school supplies?\n\nIntermediate question: How much do pens cost? Is it 2.5?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+9.999999999998899e-05,
+0.9999
+],
+"weight": 0.1,
+"kind": "subq",
+"item_id": "gsm8k-train-6669",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jackson is buying school supplies for his third grade class, which has 30 students. Each student needs 5 pens, 3 notebooks, 1 binder and 2 highlighters. Pens cost $0.50, notebooks cost $1.25, binders cost $4.25, and highlighters cost $0.75. If Jackson gets a $100 teacher discount, how much does he spend on school supplies?\n\nIntermediate question: How much do pens cost? Is it 1.5?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.1,
+"kind": "subq",
+"item_id": "gsm8k-train-6669",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jackson is buying school supplies for his third grade class, which has 30 students. Each student needs 5 pens, 3 notebooks, 1 binder and 2 highlighters. Pens cost $0.50, notebooks cost $1.25, binders cost $4.25, and highlighters cost $0.75. If Jackson gets a $100 teacher discount, how much does he spend on school supplies?\n\nIntermediate question: How much do notebooks cost? Is it 3.75?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+9.999999999998899e-05
+],
+"weight": 0.1,
+"kind": "subq",
+"item_id": "gsm8k-train-6669",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jackson is buying school supplies for his third grade class, which has 30 students. Each student needs 5 pens, 3 notebooks, 1 binder and 2 highlighters. Pens cost $0.50, notebooks cost $1.25, binders cost $4.25, and highlighters cost $0.75. If Jackson gets a $100 teacher discount, how much does he spend on school supplies?\n\nIntermediate question: How much do notebooks cost? Is it 6.75?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.0001,
+0.9999
+],
+"weight": 0.1,
+"kind": "subq",
+"item_id": "gsm8k-train-6669",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jackson is buying school supplies for his third grade class, which has 30 students. Each student needs 5 pens, 3 notebooks, 1 binder and 2 highlighters. Pens cost $0.50, notebooks cost $1.25, binders cost $4.25, and highlighters cost $0.75. If Jackson gets a $100 teacher discount, how much does he spend on school supplies?\n\nIntermediate question: How much do highlighters cost? Is it 1.5?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+9.999999999998899e-05
+],
+"weight": 0.1,
+"kind": "subq",
+"item_id": "gsm8k-train-6669",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jackson is buying school supplies for his third grade class, which has 30 students. Each student needs 5 pens, 3 notebooks, 1 binder and 2 highlighters. Pens cost $0.50, notebooks cost $1.25, binders cost $4.25, and highlighters cost $0.75. If Jackson gets a $100 teacher discount, how much does he spend on school supplies?\n\nIntermediate question: How much do highlighters cost? Is it 0.5?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.1,
+"kind": "subq",
+"item_id": "gsm8k-train-6669",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jackson is buying school supplies for his third grade class, which has 30 students. Each student needs 5 pens, 3 notebooks, 1 binder and 2 highlighters. Pens cost $0.50, notebooks cost $1.25, binders cost $4.25, and highlighters cost $0.75. If Jackson gets a $100 teacher discount, how much does he spend on school supplies?\n\nIntermediate question: How much do pens, notebooks, highlighters and binders cost? Is it 12?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+9.999999999998899e-05
+],
+"weight": 0.1,
+"kind": "subq",
+"item_id": "gsm8k-train-6669",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jackson is buying school supplies for his third grade class, which has 30 students. Each student needs 5 pens, 3 notebooks, 1 binder and 2 highlighters. Pens cost $0.50, notebooks cost $1.25, binders cost $4.25, and highlighters cost $0.75. If Jackson gets a $100 teacher discount, how much does he spend on school supplies?\n\nIntermediate question: How much do pens, notebooks, highlighters and binders cost? Is it 16?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.1,
+"kind": "subq",
+"item_id": "gsm8k-train-6669",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jackson is buying school supplies for his third grade class, which has 30 students. Each student needs 5 pens, 3 notebooks, 1 binder and 2 highlighters. Pens cost $0.50, notebooks cost $1.25, binders cost $4.25, and highlighters cost $0.75. If Jackson gets a $100 teacher discount, how much does he spend on school supplies?\n\nIntermediate question: How much do pens, notebooks, highlers and binders cost? Is it 360?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+9.999999999998899e-05,
+0.9999
+],
+"weight": 0.1,
+"kind": "subq",
+"item_id": "gsm8k-train-6669",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jackson is buying school supplies for his third grade class, which has 30 students. Each student needs 5 pens, 3 notebooks, 1 binder and 2 highlighters. Pens cost $0.50, notebooks cost $1.25, binders cost $4.25, and highlighters cost $0.75. If Jackson gets a $100 teacher discount, how much does he spend on school supplies?\n\nIntermediate question: How much do pens, notebooks, highlers and binders cost? Is it 310?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.1,
+"kind": "subq",
+"item_id": "gsm8k-train-6669",
+"gold": null,
+"continuation": null
+}
+],
+[
+{
+"text": "Question: John buys 3 dress shirts.  They sell for $20 each.  He also has to pay 10% tax on everything.  How much did he pay in total?\nOptions:\nA) 6\nB) 66\nC) 10\nD) 70\nE) 64\n\nAnswer:",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"target": [
+0.0,
+1.0,
+0.0,
+0.0,
+0.0
+],
+"weight": 1.0,
+"kind": "final",
+"item_id": "gsm8k-train-3365",
+"gold": 1,
+"continuation": null
+},
+{
+"text": "Question: John buys 3 dress shirts.  They sell for $20 each.  He also has to pay 10% tax on everything.  How much did he pay in total?\n\nIntermediate question: How much did the shirts cost before tax? Is it 60?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+9.999999999998899e-05,
+0.9999
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-3365",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: John buys 3 dress shirts.  They sell for $20 each.  He also has to pay 10% tax on everything.  How much did he pay in total?\n\nIntermediate question: How much did the shirts cost before tax? Is it 57?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.0001,
+0.9999
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-3365",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: John buys 3 dress shirts.  They sell for $20 each.  He also has to pay 10% tax on everything.  How much did he pay in total?\n\nIntermediate question: How much did the tax cost? Is it 6?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+9.999999999998899e-05,
+0.9999
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-3365",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: John buys 3 dress shirts.  They sell for $20 each.  He also has to pay 10% tax on everything.  How much did he pay in total?\n\nIntermediate question: How much did the tax cost? Is it 60?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-3365",
+"gold": null,
+"continuation": null
+}
+],
+[
+{
+"text": "Question: John plants a plot of 3 trees by 4 trees.  Each tree gives 5 apples.  He sells each apple for $.5.  How much money does he make, in dollars?\nOptions:\nA) 20\nB) 27\nC) 30\nD) 10\nE) 37\n\nAnswer:",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"target": [
+0.0,
+0.0,
+1.0,
+0.0,
+0.0
+],
+"weight": 1.0,
+"kind": "final",
+"item_id": "gsm8k-train-263",
+"gold": 2,
+"continuation": null
+},
+{
+"text": "Question: John plants a plot of 3 trees by 4 trees.  Each tree gives 5 apples.  He sells each apple for $.5.  How much money does he make, in dollars?\n\nIntermediate question: How many trees does John plant? Is it 12?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+9.999999999998899e-05,
+0.9999
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-263",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: John plants a plot of 3 trees by 4 trees.  Each tree gives 5 apples.  He sells each apple for $.5.  How much money does he make, in dollars?\n\nIntermediate question: How many trees does John plant? Is it 15?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.0001,
+0.9999
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-263",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: John plants a plot of 3 trees by 4 trees.  Each tree gives 5 apples.  He sells each apple for $.5.  How much money does he make, in dollars?\n\nIntermediate question: How many apples does John plant? Is it 60?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+9.999999999998899e-05,
+0.9999
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-263",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: John plants a plot of 3 trees by 4 trees.  Each tree gives 5 apples.  He sells each apple for $.5.  How much money does he make, in dollars?\n\nIntermediate question: How many apples does John plant? Is it 70?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.0001,
+0.9999
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-263",
+"gold": null,
+"continuation": null
+}
+],
+[
+{
+"text": "Question: Jeremy is driving 600 miles to visit his parents. His average speed for this trip is 50 miles per hour. Every two hours of driving, he makes a rest stop for 15 minutes. His car gets 18 miles per gallon of gas, and his gas indicator comes on when he's used 15 gallons, at which point he stops to refill, which takes 10 minutes. How long, in minutes, does he take to get to his parents' house, if he starts out with a full tank of gas?\nOptions:\nA) 75\nB) 65\nC) 815\nD) 617\nE) 615\n\nAnswer:",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"target": [
+0.0,
+0.0,
+1.0,
+0.0,
+0.0
+],
+"weight": 1.0,
+"kind": "final",
+"item_id": "gsm8k-train-4379",
+"gold": 2,
+"continuation": null
+},
+{
+"text": "Question: Jeremy is driving 600 miles to visit his parents. His average speed for this trip is 50 miles per hour. Every two hours of driving, he makes a rest stop for 15 minutes. His car gets 18 miles per gallon of gas, and his gas indicator comes on when he's used 15 gallons, at which point he stops to refill, which takes 10 minutes. How long, in minutes, does he take to get to his parents' house, if he starts out with a full tank of gas?\n\nIntermediate question: How many minutes will Jeremy spend on rest stops? Is it 75?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+9.999999999998899e-05
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-4379",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jeremy is driving 600 miles to visit his parents. His average speed for this trip is 50 miles per hour. Every two hours of driving, he makes a rest stop for 15 minutes. His car gets 18 miles per gallon of gas, and his gas indicator comes on when he's used 15 gallons, at which point he stops to refill, which takes 10 minutes. How long, in minutes, does he take to get to his parents' house, if he starts out with a full tank of gas?\n\nIntermediate question: How many minutes will Jeremy spend on rest stops? Is it 20?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-4379",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jeremy is driving 600 miles to visit his parents. His average speed for this trip is 50 miles per hour. Every two hours of driving, he makes a rest stop for 15 minutes. His car gets 18 miles per gallon of gas, and his gas indicator comes on when he's used 15 gallons, at which point he stops to refill, which takes 10 minutes. How long, in minutes, does he take to get to his parents' house, if he starts out with a full tank of gas?\n\nIntermediate question: How many miles will Jeremy stop to refill? Is it 270?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+9.999999999998899e-05,
+0.9999
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-4379",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jeremy is driving 600 miles to visit his parents. His average speed for this trip is 50 miles per hour. Every two hours of driving, he makes a rest stop for 15 minutes. His car gets 18 miles per gallon of gas, and his gas indicator comes on when he's used 15 gallons, at which point he stops to refill, which takes 10 minutes. How long, in minutes, does he take to get to his parents' house, if he starts out with a full tank of gas?\n\nIntermediate question: How many miles will Jeremy stop to refill? Is it 288?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-4379",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jeremy is driving 600 miles to visit his parents. His average speed for this trip is 50 miles per hour. Every two hours of driving, he makes a rest stop for 15 minutes. His car gets 18 miles per gallon of gas, and his gas indicator comes on when he's used 15 gallons, at which point he stops to refill, which takes 10 minutes. How long, in minutes, does he take to get to his parents' house, if he starts out with a full tank of gas?\n\nIntermediate question: How many minutes will Jeremy spend refueling? Is it 20?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+9.999999999998899e-05,
+0.9999
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-4379",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jeremy is driving 600 miles to visit his parents. His average speed for this trip is 50 miles per hour. Every two hours of driving, he makes a rest stop for 15 minutes. His car gets 18 miles per gallon of gas, and his gas indicator comes on when he's used 15 gallons, at which point he stops to refill, which takes 10 minutes. How long, in minutes, does he take to get to his parents' house, if he starts out with a full tank of gas?\n\nIntermediate question: How many minutes will Jeremy spend refueling? Is it 10?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-4379",
+"gold": null,
+"continuation": null
+}
+],
+[
+{
+"text": "Question: Abe finds 4 ants on the sidewalk.  Beth sees 50% more ants than Abe.  CeCe watches twice as many ants as Abe.  Duke discovers half as many ants as Abe.  How many ants do the four children find together?\nOptions:\nA) 48\nB) 20\nC) 53\nD) 49\nE) 4\n\nAnswer:",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"target": [
+0.0,
+1.0,
+0.0,
+0.0,
+0.0
+],
+"weight": 1.0,
+"kind": "final",
+"item_id": "gsm8k-train-660",
+"gold": 1,
+"continuation": null
+},
+{
+"text": "Question: Abe finds 4 ants on the sidewalk.  Beth sees 50% more ants than Abe.  CeCe watches twice as many ants as Abe.  Duke discovers half as many ants as Abe.  How many ants do the four children find together?\n\nIntermediate question: How many ants does Beth see? Is it 6?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+9.999999999998899e-05,
+0.9999
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-660",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Abe finds 4 ants on the sidewalk.  Beth sees 50% more ants than Abe.  CeCe watches twice as many ants as Abe.  Duke discovers half as many ants as Abe.  How many ants do the four children find together?\n\nIntermediate question: How many ants does Beth see? Is it 10?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-660",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Abe finds 4 ants on the sidewalk.  Beth sees 50% more ants than Abe.  CeCe watches twice as many ants as Abe.  Duke discovers half as many ants as Abe.  How many ants do the four children find together?\n\nIntermediate question: How many ants does CeCe see? Is it 8?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+9.999999999998899e-05,
+0.9999
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-660",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Abe finds 4 ants on the sidewalk.  Beth sees 50% more ants than Abe.  CeCe watches twice as many ants as Abe.  Duke discovers half as many ants as Abe.  How many ants do the four children find together?\n\nIntermediate question: How many ants does CeCe see? Is it 2?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-660",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Abe finds 4 ants on the sidewalk.  Beth sees 50% more ants than Abe.  CeCe watches twice as many ants as Abe.  Duke discovers half as many ants as Abe.  How many ants do the four children find together?\n\nIntermediate question: How many ants does Duke see? Is it 2?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+9.999999999998899e-05
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-660",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Abe finds 4 ants on the sidewalk.  Beth sees 50% more ants than Abe.  CeCe watches twice as many ants as Abe.  Duke discovers half as many ants as Abe.  How many ants do the four children find together?\n\nIntermediate question: How many ants does Duke see? Is it 8?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-660",
+"gold": null,
+"continuation": null
+}
+]
+],
+"GFPS": [
+[
+{
+"text": "Question: James is running a fundraiser selling candy bars.  Each box has 10 candy bars in it.  He sells 5 boxes.  He sells each candy bar for $1.50 and buys each bar for $1. How much profit does he make from these sales?\nOptions:\nA) 10\nB) 110\nC) 35\nD) 25\nE) 5\n\nAnswer:",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"target": [
+0.0,
+0.0,
+0.0,
+1.0,
+0.0
+],
+"weight": 1.0,
+"kind": "final",
+"item_id": "gsm8k-train-3075",
+"gold": 3,
+"continuation": null
+},
+{
+"text": "James is running a fundraiser selling candy bars.  Each box has 10 candy bars in it.  He sells 5 boxes.  He sells each candy bar for $1.50 and buys each bar for $1.\n\nIntermediate question: How much does he make from each candy bar? Is it 0.5?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+9.999999999998899e-05
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-3075",
+"gold": null,
+"continuation": null
+},
+{
+"text": "James is running a fundraiser selling candy bars.  Each box has 10 candy bars in it.  He sells 5 boxes.  He sells each candy bar for $1.50 and buys each bar for $1.\n\nIntermediate question: How much does he make from each candy bar? Is it 1.5?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-3075",
+"gold": null,
+"continuation": null
+},
+{
+"text": "James is running a fundraiser selling candy bars.  Each box has 10 candy bars in it.  He sells 5 boxes.  He sells each candy bar for $1.50 and buys each bar for $1.\n\nIntermediate question: How many candy bars does he sell? Is it 50?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+9.999999999998899e-05,
+0.9999
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-3075",
+"gold": null,
+"continuation": null
+},
+{
+"text": "James is running a fundraiser selling candy bars.  Each box has 10 candy bars in it.  He sells 5 boxes.  He sells each candy bar for $1.50 and buys each bar for $1.\n\nIntermediate question: How many candy bars does he sell? Is it 60?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.0001,
+0.9999
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-3075",
+"gold": null,
+"continuation": null
+}
+],
+[
+{
+"text": "Question: John buys 3 dress shirts.  They sell for $20 each.  He also has to pay 10% tax on everything.  How much did he pay in total?\nOptions:\nA) 6\nB) 66\nC) 10\nD) 70\nE) 64\n\nAnswer:",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"target": [
+0.0,
+1.0,
+0.0,
+0.0,
+0.0
+],
+"weight": 1.0,
+"kind": "final",
+"item_id": "gsm8k-train-3365",
+"gold": 1,
+"continuation": null
+},
+{
+"text": "John buys 3 dress shirts.  They sell for $20 each.  He also has to pay 10% tax on everything.\n\nIntermediate question: How much did the shirts cost before tax? Is it 60?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+9.999999999998899e-05
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-3365",
+"gold": null,
+"continuation": null
+},
+{
+"text": "John buys 3 dress shirts.  They sell for $20 each.  He also has to pay 10% tax on everything.\n\nIntermediate question: How much did the shirts cost before tax? Is it 57?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.0001,
+0.9999
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-3365",
+"gold": null,
+"continuation": null
+},
+{
+"text": "John buys 3 dress shirts.  They sell for $20 each.  He also has to pay 10% tax on everything.\n\nIntermediate question: How much did the tax cost? Is it 6?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+9.999999999998899e-05
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-3365",
+"gold": null,
+"continuation": null
+},
+{
+"text": "John buys 3 dress shirts.  They sell for $20 each.  He also has to pay 10% tax on everything.\n\nIntermediate question: How much did the tax cost? Is it 60?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-3365",
+"gold": null,
+"continuation": null
+}
+]
+],
+"GFP": [
+[
+{
+"text": "Question: Quentavious has 5 nickels. His friend offers him some gum and will give him two pieces per nickel. If Quentavious leaves with 2 nickels, how many pieces of gum did he get?\nOptions:\nA) 6\nB) 10\nC) 4\nD) 3\nE) 30\n\nAnswer:",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"target": [
+1.0,
+0.0,
+0.0,
+0.0,
+0.0
+],
+"weight": 1.0,
+"kind": "final",
+"item_id": "gsm8k-train-3839",
+"gold": 0,
+"continuation": null
+},
+{
+"text": "Question: Quentavious has 5 nickels. His friend offers him some gum and will give him two pieces per nickel. If Quentavious leaves with 2 nickels, how many pieces of gum did he get?\nOptions:\nA) 6\nB) 10\nC) 4\nD) 3\nE) 30\n\nIntermediate question: How many nickels did Quentavious spend? Is it 3?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+9.999999999998899e-05
+],
+"weight": 0.5,
+"kind": "subq",
+"item_id": "gsm8k-train-3839",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Quentavious has 5 nickels. His friend offers him some gum and will give him two pieces per nickel. If Quentavious leaves with 2 nickels, how many pieces of gum did he get?\nOptions:\nA) 6\nB) 10\nC) 4\nD) 3\nE) 30\n\nIntermediate question: How many nickels did Quentavious spend? Is it 2?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.5,
+"kind": "subq",
+"item_id": "gsm8k-train-3839",
+"gold": null,
+"continuation": null
+}
+],
+[
+{
+"text": "Question: James is running a fundraiser selling candy bars.  Each box has 10 candy bars in it.  He sells 5 boxes.  He sells each candy bar for $1.50 and buys each bar for $1. How much profit does he make from these sales?\nOptions:\nA) 10\nB) 110\nC) 35\nD) 25\nE) 5\n\nAnswer:",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"target": [
+0.0,
+0.0,
+0.0,
+1.0,
+0.0
+],
+"weight": 1.0,
+"kind": "final",
+"item_id": "gsm8k-train-3075",
+"gold": 3,
+"continuation": null
+},
+{
+"text": "Question: James is running a fundraiser selling candy bars.  Each box has 10 candy bars in it.  He sells 5 boxes.  He sells each candy bar for $1.50 and buys each bar for $1. How much profit does he make from these sales?\nOptions:\nA) 10\nB) 110\nC) 35\nD) 25\nE) 5\n\nIntermediate question: How much does he make from each candy bar? Is it 0.5?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+9.999999999998899e-05,
+0.9999
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-3075",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: James is running a fundraiser selling candy bars.  Each box has 10 candy bars in it.  He sells 5 boxes.  He sells each candy bar for $1.50 and buys each bar for $1. How much profit does he make from these sales?\nOptions:\nA) 10\nB) 110\nC) 35\nD) 25\nE) 5\n\nIntermediate question: How much does he make from each candy bar? Is it 1.5?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.0001,
+0.9999
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-3075",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: James is running a fundraiser selling candy bars.  Each box has 10 candy bars in it.  He sells 5 boxes.  He sells each candy bar for $1.50 and buys each bar for $1. How much profit does he make from these sales?\nOptions:\nA) 10\nB) 110\nC) 35\nD) 25\nE) 5\n\nIntermediate question: How many candy bars does he sell? Is it 50?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+9.999999999998899e-05
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-3075",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: James is running a fundraiser selling candy bars.  Each box has 10 candy bars in it.  He sells 5 boxes.  He sells each candy bar for $1.50 and buys each bar for $1. How much profit does he make from these sales?\nOptions:\nA) 10\nB) 110\nC) 35\nD) 25\nE) 5\n\nIntermediate question: How many candy bars does he sell? Is it 60?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.0001,
+0.9999
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-3075",
+"gold": null,
+"continuation": null
+}
+],
+[
+{
+"text": "Question: Jackson is buying school supplies for his third grade class, which has 30 students. Each student needs 5 pens, 3 notebooks, 1 binder and 2 highlighters. Pens cost $0.50, notebooks cost $1.25, binders cost $4.25, and highlighters cost $0.75. If Jackson gets a $100 teacher discount, how much does he spend on school supplies?\nOptions:\nA) 360\nB) 90\nC) 380\nD) 80\nE) 260\n\nAnswer:",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"target": [
+0.0,
+0.0,
+0.0,
+0.0,
+1.0
+],
+"weight": 1.0,
+"kind": "final",
+"item_id": "gsm8k-train-6669",
+"gold": 4,
+"continuation": null
+},
+{
+"text": "Question: Jackson is buying school supplies for his third grade class, which has 30 students. Each student needs 5 pens, 3 notebooks, 1 binder and 2 highlighters. Pens cost $0.50, notebooks cost $1.25, binders cost $4.25, and highlighters cost $0.75. If Jackson gets a $100 teacher discount, how much does he spend on school supplies?\nOptions:\nA) 360\nB) 90\nC) 380\nD) 80\nE) 260\n\nIntermediate question: How much do pens cost? Is it 2.5?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+9.999999999998899e-05,
+0.9999
+],
+"weight": 0.1,
+"kind": "subq",
+"item_id": "gsm8k-train-6669",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jackson is buying school supplies for his third grade class, which has 30 students. Each student needs 5 pens, 3 notebooks, 1 binder and 2 highlighters. Pens cost $0.50, notebooks cost $1.25, binders cost $4.25, and highlighters cost $0.75. If Jackson gets a $100 teacher discount, how much does he spend on school supplies?\nOptions:\nA) 360\nB) 90\nC) 380\nD) 80\nE) 260\n\nIntermediate question: How much do pens cost? Is it 1.5?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.1,
+"kind": "subq",
+"item_id": "gsm8k-train-6669",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jackson is buying school supplies for his third grade class, which has 30 students. Each student needs 5 pens, 3 notebooks, 1 binder and 2 highlighters. Pens cost $0.50, notebooks cost $1.25, binders cost $4.25, and highlighters cost $0.75. If Jackson gets a $100 teacher discount, how much does he spend on school supplies?\nOptions:\nA) 360\nB) 90\nC) 380\nD) 80\nE) 260\n\nIntermediate question: How much do notebooks cost? Is it 3.75?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+9.999999999998899e-05
+],
+"weight": 0.1,
+"kind": "subq",
+"item_id": "gsm8k-train-6669",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jackson is buying school supplies for his third grade class, which has 30 students. Each student needs 5 pens, 3 notebooks, 1 binder and 2 highlighters. Pens cost $0.50, notebooks cost $1.25, binders cost $4.25, and highlighters cost $0.75. If Jackson gets a $100 teacher discount, how much does he spend on school supplies?\nOptions:\nA) 360\nB) 90\nC) 380\nD) 80\nE) 260\n\nIntermediate question: How much do notebooks cost? Is it 6.75?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.0001,
+0.9999
+],
+"weight": 0.1,
+"kind": "subq",
+"item_id": "gsm8k-train-6669",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jackson is buying school supplies for his third grade class, which has 30 students. Each student needs 5 pens, 3 notebooks, 1 binder and 2 highlighters. Pens cost $0.50, notebooks cost $1.25, binders cost $4.25, and highlighters cost $0.75. If Jackson gets a $100 teacher discount, how much does he spend on school supplies?\nOptions:\nA) 360\nB) 90\nC) 380\nD) 80\nE) 260\n\nIntermediate question: How much do highlighters cost? Is it 1.5?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+9.999999999998899e-05
+],
+"weight": 0.1,
+"kind": "subq",
+"item_id": "gsm8k-train-6669",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jackson is buying school supplies for his third grade class, which has 30 students. Each student needs 5 pens, 3 notebooks, 1 binder and 2 highlighters. Pens cost $0.50, notebooks cost $1.25, binders cost $4.25, and highlighters cost $0.75. If Jackson gets a $100 teacher discount, how much does he spend on school supplies?\nOptions:\nA) 360\nB) 90\nC) 380\nD) 80\nE) 260\n\nIntermediate question: How much do highlighters cost? Is it 0.5?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.1,
+"kind": "subq",
+"item_id": "gsm8k-train-6669",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jackson is buying school supplies for his third grade class, which has 30 students. Each student needs 5 pens, 3 notebooks, 1 binder and 2 highlighters. Pens cost $0.50, notebooks cost $1.25, binders cost $4.25, and highlighters cost $0.75. If Jackson gets a $100 teacher discount, how much does he spend on school supplies?\nOptions:\nA) 360\nB) 90\nC) 380\nD) 80\nE) 260\n\nIntermediate question: How much do pens, notebooks, highlighters and binders cost? Is it 12?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+9.999999999998899e-05
+],
+"weight": 0.1,
+"kind": "subq",
+"item_id": "gsm8k-train-6669",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jackson is buying school supplies for his third grade class, which has 30 students. Each student needs 5 pens, 3 notebooks, 1 binder and 2 highlighters. Pens cost $0.50, notebooks cost $1.25, binders cost $4.25, and highlighters cost $0.75. If Jackson gets a $100 teacher discount, how much does he spend on school supplies?\nOptions:\nA) 360\nB) 90\nC) 380\nD) 80\nE) 260\n\nIntermediate question: How much do pens, notebooks, highlighters and binders cost? Is it 16?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.1,
+"kind": "subq",
+"item_id": "gsm8k-train-6669",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jackson is buying school supplies for his third grade class, which has 30 students. Each student needs 5 pens, 3 notebooks, 1 binder and 2 highlighters. Pens cost $0.50, notebooks cost $1.25, binders cost $4.25, and highlighters cost $0.75. If Jackson gets a $100 teacher discount, how much does he spend on school supplies?\nOptions:\nA) 360\nB) 90\nC) 380\nD) 80\nE) 260\n\nIntermediate question: How much do pens, notebooks, highlers and binders cost? Is it 360?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+9.999999999998899e-05,
+0.9999
+],
+"weight": 0.1,
+"kind": "subq",
+"item_id": "gsm8k-train-6669",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jackson is buying school supplies for his third grade class, which has 30 students. Each student needs 5 pens, 3 notebooks, 1 binder and 2 highlighters. Pens cost $0.50, notebooks cost $1.25, binders cost $4.25, and highlighters cost $0.75. If Jackson gets a $100 teacher discount, how much does he spend on school supplies?\nOptions:\nA) 360\nB) 90\nC) 380\nD) 80\nE) 260\n\nIntermediate question: How much do pens, notebooks, highlers and binders cost? Is it 310?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.1,
+"kind": "subq",
+"item_id": "gsm8k-train-6669",
+"gold": null,
+"continuation": null
+}
+],
+[
+{
+"text": "Question: John buys 3 dress shirts.  They sell for $20 each.  He also has to pay 10% tax on everything.  How much did he pay in total?\nOptions:\nA) 6\nB) 66\nC) 10\nD) 70\nE) 64\n\nAnswer:",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"target": [
+0.0,
+1.0,
+0.0,
+0.0,
+0.0
+],
+"weight": 1.0,
+"kind": "final",
+"item_id": "gsm8k-train-3365",
+"gold": 1,
+"continuation": null
+},
+{
+"text": "Question: John buys 3 dress shirts.  They sell for $20 each.  He also has to pay 10% tax on everything.  How much did he pay in total?\nOptions:\nA) 6\nB) 66\nC) 10\nD) 70\nE) 64\n\nIntermediate question: How much did the shirts cost before tax? Is it 60?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+9.999999999998899e-05,
+0.9999
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-3365",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: John buys 3 dress shirts.  They sell for $20 each.  He also has to pay 10% tax on everything.  How much did he pay in total?\nOptions:\nA) 6\nB) 66\nC) 10\nD) 70\nE) 64\n\nIntermediate question: How much did the shirts cost before tax? Is it 57?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.0001,
+0.9999
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-3365",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: John buys 3 dress shirts.  They sell for $20 each.  He also has to pay 10% tax on everything.  How much did he pay in total?\nOptions:\nA) 6\nB) 66\nC) 10\nD) 70\nE) 64\n\nIntermediate question: How much did the tax cost? Is it 6?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+9.999999999998899e-05,
+0.9999
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-3365",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: John buys 3 dress shirts.  They sell for $20 each.  He also has to pay 10% tax on everything.  How much did he pay in total?\nOptions:\nA) 6\nB) 66\nC) 10\nD) 70\nE) 64\n\nIntermediate question: How much did the tax cost? Is it 60?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-3365",
+"gold": null,
+"continuation": null
+}
+],
+[
+{
+"text": "Question: John plants a plot of 3 trees by 4 trees.  Each tree gives 5 apples.  He sells each apple for $.5.  How much money does he make, in dollars?\nOptions:\nA) 20\nB) 27\nC) 30\nD) 10\nE) 37\n\nAnswer:",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"target": [
+0.0,
+0.0,
+1.0,
+0.0,
+0.0
+],
+"weight": 1.0,
+"kind": "final",
+"item_id": "gsm8k-train-263",
+"gold": 2,
+"continuation": null
+},
+{
+"text": "Question: John plants a plot of 3 trees by 4 trees.  Each tree gives 5 apples.  He sells each apple for $.5.  How much money does he make, in dollars?\nOptions:\nA) 20\nB) 27\nC) 30\nD) 10\nE) 37\n\nIntermediate question: How many trees does John plant? Is it 12?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+9.999999999998899e-05,
+0.9999
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-263",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: John plants a plot of 3 trees by 4 trees.  Each tree gives 5 apples.  He sells each apple for $.5.  How much money does he make, in dollars?\nOptions:\nA) 20\nB) 27\nC) 30\nD) 10\nE) 37\n\nIntermediate question: How many trees does John plant? Is it 15?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.0001,
+0.9999
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-263",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: John plants a plot of 3 trees by 4 trees.  Each tree gives 5 apples.  He sells each apple for $.5.  How much money does he make, in dollars?\nOptions:\nA) 20\nB) 27\nC) 30\nD) 10\nE) 37\n\nIntermediate question: How many apples does John plant? Is it 60?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+9.999999999998899e-05,
+0.9999
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-263",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: John plants a plot of 3 trees by 4 trees.  Each tree gives 5 apples.  He sells each apple for $.5.  How much money does he make, in dollars?\nOptions:\nA) 20\nB) 27\nC) 30\nD) 10\nE) 37\n\nIntermediate question: How many apples does John plant? Is it 70?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.0001,
+0.9999
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-263",
+"gold": null,
+"continuation": null
+}
+],
+[
+{
+"text": "Question: Jeremy is driving 600 miles to visit his parents. His average speed for this trip is 50 miles per hour. Every two hours of driving, he makes a rest stop for 15 minutes. His car gets 18 miles per gallon of gas, and his gas indicator comes on when he's used 15 gallons, at which point he stops to refill, which takes 10 minutes. How long, in minutes, does he take to get to his parents' house, if he starts out with a full tank of gas?\nOptions:\nA) 75\nB) 65\nC) 815\nD) 617\nE) 615\n\nAnswer:",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"target": [
+0.0,
+0.0,
+1.0,
+0.0,
+0.0
+],
+"weight": 1.0,
+"kind": "final",
+"item_id": "gsm8k-train-4379",
+"gold": 2,
+"continuation": null
+},
+{
+"text": "Question: Jeremy is driving 600 miles to visit his parents. His average speed for this trip is 50 miles per hour. Every two hours of driving, he makes a rest stop for 15 minutes. His car gets 18 miles per gallon of gas, and his gas indicator comes on when he's used 15 gallons, at which point he stops to refill, which takes 10 minutes. How long, in minutes, does he take to get to his parents' house, if he starts out with a full tank of gas?\nOptions:\nA) 75\nB) 65\nC) 815\nD) 617\nE) 615\n\nIntermediate question: How many minutes will Jeremy spend on rest stops? Is it 75?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+9.999999999998899e-05
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-4379",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jeremy is driving 600 miles to visit his parents. His average speed for this trip is 50 miles per hour. Every two hours of driving, he makes a rest stop for 15 minutes. His car gets 18 miles per gallon of gas, and his gas indicator comes on when he's used 15 gallons, at which point he stops to refill, which takes 10 minutes. How long, in minutes, does he take to get to his parents' house, if he starts out with a full tank of gas?\nOptions:\nA) 75\nB) 65\nC) 815\nD) 617\nE) 615\n\nIntermediate question: How many minutes will Jeremy spend on rest stops? Is it 20?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-4379",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jeremy is driving 600 miles to visit his parents. His average speed for this trip is 50 miles per hour. Every two hours of driving, he makes a rest stop for 15 minutes. His car gets 18 miles per gallon of gas, and his gas indicator comes on when he's used 15 gallons, at which point he stops to refill, which takes 10 minutes. How long, in minutes, does he take to get to his parents' house, if he starts out with a full tank of gas?\nOptions:\nA) 75\nB) 65\nC) 815\nD) 617\nE) 615\n\nIntermediate question: How many miles will Jeremy stop to refill? Is it 270?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+9.999999999998899e-05,
+0.9999
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-4379",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jeremy is driving 600 miles to visit his parents. His average speed for this trip is 50 miles per hour. Every two hours of driving, he makes a rest stop for 15 minutes. His car gets 18 miles per gallon of gas, and his gas indicator comes on when he's used 15 gallons, at which point he stops to refill, which takes 10 minutes. How long, in minutes, does he take to get to his parents' house, if he starts out with a full tank of gas?\nOptions:\nA) 75\nB) 65\nC) 815\nD) 617\nE) 615\n\nIntermediate question: How many miles will Jeremy stop to refill? Is it 288?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-4379",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jeremy is driving 600 miles to visit his parents. His average speed for this trip is 50 miles per hour. Every two hours of driving, he makes a rest stop for 15 minutes. His car gets 18 miles per gallon of gas, and his gas indicator comes on when he's used 15 gallons, at which point he stops to refill, which takes 10 minutes. How long, in minutes, does he take to get to his parents' house, if he starts out with a full tank of gas?\nOptions:\nA) 75\nB) 65\nC) 815\nD) 617\nE) 615\n\nIntermediate question: How many minutes will Jeremy spend refueling? Is it 20?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+9.999999999998899e-05,
+0.9999
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-4379",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jeremy is driving 600 miles to visit his parents. His average speed for this trip is 50 miles per hour. Every two hours of driving, he makes a rest stop for 15 minutes. His car gets 18 miles per gallon of gas, and his gas indicator comes on when he's used 15 gallons, at which point he stops to refill, which takes 10 minutes. How long, in minutes, does he take to get to his parents' house, if he starts out with a full tank of gas?\nOptions:\nA) 75\nB) 65\nC) 815\nD) 617\nE) 615\n\nIntermediate question: How many minutes will Jeremy spend refueling? Is it 10?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-4379",
+"gold": null,
+"continuation": null
+}
+],
+[
+{
+"text": "Question: Abe finds 4 ants on the sidewalk.  Beth sees 50% more ants than Abe.  CeCe watches twice as many ants as Abe.  Duke discovers half as many ants as Abe.  How many ants do the four children find together?\nOptions:\nA) 48\nB) 20\nC) 53\nD) 49\nE) 4\n\nAnswer:",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"target": [
+0.0,
+1.0,
+0.0,
+0.0,
+0.0
+],
+"weight": 1.0,
+"kind": "final",
+"item_id": "gsm8k-train-660",
+"gold": 1,
+"continuation": null
+},
+{
+"text": "Question: Abe finds 4 ants on the sidewalk.  Beth sees 50% more ants than Abe.  CeCe watches twice as many ants as Abe.  Duke discovers half as many ants as Abe.  How many ants do the four children find together?\nOptions:\nA) 48\nB) 20\nC) 53\nD) 49\nE) 4\n\nIntermediate question: How many ants does Beth see? Is it 6?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+9.999999999998899e-05,
+0.9999
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-660",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Abe finds 4 ants on the sidewalk.  Beth sees 50% more ants than Abe.  CeCe watches twice as many ants as Abe.  Duke discovers half as many ants as Abe.  How many ants do the four children find together?\nOptions:\nA) 48\nB) 20\nC) 53\nD) 49\nE) 4\n\nIntermediate question: How many ants does Beth see? Is it 10?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-660",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Abe finds 4 ants on the sidewalk.  Beth sees 50% more ants than Abe.  CeCe watches twice as many ants as Abe.  Duke discovers half as many ants as Abe.  How many ants do the four children find together?\nOptions:\nA) 48\nB) 20\nC) 53\nD) 49\nE) 4\n\nIntermediate question: How many ants does CeCe see? Is it 8?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+9.999999999998899e-05,
+0.9999
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-660",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Abe finds 4 ants on the sidewalk.  Beth sees 50% more ants than Abe.  CeCe watches twice as many ants as Abe.  Duke discovers half as many ants as Abe.  How many ants do the four children find together?\nOptions:\nA) 48\nB) 20\nC) 53\nD) 49\nE) 4\n\nIntermediate question: How many ants does CeCe see? Is it 2?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-660",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Abe finds 4 ants on the sidewalk.  Beth sees 50% more ants than Abe.  CeCe watches twice as many ants as Abe.  Duke discovers half as many ants as Abe.  How many ants do the four children find together?\nOptions:\nA) 48\nB) 20\nC) 53\nD) 49\nE) 4\n\nIntermediate question: How many ants does Duke see? Is it 2?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+9.999999999998899e-05
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-660",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Abe finds 4 ants on the sidewalk.  Beth sees 50% more ants than Abe.  CeCe watches twice as many ants as Abe.  Duke discovers half as many ants as Abe.  How many ants do the four children find together?\nOptions:\nA) 48\nB) 20\nC) 53\nD) 49\nE) 4\n\nIntermediate question: How many ants does Duke see? Is it 8?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-660",
+"gold": null,
+"continuation": null
+}
+]
+],
+"GFPQR": [
+[
+{
+"text": "Question: Quentavious has 5 nickels. His friend offers him some gum and will give him two pieces per nickel. If Quentavious leaves with 2 nickels, how many pieces of gum did he get?\nOptions:\nA) 6\nB) 10\nC) 4\nD) 3\nE) 30\n\nAnswer:",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"target": [
+1.0,
+0.0,
+0.0,
+0.0,
+0.0
+],
+"weight": 1.0,
+"kind": "final",
+"item_id": "gsm8k-train-3839",
+"gold": 0,
+"continuation": null
+},
+{
+"text": "Question: Quentavious has 5 nickels. His friend offers him some gum and will give him two pieces per nickel. If Quentavious leaves with 2 nickels, how many pieces of gum did he get?\n\nIntermediate question: How many nickels did Quentavious spend? Is it 3?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.0001,
+0.9999
+],
+"weight": 0.5,
+"kind": "subq",
+"item_id": "gsm8k-train-3839",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Quentavious has 5 nickels. His friend offers him some gum and will give him two pieces per nickel. If Quentavious leaves with 2 nickels, how many pieces of gum did he get?\n\nIntermediate question: How many nickels did Quentavious spend? Is it 2?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+9.999999999998899e-05,
+0.9999
+],
+"weight": 0.5,
+"kind": "subq",
+"item_id": "gsm8k-train-3839",
+"gold": null,
+"continuation": null
+}
+],
+[
+{
+"text": "Question: James is running a fundraiser selling candy bars.  Each box has 10 candy bars in it.  He sells 5 boxes.  He sells each candy bar for $1.50 and buys each bar for $1. How much profit does he make from these sales?\nOptions:\nA) 10\nB) 110\nC) 35\nD) 25\nE) 5\n\nAnswer:",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"target": [
+0.0,
+0.0,
+0.0,
+1.0,
+0.0
+],
+"weight": 1.0,
+"kind": "final",
+"item_id": "gsm8k-train-3075",
+"gold": 3,
+"continuation": null
+},
+{
+"text": "Question: James is running a fundraiser selling candy bars.  Each box has 10 candy bars in it.  He sells 5 boxes.  He sells each candy bar for $1.50 and buys each bar for $1. How much profit does he make from these sales?\n\nIntermediate question: How much does he make from each candy bar? Is it 0.5?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+9.999999999998899e-05,
+0.9999
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-3075",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: James is running a fundraiser selling candy bars.  Each box has 10 candy bars in it.  He sells 5 boxes.  He sells each candy bar for $1.50 and buys each bar for $1. How much profit does he make from these sales?\n\nIntermediate question: How much does he make from each candy bar? Is it 1.5?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.0001,
+0.9999
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-3075",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: James is running a fundraiser selling candy bars.  Each box has 10 candy bars in it.  He sells 5 boxes.  He sells each candy bar for $1.50 and buys each bar for $1. How much profit does he make from these sales?\n\nIntermediate question: How many candy bars does he sell? Is it 50?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+9.999999999998899e-05
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-3075",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: James is running a fundraiser selling candy bars.  Each box has 10 candy bars in it.  He sells 5 boxes.  He sells each candy bar for $1.50 and buys each bar for $1. How much profit does he make from these sales?\n\nIntermediate question: How many candy bars does he sell? Is it 60?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.0001,
+0.9999
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-3075",
+"gold": null,
+"continuation": null
+}
+],
+[
+{
+"text": "Question: Jackson is buying school supplies for his third grade class, which has 30 students. Each student needs 5 pens, 3 notebooks, 1 binder and 2 highlighters. Pens cost $0.50, notebooks cost $1.25, binders cost $4.25, and highlighters cost $0.75. If Jackson gets a $100 teacher discount, how much does he spend on school supplies?\nOptions:\nA) 360\nB) 90\nC) 380\nD) 80\nE) 260\n\nAnswer:",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"target": [
+0.0,
+0.0,
+0.0,
+0.0,
+1.0
+],
+"weight": 1.0,
+"kind": "final",
+"item_id": "gsm8k-train-6669",
+"gold": 4,
+"continuation": null
+},
+{
+"text": "Question: Jackson is buying school supplies for his third grade class, which has 30 students. Each student needs 5 pens, 3 notebooks, 1 binder and 2 highlighters. Pens cost $0.50, notebooks cost $1.25, binders cost $4.25, and highlighters cost $0.75. If Jackson gets a $100 teacher discount, how much does he spend on school supplies?\n\nIntermediate question: How much do pens cost? Is it 2.5?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.1,
+"kind": "subq",
+"item_id": "gsm8k-train-6669",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jackson is buying school supplies for his third grade class, which has 30 students. Each student needs 5 pens, 3 notebooks, 1 binder and 2 highlighters. Pens cost $0.50, notebooks cost $1.25, binders cost $4.25, and highlighters cost $0.75. If Jackson gets a $100 teacher discount, how much does he spend on school supplies?\n\nIntermediate question: How much do pens cost? Is it 1.5?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.1,
+"kind": "subq",
+"item_id": "gsm8k-train-6669",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jackson is buying school supplies for his third grade class, which has 30 students. Each student needs 5 pens, 3 notebooks, 1 binder and 2 highlighters. Pens cost $0.50, notebooks cost $1.25, binders cost $4.25, and highlighters cost $0.75. If Jackson gets a $100 teacher discount, how much does he spend on school supplies?\n\nIntermediate question: How much do notebooks cost? Is it 3.75?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+9.999999999998899e-05
+],
+"weight": 0.1,
+"kind": "subq",
+"item_id": "gsm8k-train-6669",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jackson is buying school supplies for his third grade class, which has 30 students. Each student needs 5 pens, 3 notebooks, 1 binder and 2 highlighters. Pens cost $0.50, notebooks cost $1.25, binders cost $4.25, and highlighters cost $0.75. If Jackson gets a $100 teacher discount, how much does he spend on school supplies?\n\nIntermediate question: How much do notebooks cost? Is it 6.75?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+9.999999999998899e-05
+],
+"weight": 0.1,
+"kind": "subq",
+"item_id": "gsm8k-train-6669",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jackson is buying school supplies for his third grade class, which has 30 students. Each student needs 5 pens, 3 notebooks, 1 binder and 2 highlighters. Pens cost $0.50, notebooks cost $1.25, binders cost $4.25, and highlighters cost $0.75. If Jackson gets a $100 teacher discount, how much does he spend on school supplies?\n\nIntermediate question: How much do highlighters cost? Is it 1.5?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+9.999999999998899e-05
+],
+"weight": 0.1,
+"kind": "subq",
+"item_id": "gsm8k-train-6669",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jackson is buying school supplies for his third grade class, which has 30 students. Each student needs 5 pens, 3 notebooks, 1 binder and 2 highlighters. Pens cost $0.50, notebooks cost $1.25, binders cost $4.25, and highlighters cost $0.75. If Jackson gets a $100 teacher discount, how much does he spend on school supplies?\n\nIntermediate question: How much do highlighters cost? Is it 0.5?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.1,
+"kind": "subq",
+"item_id": "gsm8k-train-6669",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jackson is buying school supplies for his third grade class, which has 30 students. Each student needs 5 pens, 3 notebooks, 1 binder and 2 highlighters. Pens cost $0.50, notebooks cost $1.25, binders cost $4.25, and highlighters cost $0.75. If Jackson gets a $100 teacher discount, how much does he spend on school supplies?\n\nIntermediate question: How much do pens, notebooks, highlighters and binders cost? Is it 12?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+9.999999999998899e-05
+],
+"weight": 0.1,
+"kind": "subq",
+"item_id": "gsm8k-train-6669",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jackson is buying school supplies for his third grade class, which has 30 students. Each student needs 5 pens, 3 notebooks, 1 binder and 2 highlighters. Pens cost $0.50, notebooks cost $1.25, binders cost $4.25, and highlighters cost $0.75. If Jackson gets a $100 teacher discount, how much does he spend on school supplies?\n\nIntermediate question: How much do pens, notebooks, highlighters and binders cost? Is it 16?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+9.999999999998899e-05,
+0.9999
+],
+"weight": 0.1,
+"kind": "subq",
+"item_id": "gsm8k-train-6669",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jackson is buying school supplies for his third grade class, which has 30 students. Each student needs 5 pens, 3 notebooks, 1 binder and 2 highlighters. Pens cost $0.50, notebooks cost $1.25, binders cost $4.25, and highlighters cost $0.75. If Jackson gets a $100 teacher discount, how much does he spend on school supplies?\n\nIntermediate question: How much do pens, notebooks, highlers and binders cost? Is it 360?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.1,
+"kind": "subq",
+"item_id": "gsm8k-train-6669",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jackson is buying school supplies for his third grade class, which has 30 students. Each student needs 5 pens, 3 notebooks, 1 binder and 2 highlighters. Pens cost $0.50, notebooks cost $1.25, binders cost $4.25, and highlighters cost $0.75. If Jackson gets a $100 teacher discount, how much does he spend on school supplies?\n\nIntermediate question: How much do pens, notebooks, highlers and binders cost? Is it 310?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.1,
+"kind": "subq",
+"item_id": "gsm8k-train-6669",
+"gold": null,
+"continuation": null
+}
+],
+[
+{
+"text": "Question: John buys 3 dress shirts.  They sell for $20 each.  He also has to pay 10% tax on everything.  How much did he pay in total?\nOptions:\nA) 6\nB) 66\nC) 10\nD) 70\nE) 64\n\nAnswer:",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"target": [
+0.0,
+1.0,
+0.0,
+0.0,
+0.0
+],
+"weight": 1.0,
+"kind": "final",
+"item_id": "gsm8k-train-3365",
+"gold": 1,
+"continuation": null
+},
+{
+"text": "Question: John buys 3 dress shirts.  They sell for $20 each.  He also has to pay 10% tax on everything.  How much did he pay in total?\n\nIntermediate question: How much did the shirts cost before tax? Is it 60?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+9.999999999998899e-05,
+0.9999
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-3365",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: John buys 3 dress shirts.  They sell for $20 each.  He also has to pay 10% tax on everything.  How much did he pay in total?\n\nIntermediate question: How much did the shirts cost before tax? Is it 57?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.0001,
+0.9999
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-3365",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: John buys 3 dress shirts.  They sell for $20 each.  He also has to pay 10% tax on everything.  How much did he pay in total?\n\nIntermediate question: How much did the tax cost? Is it 6?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+9.999999999998899e-05,
+0.9999
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-3365",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: John buys 3 dress shirts.  They sell for $20 each.  He also has to pay 10% tax on everything.  How much did he pay in total?\n\nIntermediate question: How much did the tax cost? Is it 60?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-3365",
+"gold": null,
+"continuation": null
+}
+],
+[
+{
+"text": "Question: John plants a plot of 3 trees by 4 trees.  Each tree gives 5 apples.  He sells each apple for $.5.  How much money does he make, in dollars?\nOptions:\nA) 20\nB) 27\nC) 30\nD) 10\nE) 37\n\nAnswer:",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"target": [
+0.0,
+0.0,
+1.0,
+0.0,
+0.0
+],
+"weight": 1.0,
+"kind": "final",
+"item_id": "gsm8k-train-263",
+"gold": 2,
+"continuation": null
+},
+{
+"text": "Question: John plants a plot of 3 trees by 4 trees.  Each tree gives 5 apples.  He sells each apple for $.5.  How much money does he make, in dollars?\n\nIntermediate question: How many trees does John plant? Is it 12?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-263",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: John plants a plot of 3 trees by 4 trees.  Each tree gives 5 apples.  He sells each apple for $.5.  How much money does he make, in dollars?\n\nIntermediate question: How many trees does John plant? Is it 15?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.0001,
+0.9999
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-263",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: John plants a plot of 3 trees by 4 trees.  Each tree gives 5 apples.  He sells each apple for $.5.  How much money does he make, in dollars?\n\nIntermediate question: How many apples does John plant? Is it 60?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+9.999999999998899e-05,
+0.9999
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-263",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: John plants a plot of 3 trees by 4 trees.  Each tree gives 5 apples.  He sells each apple for $.5.  How much money does he make, in dollars?\n\nIntermediate question: How many apples does John plant? Is it 70?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+9.999999999998899e-05
+],
+"weight": 0.25,
+"kind": "subq",
+"item_id": "gsm8k-train-263",
+"gold": null,
+"continuation": null
+}
+],
+[
+{
+"text": "Question: Jeremy is driving 600 miles to visit his parents. His average speed for this trip is 50 miles per hour. Every two hours of driving, he makes a rest stop for 15 minutes. His car gets 18 miles per gallon of gas, and his gas indicator comes on when he's used 15 gallons, at which point he stops to refill, which takes 10 minutes. How long, in minutes, does he take to get to his parents' house, if he starts out with a full tank of gas?\nOptions:\nA) 75\nB) 65\nC) 815\nD) 617\nE) 615\n\nAnswer:",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"target": [
+0.0,
+0.0,
+1.0,
+0.0,
+0.0
+],
+"weight": 1.0,
+"kind": "final",
+"item_id": "gsm8k-train-4379",
+"gold": 2,
+"continuation": null
+},
+{
+"text": "Question: Jeremy is driving 600 miles to visit his parents. His average speed for this trip is 50 miles per hour. Every two hours of driving, he makes a rest stop for 15 minutes. His car gets 18 miles per gallon of gas, and his gas indicator comes on when he's used 15 gallons, at which point he stops to refill, which takes 10 minutes. How long, in minutes, does he take to get to his parents' house, if he starts out with a full tank of gas?\n\nIntermediate question: How many minutes will Jeremy spend on rest stops? Is it 75?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.0001,
+0.9999
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-4379",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jeremy is driving 600 miles to visit his parents. His average speed for this trip is 50 miles per hour. Every two hours of driving, he makes a rest stop for 15 minutes. His car gets 18 miles per gallon of gas, and his gas indicator comes on when he's used 15 gallons, at which point he stops to refill, which takes 10 minutes. How long, in minutes, does he take to get to his parents' house, if he starts out with a full tank of gas?\n\nIntermediate question: How many minutes will Jeremy spend on rest stops? Is it 20?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+9.999999999998899e-05,
+0.9999
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-4379",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jeremy is driving 600 miles to visit his parents. His average speed for this trip is 50 miles per hour. Every two hours of driving, he makes a rest stop for 15 minutes. His car gets 18 miles per gallon of gas, and his gas indicator comes on when he's used 15 gallons, at which point he stops to refill, which takes 10 minutes. How long, in minutes, does he take to get to his parents' house, if he starts out with a full tank of gas?\n\nIntermediate question: How many miles will Jeremy stop to refill? Is it 270?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-4379",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jeremy is driving 600 miles to visit his parents. His average speed for this trip is 50 miles per hour. Every two hours of driving, he makes a rest stop for 15 minutes. His car gets 18 miles per gallon of gas, and his gas indicator comes on when he's used 15 gallons, at which point he stops to refill, which takes 10 minutes. How long, in minutes, does he take to get to his parents' house, if he starts out with a full tank of gas?\n\nIntermediate question: How many miles will Jeremy stop to refill? Is it 288?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+9.999999999998899e-05,
+0.9999
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-4379",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jeremy is driving 600 miles to visit his parents. His average speed for this trip is 50 miles per hour. Every two hours of driving, he makes a rest stop for 15 minutes. His car gets 18 miles per gallon of gas, and his gas indicator comes on when he's used 15 gallons, at which point he stops to refill, which takes 10 minutes. How long, in minutes, does he take to get to his parents' house, if he starts out with a full tank of gas?\n\nIntermediate question: How many minutes will Jeremy spend refueling? Is it 20?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+9.999999999998899e-05,
+0.9999
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-4379",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Jeremy is driving 600 miles to visit his parents. His average speed for this trip is 50 miles per hour. Every two hours of driving, he makes a rest stop for 15 minutes. His car gets 18 miles per gallon of gas, and his gas indicator comes on when he's used 15 gallons, at which point he stops to refill, which takes 10 minutes. How long, in minutes, does he take to get to his parents' house, if he starts out with a full tank of gas?\n\nIntermediate question: How many minutes will Jeremy spend refueling? Is it 10?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-4379",
+"gold": null,
+"continuation": null
+}
+],
+[
+{
+"text": "Question: Abe finds 4 ants on the sidewalk.  Beth sees 50% more ants than Abe.  CeCe watches twice as many ants as Abe.  Duke discovers half as many ants as Abe.  How many ants do the four children find together?\nOptions:\nA) 48\nB) 20\nC) 53\nD) 49\nE) 4\n\nAnswer:",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"target": [
+0.0,
+1.0,
+0.0,
+0.0,
+0.0
+],
+"weight": 1.0,
+"kind": "final",
+"item_id": "gsm8k-train-660",
+"gold": 1,
+"continuation": null
+},
+{
+"text": "Question: Abe finds 4 ants on the sidewalk.  Beth sees 50% more ants than Abe.  CeCe watches twice as many ants as Abe.  Duke discovers half as many ants as Abe.  How many ants do the four children find together?\n\nIntermediate question: How many ants does Beth see? Is it 6?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+9.999999999998899e-05,
+0.9999
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-660",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Abe finds 4 ants on the sidewalk.  Beth sees 50% more ants than Abe.  CeCe watches twice as many ants as Abe.  Duke discovers half as many ants as Abe.  How many ants do the four children find together?\n\nIntermediate question: How many ants does Beth see? Is it 10?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+9.999999999998899e-05,
+0.9999
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-660",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Abe finds 4 ants on the sidewalk.  Beth sees 50% more ants than Abe.  CeCe watches twice as many ants as Abe.  Duke discovers half as many ants as Abe.  How many ants do the four children find together?\n\nIntermediate question: How many ants does CeCe see? Is it 8?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+9.999999999998899e-05,
+0.9999
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-660",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Abe finds 4 ants on the sidewalk.  Beth sees 50% more ants than Abe.  CeCe watches twice as many ants as Abe.  Duke discovers half as many ants as Abe.  How many ants do the four children find together?\n\nIntermediate question: How many ants does CeCe see? Is it 2?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-660",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Abe finds 4 ants on the sidewalk.  Beth sees 50% more ants than Abe.  CeCe watches twice as many ants as Abe.  Duke discovers half as many ants as Abe.  How many ants do the four children find together?\n\nIntermediate question: How many ants does Duke see? Is it 2?\nOptions:\nA) Yes\nB) No\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.0001,
+0.9999
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-660",
+"gold": null,
+"continuation": null
+},
+{
+"text": "Question: Abe finds 4 ants on the sidewalk.  Beth sees 50% more ants than Abe.  CeCe watches twice as many ants as Abe.  Duke discovers half as many ants as Abe.  How many ants do the four children find together?\n\nIntermediate question: How many ants does Duke see? Is it 8?\nOptions:\nA) No\nB) Yes\nAnswer:",
+"labels": [
+"A",
+"B"
+],
+"target": [
+0.9999,
+0.0001
+],
+"weight": 0.16666666666666666,
+"kind": "subq",
+"item_id": "gsm8k-train-660",
+"gold": null,
+"continuation": null
+}
+]
+]
+},
+"digest_first300_train": {
+"GFPQ": "7ccc52cab10af325226dffb3f9f1d061",
+"GFPQR": "ccb5f505f5a457d44827634df023a541"
+}
+}

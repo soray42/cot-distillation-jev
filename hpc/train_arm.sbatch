@@ -89,6 +89,13 @@
 # step-matched with GFPS: same nodes, order, targets), and each problem's node weight (same total) is split in
 # proportion to 1 + node depth (--tree-depth-weight 1.0). Other values: XARGS="--tree-scaffold F --tree-depth-weight G"
 # with TAG (argparse: the last value wins); numgen: XARGS="--tree-sources numgen" as for the other arms.
+# Value nodes (DATA=data/student_gsm8k_tf_ops*, scripts/build_gsm8k_ops.py; XARGS="--tree-sources gsm8k_tf" as for
+# GFPQ on GSM8K): GFPQV = GFPQ with one node per atomic operation of GSM8K's calculator notes, three numeric options
+# ("What is 4 x 1.5?") instead of the yes/no nodes · GFPQVQ = the same nodes as "<sub-question> It is 4 x 1.5. What is
+# the value?" · GFPQO = operation selection ("<sub-question> Which computation gives it?", three expressions; a step's
+# last operation only) · GFPVB = GFPQV's nodes asked alone, no problem text (--tree-view bare) · GFPQVM = GFPQ's yes/no
+# views unchanged plus GFPQV's value views, each format half of the per-problem auxiliary weight. The yes/no arms on
+# the same data train exactly as on data/student_gsm8k_tf (the value nodes are in a field of their own).
 # NODEW=w gives every node view weight w (--tree-node-weight; default: the per-problem split, aux 1.0 / views, about
 # .023 per K&K node); set it to the same value for all arms of a comparison. LOCAL_EVAL=path scores the
 # local-step probe (--eval-local: every K&K node in its local view, eval key local_kk); when unset it is
@@ -210,6 +217,11 @@ arm_config() {           # sets F S T RLM DS for arm $1
     GFPQR) F=teacher; S=cot; T=cot; DX="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --tree-target shuffled" ;;  # GFPQ, node targets permuted within each problem (random-label control)
     GFPSX) F=teacher; S=cot; T=cot; DX="--tree-full plain --tree-view statements --tree-cap 0 --tree-sources knights_knaves --tree-target placebo" ;;  # GFPS, node questions replaced by surface questions about the problem text, correct answers (placebo control)
     GFPQX) F=teacher; S=cot; T=cot; DX="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --tree-target placebo" ;;  # GFPQ, node questions replaced by surface questions about the problem text, correct answers (placebo control)
+    GFPQV) F=teacher; S=cot; T=cot; DX="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --node-format value --node-render op" ;;  # GFPQ with value nodes (one per atomic operation, 3 numeric options): "What is 4 x 1.5?"
+    GFPQVQ) F=teacher; S=cot; T=cot; DX="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --node-format value --node-render qop" ;;  # GFPQV, Socratic sub-question + the operation
+    GFPQO) F=teacher; S=cot; T=cot; DX="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --node-format value --node-render opsel" ;;  # GFPQ with operation-selection nodes ("Which computation gives it?", 3 expressions)
+    GFPVB) F=teacher; S=cot; T=cot; DX="--tree-full plain --tree-view bare --tree-cap 0 --tree-sources knights_knaves --node-format value --node-render op" ;;  # value nodes asked alone (no problem text)
+    GFPQVM) F=teacher; S=cot; T=cot; DX="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --node-format yesno+value --node-render op" ;;  # GFPQ's yes/no nodes + the op value nodes, half the per-problem weight each
     *) echo "unknown ARM $1"; return 1 ;;
   esac
 }

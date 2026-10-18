@@ -1,0 +1,2548 @@
+{
+"source": "data/student_gsm8k_tf_ops/train.jsonl (scripts/build_gsm8k_ops.py, seed 0)",
+"items": [
+{
+"item_id": "gsm8k-train-3839",
+"source": "gsm8k_tf",
+"group": "gsm8k_tf/s2",
+"type": "choice",
+"prompt": "Question: Quentavious has 5 nickels. His friend offers him some gum and will give him two pieces per nickel. If Quentavious leaves with 2 nickels, how many pieces of gum did he get?\nOptions:\nA) 6\nB) 10\nC) 4\nD) 3\nE) 30",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"gold_label": "A",
+"teacher": {
+"A": 1.0,
+"B": 0.0,
+"C": 0.0,
+"D": 0.0,
+"E": 0.0
+},
+"options": [
+"6",
+"10",
+"4",
+"3",
+"30"
+],
+"option_kinds": [
+"gold",
+"partial_ab",
+"perturb_gold",
+"partial_ab",
+"perturb_p2"
+],
+"recipe": "qo2",
+"depth": 2,
+"dep_level": 1,
+"subqs": [
+{
+"id": "s1v",
+"question": "How many nickels did Quentavious spend? Is it 3?",
+"opposite": "How many nickels did Quentavious spend? Is it different from 3?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 3.0,
+"step": 1,
+"expr": "5-2",
+"value": 3.0,
+"flags": [],
+"gold_ancestor": true,
+"node_depth": 0
+},
+{
+"id": "s1n",
+"question": "How many nickels did Quentavious spend? Is it 2?",
+"opposite": "How many nickels did Quentavious spend? Is it different from 2?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 2.0,
+"step": 1,
+"expr": "5-2",
+"value": 3.0,
+"flags": [],
+"gold_ancestor": true,
+"node_depth": 0,
+"wrong": "slip"
+}
+],
+"random_subqs": [],
+"rationale": "",
+"augment": null,
+"has_tree": true,
+"tree_fix": true,
+"row_kind": "final",
+"problem_id": "gsm8k-train-3839",
+"node_status": "ok",
+"licence_class": "PERM",
+"licence": "MIT (openai/gsm8k)",
+"label_basis": "gold",
+"node_basis": "program",
+"pool_rank": 24,
+"n_steps": 2,
+"tree_source": "gsm8k_socratic_tf",
+"value_nodes": [
+{
+"id": "s1o1",
+"type": "op",
+"step": 1,
+"op_index": 1,
+"n_ops": 1,
+"last_of_step": true,
+"expr": "5-2",
+"subq": "How many nickels did Quentavious spend?",
+"kind": "bin",
+"a": "5",
+"op": "−",
+"b": "2",
+"value": "3",
+"depends_on": [],
+"node_depth": 0,
+"gold_ancestor": true,
+"gold_step": false,
+"flags": [],
+"renderings": {
+"op": {
+"question": "What is 5 − 2?",
+"options": [
+"2",
+"7",
+"3"
+],
+"answer": 2,
+"wrong": [
+"perturb",
+"operator",
+null
+]
+},
+"qop": {
+"question": "How many nickels did Quentavious spend? It is 5 − 2. What is the value?",
+"options": [
+"2",
+"7",
+"3"
+],
+"answer": 2,
+"wrong": [
+"perturb",
+"operator",
+null
+]
+},
+"opsel": {
+"question": "How many nickels did Quentavious spend? Which computation gives it?",
+"options": [
+"5 × 2",
+"5 ÷ 2",
+"5 − 2"
+],
+"answer": 2,
+"wrong": [
+"operator",
+"operator",
+null
+],
+"design": "operator"
+}
+}
+}
+]
+},
+{
+"item_id": "gsm8k-train-3075",
+"source": "gsm8k_tf",
+"group": "gsm8k_tf/s3",
+"type": "choice",
+"prompt": "Question: James is running a fundraiser selling candy bars.  Each box has 10 candy bars in it.  He sells 5 boxes.  He sells each candy bar for $1.50 and buys each bar for $1. How much profit does he make from these sales?\nOptions:\nA) 10\nB) 110\nC) 35\nD) 25\nE) 5",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"gold_label": "D",
+"teacher": {
+"A": 0.0,
+"B": 0.0,
+"C": 0.0,
+"D": 1.0,
+"E": 0.0
+},
+"options": [
+"10",
+"110",
+"35",
+"25",
+"5"
+],
+"option_kinds": [
+"primary",
+"perturb_p1",
+"perturb_gold",
+"gold",
+"primary"
+],
+"recipe": "inter",
+"depth": 3,
+"dep_level": 1,
+"subqs": [
+{
+"id": "s1v",
+"question": "How much does he make from each candy bar? Is it 0.5?",
+"opposite": "How much does he make from each candy bar? Is it different from 0.5?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 0.5,
+"step": 1,
+"expr": "1.5-1",
+"value": 0.5,
+"flags": [],
+"gold_ancestor": true,
+"node_depth": 0
+},
+{
+"id": "s1n",
+"question": "How much does he make from each candy bar? Is it 1.5?",
+"opposite": "How much does he make from each candy bar? Is it different from 1.5?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 1.5,
+"step": 1,
+"expr": "1.5-1",
+"value": 0.5,
+"flags": [],
+"gold_ancestor": true,
+"node_depth": 0,
+"wrong": "slip"
+},
+{
+"id": "s2v",
+"question": "How many candy bars does he sell? Is it 50?",
+"opposite": "How many candy bars does he sell? Is it different from 50?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 50.0,
+"step": 2,
+"expr": "5*10",
+"value": 50.0,
+"flags": [],
+"gold_ancestor": true,
+"node_depth": 0
+},
+{
+"id": "s2n",
+"question": "How many candy bars does he sell? Is it 60?",
+"opposite": "How many candy bars does he sell? Is it different from 60?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 60.0,
+"step": 2,
+"expr": "5*10",
+"value": 50.0,
+"flags": [],
+"gold_ancestor": true,
+"node_depth": 0,
+"wrong": "perturb"
+}
+],
+"random_subqs": [],
+"rationale": "",
+"augment": null,
+"has_tree": true,
+"tree_fix": true,
+"row_kind": "final",
+"problem_id": "gsm8k-train-3075",
+"node_status": "ok",
+"licence_class": "PERM",
+"licence": "MIT (openai/gsm8k)",
+"label_basis": "gold",
+"node_basis": "program",
+"pool_rank": 27,
+"n_steps": 3,
+"tree_source": "gsm8k_socratic_tf",
+"value_nodes": [
+{
+"id": "s1o1",
+"type": "op",
+"step": 1,
+"op_index": 1,
+"n_ops": 1,
+"last_of_step": true,
+"expr": "1.5-1",
+"subq": "How much does he make from each candy bar?",
+"kind": "bin",
+"a": "1.5",
+"op": "−",
+"b": "1",
+"value": "0.5",
+"depends_on": [],
+"node_depth": 0,
+"gold_ancestor": true,
+"gold_step": false,
+"flags": [],
+"renderings": {
+"op": {
+"question": "What is 1.5 − 1?",
+"options": [
+"1.5",
+"0.3",
+"0.5"
+],
+"answer": 2,
+"wrong": [
+"operator",
+"perturb",
+null
+]
+},
+"qop": {
+"question": "How much does he make from each candy bar? It is 1.5 − 1. What is the value?",
+"options": [
+"1.5",
+"0.3",
+"0.5"
+],
+"answer": 2,
+"wrong": [
+"operator",
+"perturb",
+null
+]
+},
+"opsel": {
+"question": "How much does he make from each candy bar? Which computation gives it?",
+"options": [
+"1.5 − 1",
+"1.5 ÷ 1",
+"1.5 × 1"
+],
+"answer": 0,
+"wrong": [
+null,
+"operator",
+"operator"
+],
+"design": "operator"
+}
+}
+},
+{
+"id": "s2o1",
+"type": "op",
+"step": 2,
+"op_index": 1,
+"n_ops": 1,
+"last_of_step": true,
+"expr": "5*10",
+"subq": "How many candy bars does he sell?",
+"kind": "bin",
+"a": "5",
+"op": "×",
+"b": "10",
+"value": "50",
+"depends_on": [],
+"node_depth": 0,
+"gold_ancestor": true,
+"gold_step": false,
+"flags": [],
+"renderings": {
+"op": {
+"question": "What is 5 × 10?",
+"options": [
+"50",
+"5",
+"15"
+],
+"answer": 0,
+"wrong": [
+null,
+"operator",
+"operator"
+]
+},
+"qop": {
+"question": "How many candy bars does he sell? It is 5 × 10. What is the value?",
+"options": [
+"50",
+"5",
+"15"
+],
+"answer": 0,
+"wrong": [
+null,
+"operator",
+"operator"
+]
+},
+"opsel": {
+"question": "How many candy bars does he sell? Which computation gives it?",
+"options": [
+"5 ÷ 10",
+"5 × 10",
+"5 + 10"
+],
+"answer": 1,
+"wrong": [
+"operator",
+null,
+"operator"
+],
+"design": "operator"
+}
+}
+}
+]
+},
+{
+"item_id": "gsm8k-train-6669",
+"source": "gsm8k_tf",
+"group": "gsm8k_tf/s6",
+"type": "choice",
+"prompt": "Question: Jackson is buying school supplies for his third grade class, which has 30 students. Each student needs 5 pens, 3 notebooks, 1 binder and 2 highlighters. Pens cost $0.50, notebooks cost $1.25, binders cost $4.25, and highlighters cost $0.75. If Jackson gets a $100 teacher discount, how much does he spend on school supplies?\nOptions:\nA) 360\nB) 90\nC) 380\nD) 80\nE) 260",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"gold_label": "E",
+"teacher": {
+"A": 0.0,
+"B": 0.0,
+"C": 0.0,
+"D": 0.0,
+"E": 1.0
+},
+"options": [
+"360",
+"90",
+"380",
+"80",
+"260"
+],
+"option_kinds": [
+"primary",
+"primary",
+"perturb_p1",
+"perturb_p2",
+"gold"
+],
+"recipe": "inter",
+"depth": 6,
+"dep_level": 1,
+"subqs": [
+{
+"id": "s1v",
+"question": "How much do pens cost? Is it 2.5?",
+"opposite": "How much do pens cost? Is it different from 2.5?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 2.5,
+"step": 1,
+"expr": "5*0.5",
+"value": 2.5,
+"flags": [],
+"gold_ancestor": false,
+"node_depth": 0
+},
+{
+"id": "s1n",
+"question": "How much do pens cost? Is it 1.5?",
+"opposite": "How much do pens cost? Is it different from 1.5?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 1.5,
+"step": 1,
+"expr": "5*0.5",
+"value": 2.5,
+"flags": [],
+"gold_ancestor": false,
+"node_depth": 0,
+"wrong": "perturb"
+},
+{
+"id": "s2v",
+"question": "How much do notebooks cost? Is it 3.75?",
+"opposite": "How much do notebooks cost? Is it different from 3.75?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 3.75,
+"step": 2,
+"expr": "3*1.25",
+"value": 3.75,
+"flags": [],
+"gold_ancestor": false,
+"node_depth": 0
+},
+{
+"id": "s2n",
+"question": "How much do notebooks cost? Is it 6.75?",
+"opposite": "How much do notebooks cost? Is it different from 6.75?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 6.75,
+"step": 2,
+"expr": "3*1.25",
+"value": 3.75,
+"flags": [],
+"gold_ancestor": false,
+"node_depth": 0,
+"wrong": "slip"
+},
+{
+"id": "s3v",
+"question": "How much do highlighters cost? Is it 1.5?",
+"opposite": "How much do highlighters cost? Is it different from 1.5?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 1.5,
+"step": 3,
+"expr": "2*0.75",
+"value": 1.5,
+"flags": [
+"ambiguous_q"
+],
+"gold_ancestor": false,
+"node_depth": 0
+},
+{
+"id": "s3n",
+"question": "How much do highlighters cost? Is it 0.5?",
+"opposite": "How much do highlighters cost? Is it different from 0.5?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 0.5,
+"step": 3,
+"expr": "2*0.75",
+"value": 1.5,
+"flags": [
+"ambiguous_q"
+],
+"gold_ancestor": false,
+"node_depth": 0,
+"wrong": "perturb"
+},
+{
+"id": "s4v",
+"question": "How much do pens, notebooks, highlighters and binders cost? Is it 12?",
+"opposite": "How much do pens, notebooks, highlighters and binders cost? Is it different from 12?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [
+"s1v",
+"s2v",
+"s3v"
+],
+"initial": null,
+"status": "direct",
+"probe": 12.0,
+"step": 4,
+"expr": "2.5+3.75+1.5+4.25",
+"value": 12.0,
+"flags": [],
+"gold_ancestor": false,
+"node_depth": 1
+},
+{
+"id": "s4n",
+"question": "How much do pens, notebooks, highlighters and binders cost? Is it 16?",
+"opposite": "How much do pens, notebooks, highlighters and binders cost? Is it different from 16?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [
+"s1v",
+"s2v",
+"s3v"
+],
+"initial": null,
+"status": "direct",
+"probe": 16.0,
+"step": 4,
+"expr": "2.5+3.75+1.5+4.25",
+"value": 12.0,
+"flags": [],
+"gold_ancestor": false,
+"node_depth": 1,
+"wrong": "perturb"
+},
+{
+"id": "s5v",
+"question": "How much do pens, notebooks, highlers and binders cost? Is it 360?",
+"opposite": "How much do pens, notebooks, highlers and binders cost? Is it different from 360?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 360.0,
+"step": 5,
+"expr": "30*12",
+"value": 360.0,
+"flags": [
+"parents_uncertain"
+],
+"gold_ancestor": true,
+"node_depth": 0
+},
+{
+"id": "s5n",
+"question": "How much do pens, notebooks, highlers and binders cost? Is it 310?",
+"opposite": "How much do pens, notebooks, highlers and binders cost? Is it different from 310?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 310.0,
+"step": 5,
+"expr": "30*12",
+"value": 360.0,
+"flags": [
+"parents_uncertain"
+],
+"gold_ancestor": true,
+"node_depth": 0,
+"wrong": "perturb"
+}
+],
+"random_subqs": [],
+"rationale": "",
+"augment": null,
+"has_tree": true,
+"tree_fix": true,
+"row_kind": "final",
+"problem_id": "gsm8k-train-6669",
+"node_status": "ok",
+"licence_class": "PERM",
+"licence": "MIT (openai/gsm8k)",
+"label_basis": "gold",
+"node_basis": "program",
+"pool_rank": 28,
+"n_steps": 6,
+"tree_source": "gsm8k_socratic_tf",
+"value_nodes": [
+{
+"id": "s1o1",
+"type": "op",
+"step": 1,
+"op_index": 1,
+"n_ops": 1,
+"last_of_step": true,
+"expr": "5*0.5",
+"subq": "How much do pens cost?",
+"kind": "bin",
+"a": "5",
+"op": "×",
+"b": "0.5",
+"value": "2.5",
+"depends_on": [],
+"node_depth": 0,
+"gold_ancestor": false,
+"gold_step": false,
+"flags": [],
+"renderings": {
+"op": {
+"question": "What is 5 × 0.5?",
+"options": [
+"1.5",
+"2.5",
+"5.5"
+],
+"answer": 1,
+"wrong": [
+"other",
+null,
+"operator"
+]
+},
+"qop": {
+"question": "How much do pens cost? It is 5 × 0.5. What is the value?",
+"options": [
+"1.5",
+"2.5",
+"5.5"
+],
+"answer": 1,
+"wrong": [
+"other",
+null,
+"operator"
+]
+},
+"opsel": {
+"question": "How much do pens cost? Which computation gives it?",
+"options": [
+"5 × 0.5",
+"5 × 0.75",
+"5 × 100"
+],
+"answer": 0,
+"wrong": [
+null,
+"operand",
+"operand"
+],
+"design": "operand"
+}
+}
+},
+{
+"id": "s2o1",
+"type": "op",
+"step": 2,
+"op_index": 1,
+"n_ops": 1,
+"last_of_step": true,
+"expr": "3*1.25",
+"subq": "How much do notebooks cost?",
+"kind": "bin",
+"a": "3",
+"op": "×",
+"b": "1.25",
+"value": "3.75",
+"depends_on": [],
+"node_depth": 0,
+"gold_ancestor": false,
+"gold_step": false,
+"flags": [],
+"renderings": {
+"op": {
+"question": "What is 3 × 1.25?",
+"options": [
+"3.75",
+"2.4",
+"4.25"
+],
+"answer": 0,
+"wrong": [
+null,
+"operator",
+"operator"
+]
+},
+"qop": {
+"question": "How much do notebooks cost? It is 3 × 1.25. What is the value?",
+"options": [
+"3.75",
+"2.4",
+"4.25"
+],
+"answer": 0,
+"wrong": [
+null,
+"operator",
+"operator"
+]
+},
+"opsel": {
+"question": "How much do notebooks cost? Which computation gives it?",
+"options": [
+"3 × 1.25",
+"3 − 1.25",
+"3 + 1.25"
+],
+"answer": 0,
+"wrong": [
+null,
+"operator",
+"operator"
+],
+"design": "operator"
+}
+}
+},
+{
+"id": "s3o1",
+"type": "op",
+"step": 3,
+"op_index": 1,
+"n_ops": 1,
+"last_of_step": true,
+"expr": "2*0.75",
+"subq": "How much do highlighters cost?",
+"kind": "bin",
+"a": "2",
+"op": "×",
+"b": "0.75",
+"value": "1.5",
+"depends_on": [],
+"node_depth": 0,
+"gold_ancestor": false,
+"gold_step": false,
+"flags": [
+"ambiguous_q"
+],
+"renderings": {
+"op": {
+"question": "What is 2 × 0.75?",
+"options": [
+"1.5",
+"3.75",
+"2.75"
+],
+"answer": 0,
+"wrong": [
+null,
+"other",
+"operator"
+]
+},
+"qop": {
+"question": "How much do highlighters cost? It is 2 × 0.75. What is the value?",
+"options": [
+"1.5",
+"3.75",
+"2.75"
+],
+"answer": 0,
+"wrong": [
+null,
+"other",
+"operator"
+]
+},
+"opsel": {
+"question": "How much do highlighters cost? Which computation gives it?",
+"options": [
+"2 × 0.75",
+"100 × 0.75",
+"4.25 × 0.75"
+],
+"answer": 0,
+"wrong": [
+null,
+"operand",
+"operand"
+],
+"design": "operand"
+}
+}
+},
+{
+"id": "s4o1",
+"type": "op",
+"step": 4,
+"op_index": 1,
+"n_ops": 3,
+"last_of_step": false,
+"expr": "2.5+3.75+1.5+4.25",
+"subq": "How much do pens, notebooks, highlighters and binders cost?",
+"kind": "bin",
+"a": "2.5",
+"op": "+",
+"b": "3.75",
+"value": "6.25",
+"depends_on": [
+"s1o1",
+"s2o1"
+],
+"node_depth": 1,
+"gold_ancestor": false,
+"gold_step": false,
+"flags": [],
+"renderings": {
+"op": {
+"question": "What is 2.5 + 3.75?",
+"options": [
+"1.25",
+"6.25",
+"1.5"
+],
+"answer": 1,
+"wrong": [
+"operator",
+null,
+"operator"
+]
+},
+"qop": {
+"question": "How much do pens, notebooks, highlighters and binders cost? It is 2.5 + 3.75 + 1.5 + 4.25. What is 2.5 + 3.75?",
+"options": [
+"1.25",
+"6.25",
+"1.5"
+],
+"answer": 1,
+"wrong": [
+"operator",
+null,
+"operator"
+]
+}
+}
+},
+{
+"id": "s4o2",
+"type": "op",
+"step": 4,
+"op_index": 2,
+"n_ops": 3,
+"last_of_step": false,
+"expr": "2.5+3.75+1.5+4.25",
+"subq": "How much do pens, notebooks, highlighters and binders cost?",
+"kind": "bin",
+"a": "6.25",
+"op": "+",
+"b": "1.5",
+"value": "7.75",
+"depends_on": [
+"s4o1",
+"s3o1"
+],
+"node_depth": 2,
+"gold_ancestor": false,
+"gold_step": false,
+"flags": [],
+"renderings": {
+"op": {
+"question": "What is 6.25 + 1.5?",
+"options": [
+"12",
+"4.75",
+"7.75"
+],
+"answer": 2,
+"wrong": [
+"other",
+"operator",
+null
+]
+},
+"qop": {
+"question": "How much do pens, notebooks, highlighters and binders cost? It is 6.25 + 1.5 + 4.25. What is 6.25 + 1.5?",
+"options": [
+"12",
+"4.75",
+"7.75"
+],
+"answer": 2,
+"wrong": [
+"other",
+"operator",
+null
+]
+}
+}
+},
+{
+"id": "s4o3",
+"type": "op",
+"step": 4,
+"op_index": 3,
+"n_ops": 3,
+"last_of_step": true,
+"expr": "2.5+3.75+1.5+4.25",
+"subq": "How much do pens, notebooks, highlighters and binders cost?",
+"kind": "bin",
+"a": "7.75",
+"op": "+",
+"b": "4.25",
+"value": "12",
+"depends_on": [
+"s4o2"
+],
+"node_depth": 3,
+"gold_ancestor": false,
+"gold_step": false,
+"flags": [],
+"renderings": {
+"op": {
+"question": "What is 7.75 + 4.25?",
+"options": [
+"14",
+"12",
+"13"
+],
+"answer": 1,
+"wrong": [
+"perturb",
+null,
+"perturb"
+]
+},
+"qop": {
+"question": "How much do pens, notebooks, highlighters and binders cost? It is 7.75 + 4.25. What is the value?",
+"options": [
+"14",
+"12",
+"13"
+],
+"answer": 1,
+"wrong": [
+"perturb",
+null,
+"perturb"
+]
+},
+"opsel": {
+"question": "How much do pens, notebooks, highlighters and binders cost? Which computation gives it?",
+"options": [
+"7.75 + 4.25",
+"4.25 + 4.25",
+"5 + 4.25"
+],
+"answer": 0,
+"wrong": [
+null,
+"operand",
+"operand"
+],
+"design": "operand"
+}
+}
+},
+{
+"id": "s5o1",
+"type": "op",
+"step": 5,
+"op_index": 1,
+"n_ops": 1,
+"last_of_step": true,
+"expr": "30*12",
+"subq": "How much do pens, notebooks, highlers and binders cost?",
+"kind": "bin",
+"a": "30",
+"op": "×",
+"b": "12",
+"value": "360",
+"depends_on": [],
+"node_depth": 0,
+"gold_ancestor": true,
+"gold_step": false,
+"flags": [
+"parents_uncertain"
+],
+"renderings": {
+"op": {
+"question": "What is 30 × 12?",
+"options": [
+"460",
+"360",
+"380"
+],
+"answer": 1,
+"wrong": [
+"perturb",
+null,
+"perturb"
+]
+},
+"qop": {
+"question": "How much do pens, notebooks, highlers and binders cost? It is 30 × 12. What is the value?",
+"options": [
+"460",
+"360",
+"380"
+],
+"answer": 1,
+"wrong": [
+"perturb",
+null,
+"perturb"
+]
+},
+"opsel": {
+"question": "How much do pens, notebooks, highlers and binders cost? Which computation gives it?",
+"options": [
+"30 × 12",
+"12 × 12",
+"2.5 × 12"
+],
+"answer": 0,
+"wrong": [
+null,
+"operand",
+"operand"
+],
+"design": "operand"
+}
+}
+}
+]
+},
+{
+"item_id": "gsm8k-train-3365",
+"source": "gsm8k_tf",
+"group": "gsm8k_tf/s3",
+"type": "choice",
+"prompt": "Question: John buys 3 dress shirts.  They sell for $20 each.  He also has to pay 10% tax on everything.  How much did he pay in total?\nOptions:\nA) 6\nB) 66\nC) 10\nD) 70\nE) 64",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"gold_label": "B",
+"teacher": {
+"A": 0.0,
+"B": 1.0,
+"C": 0.0,
+"D": 0.0,
+"E": 0.0
+},
+"options": [
+"6",
+"66",
+"10",
+"70",
+"64"
+],
+"option_kinds": [
+"primary",
+"gold",
+"primary",
+"perturb_gold",
+"perturb_gold"
+],
+"recipe": "inter",
+"depth": 3,
+"dep_level": 1,
+"subqs": [
+{
+"id": "s1v",
+"question": "How much did the shirts cost before tax? Is it 60?",
+"opposite": "How much did the shirts cost before tax? Is it different from 60?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 60.0,
+"step": 1,
+"expr": "3*20",
+"value": 60.0,
+"flags": [],
+"gold_ancestor": false,
+"node_depth": 0
+},
+{
+"id": "s1n",
+"question": "How much did the shirts cost before tax? Is it 57?",
+"opposite": "How much did the shirts cost before tax? Is it different from 57?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 57.0,
+"step": 1,
+"expr": "3*20",
+"value": 60.0,
+"flags": [],
+"gold_ancestor": false,
+"node_depth": 0,
+"wrong": "slip"
+},
+{
+"id": "s2v",
+"question": "How much did the tax cost? Is it 6?",
+"opposite": "How much did the tax cost? Is it different from 6?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 6.0,
+"step": 2,
+"expr": "60*.1",
+"value": 6.0,
+"flags": [
+"parents_uncertain"
+],
+"gold_ancestor": true,
+"node_depth": 0
+},
+{
+"id": "s2n",
+"question": "How much did the tax cost? Is it 60?",
+"opposite": "How much did the tax cost? Is it different from 60?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 60.0,
+"step": 2,
+"expr": "60*.1",
+"value": 6.0,
+"flags": [
+"parents_uncertain"
+],
+"gold_ancestor": true,
+"node_depth": 0,
+"wrong": "other"
+}
+],
+"random_subqs": [],
+"rationale": "",
+"augment": null,
+"has_tree": true,
+"tree_fix": true,
+"row_kind": "final",
+"problem_id": "gsm8k-train-3365",
+"node_status": "ok",
+"licence_class": "PERM",
+"licence": "MIT (openai/gsm8k)",
+"label_basis": "gold",
+"node_basis": "program",
+"pool_rank": 29,
+"n_steps": 3,
+"tree_source": "gsm8k_socratic_tf",
+"value_nodes": [
+{
+"id": "s1o1",
+"type": "op",
+"step": 1,
+"op_index": 1,
+"n_ops": 1,
+"last_of_step": true,
+"expr": "3*20",
+"subq": "How much did the shirts cost before tax?",
+"kind": "bin",
+"a": "3",
+"op": "×",
+"b": "20",
+"value": "60",
+"depends_on": [],
+"node_depth": 0,
+"gold_ancestor": false,
+"gold_step": false,
+"flags": [],
+"renderings": {
+"op": {
+"question": "What is 3 × 20?",
+"options": [
+"60",
+"17",
+"23"
+],
+"answer": 0,
+"wrong": [
+null,
+"operator",
+"operator"
+]
+},
+"qop": {
+"question": "How much did the shirts cost before tax? It is 3 × 20. What is the value?",
+"options": [
+"60",
+"17",
+"23"
+],
+"answer": 0,
+"wrong": [
+null,
+"operator",
+"operator"
+]
+},
+"opsel": {
+"question": "How much did the shirts cost before tax? Which computation gives it?",
+"options": [
+"3 + 20",
+"3 ÷ 20",
+"3 × 20"
+],
+"answer": 2,
+"wrong": [
+"operator",
+"operator",
+null
+],
+"design": "operator"
+}
+}
+},
+{
+"id": "s2o1",
+"type": "op",
+"step": 2,
+"op_index": 1,
+"n_ops": 1,
+"last_of_step": true,
+"expr": "60*.1",
+"subq": "How much did the tax cost?",
+"kind": "pct",
+"a": "10",
+"op": "% of",
+"b": "60",
+"value": "6",
+"depends_on": [],
+"node_depth": 0,
+"gold_ancestor": true,
+"gold_step": false,
+"flags": [
+"parents_uncertain"
+],
+"renderings": {
+"op": {
+"question": "What is 10% of 60?",
+"options": [
+"6",
+"54",
+"50"
+],
+"answer": 0,
+"wrong": [
+null,
+"complement",
+"operator"
+]
+},
+"qop": {
+"question": "How much did the tax cost? It is 10% of 60. What is the value?",
+"options": [
+"6",
+"54",
+"50"
+],
+"answer": 0,
+"wrong": [
+null,
+"complement",
+"operator"
+]
+},
+"opsel": {
+"question": "How much did the tax cost? Which computation gives it?",
+"options": [
+"10% of 60",
+"10% of 10",
+"10% of 20"
+],
+"answer": 0,
+"wrong": [
+null,
+"operand",
+"operand"
+],
+"design": "operand"
+}
+},
+"percent": {
+"written_in": "problem",
+"form": "decimal"
+}
+}
+]
+},
+{
+"item_id": "gsm8k-train-263",
+"source": "gsm8k_tf",
+"group": "gsm8k_tf/s3",
+"type": "choice",
+"prompt": "Question: John plants a plot of 3 trees by 4 trees.  Each tree gives 5 apples.  He sells each apple for $.5.  How much money does he make, in dollars?\nOptions:\nA) 20\nB) 27\nC) 30\nD) 10\nE) 37",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"gold_label": "C",
+"teacher": {
+"A": 0.0,
+"B": 0.0,
+"C": 1.0,
+"D": 0.0,
+"E": 0.0
+},
+"options": [
+"20",
+"27",
+"30",
+"10",
+"37"
+],
+"option_kinds": [
+"perturb_p1",
+"primary",
+"gold",
+"primary",
+"perturb_p2"
+],
+"recipe": "inter",
+"depth": 3,
+"dep_level": 0,
+"subqs": [
+{
+"id": "s1v",
+"question": "How many trees does John plant? Is it 12?",
+"opposite": "How many trees does John plant? Is it different from 12?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 12.0,
+"step": 1,
+"expr": "3*4",
+"value": 12.0,
+"flags": [],
+"gold_ancestor": false,
+"node_depth": 0
+},
+{
+"id": "s1n",
+"question": "How many trees does John plant? Is it 15?",
+"opposite": "How many trees does John plant? Is it different from 15?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 15.0,
+"step": 1,
+"expr": "3*4",
+"value": 12.0,
+"flags": [],
+"gold_ancestor": false,
+"node_depth": 0,
+"wrong": "slip"
+},
+{
+"id": "s2v",
+"question": "How many apples does John plant? Is it 60?",
+"opposite": "How many apples does John plant? Is it different from 60?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 60.0,
+"step": 2,
+"expr": "12*5",
+"value": 60.0,
+"flags": [
+"parents_uncertain"
+],
+"gold_ancestor": false,
+"node_depth": 0
+},
+{
+"id": "s2n",
+"question": "How many apples does John plant? Is it 70?",
+"opposite": "How many apples does John plant? Is it different from 70?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 70.0,
+"step": 2,
+"expr": "12*5",
+"value": 60.0,
+"flags": [
+"parents_uncertain"
+],
+"gold_ancestor": false,
+"node_depth": 0,
+"wrong": "perturb"
+}
+],
+"random_subqs": [],
+"rationale": "",
+"augment": null,
+"has_tree": true,
+"tree_fix": true,
+"row_kind": "final",
+"problem_id": "gsm8k-train-263",
+"node_status": "ok",
+"licence_class": "PERM",
+"licence": "MIT (openai/gsm8k)",
+"label_basis": "gold",
+"node_basis": "program",
+"pool_rank": 32,
+"n_steps": 3,
+"tree_source": "gsm8k_socratic_tf",
+"value_nodes": [
+{
+"id": "s1o1",
+"type": "op",
+"step": 1,
+"op_index": 1,
+"n_ops": 1,
+"last_of_step": true,
+"expr": "3*4",
+"subq": "How many trees does John plant?",
+"kind": "bin",
+"a": "3",
+"op": "×",
+"b": "4",
+"value": "12",
+"depends_on": [],
+"node_depth": 0,
+"gold_ancestor": false,
+"gold_step": false,
+"flags": [],
+"renderings": {
+"op": {
+"question": "What is 3 × 4?",
+"options": [
+"12",
+"60",
+"16"
+],
+"answer": 0,
+"wrong": [
+null,
+"other",
+"perturb"
+]
+},
+"qop": {
+"question": "How many trees does John plant? It is 3 × 4. What is the value?",
+"options": [
+"12",
+"60",
+"16"
+],
+"answer": 0,
+"wrong": [
+null,
+"other",
+"perturb"
+]
+},
+"opsel": {
+"question": "How many trees does John plant? Which computation gives it?",
+"options": [
+"3 × 4",
+"3 + 4",
+"3 ÷ 4"
+],
+"answer": 0,
+"wrong": [
+null,
+"operator",
+"operator"
+],
+"design": "operator"
+}
+}
+},
+{
+"id": "s2o1",
+"type": "op",
+"step": 2,
+"op_index": 1,
+"n_ops": 1,
+"last_of_step": true,
+"expr": "12*5",
+"subq": "How many apples does John plant?",
+"kind": "bin",
+"a": "12",
+"op": "×",
+"b": "5",
+"value": "60",
+"depends_on": [],
+"node_depth": 0,
+"gold_ancestor": false,
+"gold_step": false,
+"flags": [
+"parents_uncertain"
+],
+"renderings": {
+"op": {
+"question": "What is 12 × 5?",
+"options": [
+"70",
+"60",
+"110"
+],
+"answer": 1,
+"wrong": [
+"perturb",
+null,
+"perturb"
+]
+},
+"qop": {
+"question": "How many apples does John plant? It is 12 × 5. What is the value?",
+"options": [
+"70",
+"60",
+"110"
+],
+"answer": 1,
+"wrong": [
+"perturb",
+null,
+"perturb"
+]
+},
+"opsel": {
+"question": "How many apples does John plant? Which computation gives it?",
+"options": [
+"12 × 5",
+"12 + 5",
+"12 ÷ 5"
+],
+"answer": 0,
+"wrong": [
+null,
+"operator",
+"operator"
+],
+"design": "operator"
+}
+}
+}
+]
+},
+{
+"item_id": "gsm8k-train-4379",
+"source": "gsm8k_tf",
+"group": "gsm8k_tf/s4",
+"type": "choice",
+"prompt": "Question: Jeremy is driving 600 miles to visit his parents. His average speed for this trip is 50 miles per hour. Every two hours of driving, he makes a rest stop for 15 minutes. His car gets 18 miles per gallon of gas, and his gas indicator comes on when he's used 15 gallons, at which point he stops to refill, which takes 10 minutes. How long, in minutes, does he take to get to his parents' house, if he starts out with a full tank of gas?\nOptions:\nA) 75\nB) 65\nC) 815\nD) 617\nE) 615",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"gold_label": "C",
+"teacher": {
+"A": 0.0,
+"B": 0.0,
+"C": 1.0,
+"D": 0.0,
+"E": 0.0
+},
+"options": [
+"75",
+"65",
+"815",
+"617",
+"615"
+],
+"option_kinds": [
+"primary",
+"perturb_p1",
+"gold",
+"perturb_p2",
+"primary"
+],
+"recipe": "inter",
+"depth": 4,
+"dep_level": 1,
+"subqs": [
+{
+"id": "s1v",
+"question": "How many minutes will Jeremy spend on rest stops? Is it 75?",
+"opposite": "How many minutes will Jeremy spend on rest stops? Is it different from 75?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 75.0,
+"step": 1,
+"expr": "5*15",
+"value": 75.0,
+"flags": [],
+"gold_ancestor": true,
+"node_depth": 0
+},
+{
+"id": "s1n",
+"question": "How many minutes will Jeremy spend on rest stops? Is it 20?",
+"opposite": "How many minutes will Jeremy spend on rest stops? Is it different from 20?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 20.0,
+"step": 1,
+"expr": "5*15",
+"value": 75.0,
+"flags": [],
+"gold_ancestor": true,
+"node_depth": 0,
+"wrong": "other"
+},
+{
+"id": "s2v",
+"question": "How many miles will Jeremy stop to refill? Is it 270?",
+"opposite": "How many miles will Jeremy stop to refill? Is it different from 270?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 270.0,
+"step": 2,
+"expr": "18*15",
+"value": 270.0,
+"flags": [],
+"gold_ancestor": false,
+"node_depth": 0
+},
+{
+"id": "s2n",
+"question": "How many miles will Jeremy stop to refill? Is it 288?",
+"opposite": "How many miles will Jeremy stop to refill? Is it different from 288?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 288.0,
+"step": 2,
+"expr": "18*15",
+"value": 270.0,
+"flags": [],
+"gold_ancestor": false,
+"node_depth": 0,
+"wrong": "slip"
+},
+{
+"id": "s3v",
+"question": "How many minutes will Jeremy spend refueling? Is it 20?",
+"opposite": "How many minutes will Jeremy spend refueling? Is it different from 20?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 20.0,
+"step": 3,
+"expr": "2*10",
+"value": 20.0,
+"flags": [],
+"gold_ancestor": true,
+"node_depth": 0
+},
+{
+"id": "s3n",
+"question": "How many minutes will Jeremy spend refueling? Is it 10?",
+"opposite": "How many minutes will Jeremy spend refueling? Is it different from 10?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 10.0,
+"step": 3,
+"expr": "2*10",
+"value": 20.0,
+"flags": [],
+"gold_ancestor": true,
+"node_depth": 0,
+"wrong": "perturb"
+}
+],
+"random_subqs": [],
+"rationale": "",
+"augment": null,
+"has_tree": true,
+"tree_fix": true,
+"row_kind": "final",
+"problem_id": "gsm8k-train-4379",
+"node_status": "ok",
+"licence_class": "PERM",
+"licence": "MIT (openai/gsm8k)",
+"label_basis": "gold",
+"node_basis": "program",
+"pool_rank": 34,
+"n_steps": 4,
+"tree_source": "gsm8k_socratic_tf",
+"value_nodes": [
+{
+"id": "s1o1",
+"type": "op",
+"step": 1,
+"op_index": 1,
+"n_ops": 1,
+"last_of_step": true,
+"expr": "5*15",
+"subq": "How many minutes will Jeremy spend on rest stops?",
+"kind": "bin",
+"a": "5",
+"op": "×",
+"b": "15",
+"value": "75",
+"depends_on": [],
+"node_depth": 0,
+"gold_ancestor": true,
+"gold_step": false,
+"flags": [],
+"renderings": {
+"op": {
+"question": "What is 5 × 15?",
+"options": [
+"20",
+"10",
+"75"
+],
+"answer": 2,
+"wrong": [
+"operator",
+"operator",
+null
+]
+},
+"qop": {
+"question": "How many minutes will Jeremy spend on rest stops? It is 5 × 15. What is the value?",
+"options": [
+"20",
+"10",
+"75"
+],
+"answer": 2,
+"wrong": [
+"operator",
+"operator",
+null
+]
+},
+"opsel": {
+"question": "How many minutes will Jeremy spend on rest stops? Which computation gives it?",
+"options": [
+"5 × 15",
+"5 ÷ 15",
+"5 + 15"
+],
+"answer": 0,
+"wrong": [
+null,
+"operator",
+"operator"
+],
+"design": "operator"
+}
+}
+},
+{
+"id": "s2o1",
+"type": "op",
+"step": 2,
+"op_index": 1,
+"n_ops": 1,
+"last_of_step": true,
+"expr": "18*15",
+"subq": "How many miles will Jeremy stop to refill?",
+"kind": "bin",
+"a": "18",
+"op": "×",
+"b": "15",
+"value": "270",
+"depends_on": [],
+"node_depth": 0,
+"gold_ancestor": false,
+"gold_step": false,
+"flags": [],
+"renderings": {
+"op": {
+"question": "What is 18 × 15?",
+"options": [
+"270",
+"795",
+"280"
+],
+"answer": 0,
+"wrong": [
+null,
+"other",
+"perturb"
+]
+},
+"qop": {
+"question": "How many miles will Jeremy stop to refill? It is 18 × 15. What is the value?",
+"options": [
+"270",
+"795",
+"280"
+],
+"answer": 0,
+"wrong": [
+null,
+"other",
+"perturb"
+]
+},
+"opsel": {
+"question": "How many miles will Jeremy stop to refill? Which computation gives it?",
+"options": [
+"18 × 15",
+"18 ÷ 15",
+"18 + 15"
+],
+"answer": 0,
+"wrong": [
+null,
+"operator",
+"operator"
+],
+"design": "operator"
+}
+}
+},
+{
+"id": "s3o1",
+"type": "op",
+"step": 3,
+"op_index": 1,
+"n_ops": 1,
+"last_of_step": true,
+"expr": "2*10",
+"subq": "How many minutes will Jeremy spend refueling?",
+"kind": "bin",
+"a": "2",
+"op": "×",
+"b": "10",
+"value": "20",
+"depends_on": [],
+"node_depth": 0,
+"gold_ancestor": true,
+"gold_step": false,
+"flags": [],
+"renderings": {
+"op": {
+"question": "What is 2 × 10?",
+"options": [
+"12",
+"5",
+"20"
+],
+"answer": 2,
+"wrong": [
+"operator",
+"operator",
+null
+]
+},
+"qop": {
+"question": "How many minutes will Jeremy spend refueling? It is 2 × 10. What is the value?",
+"options": [
+"12",
+"5",
+"20"
+],
+"answer": 2,
+"wrong": [
+"operator",
+"operator",
+null
+]
+},
+"opsel": {
+"question": "How many minutes will Jeremy spend refueling? Which computation gives it?",
+"options": [
+"2 ÷ 10",
+"2 × 10",
+"2 + 10"
+],
+"answer": 1,
+"wrong": [
+"operator",
+null,
+"operator"
+],
+"design": "operator"
+}
+}
+},
+{
+"id": "s4o1",
+"type": "op",
+"step": 4,
+"op_index": 1,
+"n_ops": 2,
+"last_of_step": false,
+"expr": "720+75+20",
+"subq": "How many minutes will Jeremy take to get to his parents' house?",
+"kind": "bin",
+"a": "720",
+"op": "+",
+"b": "75",
+"value": "795",
+"depends_on": [
+"s1o1"
+],
+"node_depth": 1,
+"gold_ancestor": true,
+"gold_step": true,
+"flags": [
+"parents_uncertain"
+],
+"renderings": {
+"op": {
+"question": "What is 720 + 75?",
+"options": [
+"795",
+"805",
+"645"
+],
+"answer": 0,
+"wrong": [
+null,
+"perturb",
+"operator"
+]
+}
+}
+}
+]
+},
+{
+"item_id": "gsm8k-train-660",
+"source": "gsm8k_tf",
+"group": "gsm8k_tf/s4",
+"type": "choice",
+"prompt": "Question: Abe finds 4 ants on the sidewalk.  Beth sees 50% more ants than Abe.  CeCe watches twice as many ants as Abe.  Duke discovers half as many ants as Abe.  How many ants do the four children find together?\nOptions:\nA) 48\nB) 20\nC) 53\nD) 49\nE) 4",
+"labels": [
+"A",
+"B",
+"C",
+"D",
+"E"
+],
+"gold_label": "B",
+"teacher": {
+"A": 0.0,
+"B": 1.0,
+"C": 0.0,
+"D": 0.0,
+"E": 0.0
+},
+"options": [
+"48",
+"20",
+"53",
+"49",
+"4"
+],
+"option_kinds": [
+"partial_ab",
+"gold",
+"perturb_p1",
+"perturb_p1",
+"partial_ab"
+],
+"recipe": "qo2",
+"depth": 4,
+"dep_level": 1,
+"subqs": [
+{
+"id": "s1v",
+"question": "How many ants does Beth see? Is it 6?",
+"opposite": "How many ants does Beth see? Is it different from 6?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 6.0,
+"step": 1,
+"expr": "4+2",
+"value": 6.0,
+"flags": [],
+"gold_ancestor": true,
+"node_depth": 0
+},
+{
+"id": "s1n",
+"question": "How many ants does Beth see? Is it 10?",
+"opposite": "How many ants does Beth see? Is it different from 10?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 10.0,
+"step": 1,
+"expr": "4+2",
+"value": 6.0,
+"flags": [],
+"gold_ancestor": true,
+"node_depth": 0,
+"wrong": "perturb"
+},
+{
+"id": "s2v",
+"question": "How many ants does CeCe see? Is it 8?",
+"opposite": "How many ants does CeCe see? Is it different from 8?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 8.0,
+"step": 2,
+"expr": "4*2",
+"value": 8.0,
+"flags": [],
+"gold_ancestor": true,
+"node_depth": 0
+},
+{
+"id": "s2n",
+"question": "How many ants does CeCe see? Is it 2?",
+"opposite": "How many ants does CeCe see? Is it different from 2?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 2.0,
+"step": 2,
+"expr": "4*2",
+"value": 8.0,
+"flags": [],
+"gold_ancestor": true,
+"node_depth": 0,
+"wrong": "slip"
+},
+{
+"id": "s3v",
+"question": "How many ants does Duke see? Is it 2?",
+"opposite": "How many ants does Duke see? Is it different from 2?",
+"truth": true,
+"p_cot": 1.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 2.0,
+"step": 3,
+"expr": "4/2",
+"value": 2.0,
+"flags": [],
+"gold_ancestor": false,
+"node_depth": 0
+},
+{
+"id": "s3n",
+"question": "How many ants does Duke see? Is it 8?",
+"opposite": "How many ants does Duke see? Is it different from 8?",
+"truth": false,
+"p_cot": 0.0,
+"p_fresh": null,
+"type": "step",
+"depends_on": [],
+"initial": null,
+"status": "direct",
+"probe": 8.0,
+"step": 3,
+"expr": "4/2",
+"value": 2.0,
+"flags": [],
+"gold_ancestor": false,
+"node_depth": 0,
+"wrong": "slip"
+}
+],
+"random_subqs": [],
+"rationale": "",
+"augment": null,
+"has_tree": true,
+"tree_fix": true,
+"row_kind": "final",
+"problem_id": "gsm8k-train-660",
+"node_status": "ok",
+"licence_class": "PERM",
+"licence": "MIT (openai/gsm8k)",
+"label_basis": "gold",
+"node_basis": "program",
+"pool_rank": 4767,
+"n_steps": 4,
+"tree_source": "gsm8k_socratic_tf",
+"value_nodes": [
+{
+"id": "s1o1",
+"type": "op",
+"step": 1,
+"op_index": 1,
+"n_ops": 1,
+"last_of_step": true,
+"expr": "4+2",
+"subq": "How many ants does Beth see?",
+"kind": "bin",
+"a": "4",
+"op": "+",
+"b": "2",
+"value": "6",
+"depends_on": [],
+"node_depth": 0,
+"gold_ancestor": true,
+"gold_step": false,
+"flags": [],
+"renderings": {
+"op": {
+"question": "What is 4 + 2?",
+"options": [
+"4",
+"2",
+"6"
+],
+"answer": 2,
+"wrong": [
+"perturb",
+"operator",
+null
+]
+},
+"qop": {
+"question": "How many ants does Beth see? It is 4 + 2. What is the value?",
+"options": [
+"4",
+"2",
+"6"
+],
+"answer": 2,
+"wrong": [
+"perturb",
+"operator",
+null
+]
+},
+"opsel": {
+"question": "How many ants does Beth see? Which computation gives it?",
+"options": [
+"4 × 2",
+"4 ÷ 2",
+"4 + 2"
+],
+"answer": 2,
+"wrong": [
+"operator",
+"operator",
+null
+],
+"design": "operator"
+}
+}
+},
+{
+"id": "s2o1",
+"type": "op",
+"step": 2,
+"op_index": 1,
+"n_ops": 1,
+"last_of_step": true,
+"expr": "4*2",
+"subq": "How many ants does CeCe see?",
+"kind": "bin",
+"a": "4",
+"op": "×",
+"b": "2",
+"value": "8",
+"depends_on": [],
+"node_depth": 0,
+"gold_ancestor": true,
+"gold_step": false,
+"flags": [],
+"renderings": {
+"op": {
+"question": "What is 4 × 2?",
+"options": [
+"8",
+"10",
+"18"
+],
+"answer": 0,
+"wrong": [
+null,
+"other",
+"other"
+]
+},
+"qop": {
+"question": "How many ants does CeCe see? It is 4 × 2. What is the value?",
+"options": [
+"8",
+"10",
+"18"
+],
+"answer": 0,
+"wrong": [
+null,
+"other",
+"other"
+]
+},
+"opsel": {
+"question": "How many ants does CeCe see? Which computation gives it?",
+"options": [
+"4 + 2",
+"4 ÷ 2",
+"4 × 2"
+],
+"answer": 2,
+"wrong": [
+"operator",
+"operator",
+null
+],
+"design": "operator"
+}
+}
+},
+{
+"id": "s3o1",
+"type": "op",
+"step": 3,
+"op_index": 1,
+"n_ops": 1,
+"last_of_step": true,
+"expr": "4/2",
+"subq": "How many ants does Duke see?",
+"kind": "bin",
+"a": "4",
+"op": "÷",
+"b": "2",
+"value": "2",
+"depends_on": [],
+"node_depth": 0,
+"gold_ancestor": false,
+"gold_step": false,
+"flags": [],
+"renderings": {
+"op": {
+"question": "What is 4 ÷ 2?",
+"options": [
+"2",
+"6",
+"8"
+],
+"answer": 0,
+"wrong": [
+null,
+"operator",
+"operator"
+]
+},
+"qop": {
+"question": "How many ants does Duke see? It is 4 ÷ 2. What is the value?",
+"options": [
+"2",
+"6",
+"8"
+],
+"answer": 0,
+"wrong": [
+null,
+"operator",
+"operator"
+]
+},
+"opsel": {
+"question": "How many ants does Duke see? Which computation gives it?",
+"options": [
+"4 × 2",
+"4 ÷ 2",
+"4 + 2"
+],
+"answer": 1,
+"wrong": [
+"operator",
+null,
+"operator"
+],
+"design": "operator"
+}
+}
+},
+{
+"id": "s4o1",
+"type": "op",
+"step": 4,
+"op_index": 1,
+"n_ops": 3,
+"last_of_step": false,
+"expr": "4+6+8+2",
+"subq": "How many ants do the four children find together?",
+"kind": "bin",
+"a": "4",
+"op": "+",
+"b": "6",
+"value": "10",
+"depends_on": [
+"s1o1"
+],
+"node_depth": 1,
+"gold_ancestor": true,
+"gold_step": true,
+"flags": [
+"parents_uncertain"
+],
+"renderings": {
+"op": {
+"question": "What is 4 + 6?",
+"options": [
+"2",
+"10",
+"24"
+],
+"answer": 1,
+"wrong": [
+"operator",
+null,
+"operator"
+]
+}
+}
+},
+{
+"id": "s4o2",
+"type": "op",
+"step": 4,
+"op_index": 2,
+"n_ops": 3,
+"last_of_step": false,
+"expr": "4+6+8+2",
+"subq": "How many ants do the four children find together?",
+"kind": "bin",
+"a": "10",
+"op": "+",
+"b": "8",
+"value": "18",
+"depends_on": [
+"s4o1",
+"s2o1"
+],
+"node_depth": 2,
+"gold_ancestor": true,
+"gold_step": true,
+"flags": [
+"parents_uncertain"
+],
+"renderings": {
+"op": {
+"question": "What is 10 + 8?",
+"options": [
+"6",
+"18",
+"2"
+],
+"answer": 1,
+"wrong": [
+"other",
+null,
+"operator"
+]
+}
+}
+}
+]
+}
+]
+}

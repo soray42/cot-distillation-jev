@@ -30,6 +30,13 @@ SUBQ_TEMPLATE = "{problem}\n\nIntermediate question: {question}\nOptions:\nA) {a
 SUBQ_OPTS_TEMPLATE = "{problem}\n\nIntermediate question: {question}\nOptions:\n{opts}\nAnswer:"
 FINAL_TEMPLATE = "{problem}\n\nAnswer:"
 RATIONALE_PREFIX = "{problem}\n\nReasoning:"          # rationale-LM baseline: CoT text, then the answer
+# --tree-view bare (value nodes): the node question with its own options and nothing before it
+SUBQ_BARE_TEMPLATE = SUBQ_OPTS_TEMPLATE.replace("{problem}\n\n", "", 1)
+# value nodes (scripts/build_gsm8k_ops.py): one node per atomic operation, in an item field of its own, asked as a
+# multiple-choice node in one of its renderings (--node-format value / yesno+value, --node-render)
+VALUE_FIELD = "value_nodes"
+VALUE_RENDERINGS = ("op", "qop", "opsel")
+VALUE_FORMATS = ("value", "yesno+value")
 
 
 @dataclass
@@ -184,6 +191,56 @@ def mc_node_example(problem: str, sq: dict, weight: float, item_id) -> Example:
     labels = mc_labels(sq)
     return Example(SUBQ_OPTS_TEMPLATE.format(problem=problem, question=sq["question"], opts=mc_options_block(sq)),
                    labels, [float(i == sq["answer"]) for i in range(len(labels))], weight, "subq", item_id)
+
+
+def value_mc_node(sq: dict, render: str) -> dict | None:
+    """A value node (item field VALUE_FIELD) as a multiple-choice node in one rendering: {id, question, options,
+    answer, type value_<render>, node_depth, depends_on}; None when the node has no such rendering (qop / opsel exist
+    only where the Socratic sub-question is true as worded; opsel only for a step's last operation)."""
+    if render not in VALUE_RENDERINGS:
+        raise ValueError(f"value node rendering {render!r}: one of {', '.join(VALUE_RENDERINGS)}")
+    r = (sq.get("renderings") or {}).get(render)
+    if r is None:
+        return None
+    mc = {"id": sq["id"], "question": r["question"], "options": r["options"], "answer": r["answer"],
+          "type": f"value_{render}", "node_depth": sq.get("node_depth"), "depends_on": sq.get("depends_on") or []}
+    mc_check(mc)
+    return mc
+
+
+def value_node_example(context: str | None, mc: dict, weight: float, item_id) -> Example:
+    """A value node (value_mc_node) asked like a multiple-choice tree node (mc_node_example: SUBQ_OPTS_TEMPLATE,
+    labels A, B, C, one-hot target on its answer); context None (--tree-view bare) asks the question alone
+    (SUBQ_BARE_TEMPLATE: "Intermediate question: ...\\nOptions:\\nA) ...\\nAnswer:"). Draws nothing from any generator."""
+    if context is not None:
+        return mc_node_example(context, mc, weight, item_id)
+    labels = mc_labels(mc)
+    return Example(SUBQ_BARE_TEMPLATE.format(question=mc["question"], opts=mc_options_block(mc)), labels,
+                   [float(i == mc["answer"]) for i in range(len(labels))], weight, "subq", item_id)
+
+
+def _value_views(item: dict, *, view: str, rng: random.Random, cap: int, aux_total: float, node_render: str,
+                 node_weight: float, stats: dict | None) -> list[Example]:
+    """The value-node views of one problem (--node-format value / yesno+value): every node of item[VALUE_FIELD] that
+    has the rendering node_render (at most cap, drawn from rng only when the problem has more), asked in the view's
+    context (problem: the prompt with options; statements: statement_block; statements+question: problem_no_options;
+    bare: nothing) with weight node_weight, else aux_total / number of views (the per-problem convention), times the
+    item weight."""
+    nodes = [mc for mc in (value_mc_node(sq, node_render) for sq in item.get(VALUE_FIELD) or []) if mc is not None]
+    if stats is not None:
+        stats["value_nodes_without_render"] = (stats.get("value_nodes_without_render", 0)
+                                              + len(item.get(VALUE_FIELD) or []) - len(nodes))
+    if cap and len(nodes) > cap:
+        nodes = rng.sample(nodes, cap)
+    if not nodes:
+        return []
+    context = (None if view == "bare" else statement_block(item) if view == "statements" else problem_no_options(item)
+               if view == "statements+question" else item["prompt"])
+    w = item.get("weight", 1.0) * (node_weight or aux_total / len(nodes))
+    if stats is not None:
+        stats["value_views"] = stats.get("value_views", 0) + len(nodes)
+        stats["items_with_value_views"] = stats.get("items_with_value_views", 0) + 1
+    return [value_node_example(context, mc, w, item["item_id"]) for mc in nodes]
 
 
 _OPT_LINE = re.compile(r"^([A-Za-z0-9])\) (.*)$")     # option symbols A-Z, a-z, 0-9 (lists of up to 62 options)
@@ -420,7 +477,8 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
                     stats: dict | None = None, mix_p: float = 0.5, mix_seed: int = 0,
                     mix_epoch: int = 0, scaffold_p: float | None = None, depth_weight: float = 0.0,
                     node_types: set | frozenset | None = None, target_seed: int | None = None,
-                    target_kind: str = "shuffled", placebo_bank: PlaceboBank | None = None) -> list[Example]:
+                    target_kind: str = "shuffled", placebo_bank: PlaceboBank | None = None,
+                    node_render: str = "op") -> list[Example]:
     """One problem with ALL its tree nodes (up to `cap`) instead of k sampled ones: [final] + one view per node.
     mode "true": eligible nodes are asked with their parents' results stated; "matched": with the same number of
     depth-matched non-parent results (see full_tree_plan); "plain": every node asked without facts; "placebo": the
@@ -475,7 +533,28 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
     targets, every view's target vector is GFPS's). Nothing is drawn from rng (rng lockstep with GFPS / GFPQ). An asked
     multiple-choice node raises ValueError. stats counts placebo_views, placebo_yes, real_yes, placebo_words /
     real_words (whitespace words of the placebo / node questions) and placebo_<template> per template. (Unrelated to
-    mode "placebo", the zero-weight plain views.)"""
+    mode "placebo", the zero-weight plain views.)
+    node_format "value" (value nodes, scripts/build_gsm8k_ops.py; arms GFPQV / GFPQVQ / GFPQO / GFPVB): mode "plain",
+    views problem / statements / statements+question / bare, no eligible_only, target_seed, scaffold, depth weight or
+    node_types: the final, then every node of item[VALUE_FIELD] that has the rendering node_render ("op", "qop",
+    "opsel"; value_mc_node) as a multiple-choice node in the view's context (bare: the node question alone,
+    SUBQ_BARE_TEMPLATE), labels A..C, one-hot target on its answer, weight aux_total / number of value views (or
+    node_weight) times the item weight (_value_views). The yes/no nodes in item["subqs"] are not asked. Nothing is
+    drawn from rng (cap 0; a cap below the node count samples them).
+    node_format "yesno+value" (GFPQVM; views problem / statements / statements+question): exactly the yes/no views of
+    node_format "yesno" (the same call: same nodes, option orders, targets and rng draws), followed by the value views
+    of node_render. Weights (node_weight 0): with both formats present, every yes/no view weighs (aux_total / n_yesno)
+    x 0.5 and every value view aux_total x 0.5 / n_value (times the item weight), so each format carries half of the
+    problem's aux_total; a problem with views of one format only gives that format the whole aux_total. With
+    node_weight > 0 every view weighs node_weight."""
+    if node_format in VALUE_FORMATS:
+        return _value_tree(item, mode=mode, rng=rng, cap=cap, aux_total=aux_total, final=final,
+                           subq_target=subq_target, permute_final=permute_final, node_format=node_format,
+                           eligible_only=eligible_only, subq_filter=subq_filter, view=view, sources=sources,
+                           node_weight=node_weight, stats=stats, scaffold_p=scaffold_p, depth_weight=depth_weight,
+                           node_types=node_types, target_seed=target_seed, node_render=node_render)
+    if view == "bare":
+        raise ValueError("--tree-view bare is implemented for --node-format value (value nodes) only")
     fin = [e for e in build_examples(item, final=final, subq="none", subq_target=subq_target, lambda_sub=0.0, rng=rng,
                                      permute_final=permute_final) if e.kind == "final"]
     if not fin:
@@ -594,6 +673,38 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
         out.append(Example(SUBQ_TEMPLATE.format(problem=problem, question=question, a=a, b=b), ["A", "B"],
                            _soft(p, yes_first), wk * wi, "subq", item["item_id"]))
     return out
+
+
+def _value_tree(item: dict, *, mode: str, rng: random.Random, cap: int, aux_total: float, final: str,
+                subq_target: str, permute_final: float, node_format: str, eligible_only: bool, subq_filter: str,
+                view: str, sources: set | None, node_weight: float, stats: dict | None, scaffold_p: float | None,
+                depth_weight: float, node_types, target_seed: int | None, node_render: str) -> list[Example]:
+    """build_full_tree for node_format "value" / "yesno+value" (see there)."""
+    views = ("problem", "statements", "statements+question") + (("bare",) if node_format == "value" else ())
+    if (mode != "plain" or view not in views or eligible_only or target_seed is not None or scaffold_p is not None
+            or depth_weight or node_types is not None):
+        raise ValueError(f"--node-format {node_format} is implemented for --tree-full plain, views {', '.join(views)}, "
+                         "without --tree-eligible-only, --tree-target, --tree-scaffold, --tree-depth-weight or "
+                         "--tree-node-types")
+    if node_render not in VALUE_RENDERINGS:
+        raise ValueError(f"--node-render {node_render!r}: one of {', '.join(VALUE_RENDERINGS)}")
+    if node_format == "yesno+value":                  # the GFPQ group itself: same call, same draws
+        out = build_full_tree(item, mode=mode, rng=rng, cap=cap, aux_total=aux_total, final=final,
+                              subq_target=subq_target, permute_final=permute_final, node_format="yesno",
+                              subq_filter=subq_filter, view=view, sources=sources, node_weight=node_weight,
+                              stats=stats)
+    else:
+        out = [e for e in build_examples(item, final=final, subq="none", subq_target=subq_target, lambda_sub=0.0,
+                                         rng=rng, permute_final=permute_final) if e.kind == "final"]
+    if not out or (sources is not None and item.get("source") not in sources):
+        return out
+    yn = [e for e in out if e.kind == "subq"]
+    half = node_format == "yesno+value" and bool(yn) and not node_weight
+    vals = _value_views(item, view=view, rng=rng, cap=cap, aux_total=aux_total * 0.5 if half else aux_total,
+                        node_render=node_render, node_weight=node_weight, stats=stats)
+    if half and vals:                                 # each format carries half of the problem's aux_total (no value
+        out = [e if e.kind != "subq" else dataclasses.replace(e, weight=e.weight * 0.5) for e in out]   # view: all)
+    return out + vals
 
 
 def shuffled_targets(item: dict, seed: int, subq_target: str = "cot") -> dict:
@@ -1702,14 +1813,19 @@ def subq_sets(spec: str) -> list[tuple[str, str]]:
 
 @torch.no_grad()
 def evaluate_subq(model, tok, items: list[dict], max_len: int, bs: int, cache: dict,
-                  seed: int = 0) -> tuple[dict, list[dict]]:
+                  seed: int = 0, value_render: str | None = "op") -> tuple[dict, list[dict]]:
     """Student accuracy on the sub-questions of held-out items (the mechanism check: does the one-pass
     student answer the intermediate judgements?). Target: program truth when known, else the teacher's
     CoT-conditioned answer. Also scores the matched control questions against the teacher's fresh answer.
     Broken down by node type and source; yes/no order randomised per question as in training.
     Multiple-choice nodes (treeplan.is_mc_node) are asked with their own options (mc_node_example, no rng draw) and
     scored by argmax == answer; their preds carry probs, pred, answer and rank instead of p_yes (p_yes is P(answer)),
-    and they also count in the group cot/mc."""
+    and they also count in the group cot/mc.
+    Value nodes (item field VALUE_FIELD, scripts/build_gsm8k_ops.py) in the rendering value_render (None: not scored)
+    are asked like MC nodes in the same context (the prompt with its options; no rng draw, so the yes/no draws are
+    those of the items without value nodes), after the item's other questions, kind "value": groups all_value,
+    value/<source>, value/type/value_<render>, value/mc and value/depth/<node_depth>; preds also carry node_id and
+    render. Nodes without that rendering are skipped."""
     rng = random.Random(seed)
     exs, meta = [], []
     for it in items:
@@ -1742,6 +1858,15 @@ def evaluate_subq(model, tok, items: list[dict], max_len: int, bs: int, cache: d
                     if "depth" in it:
                         meta[-1]["chain_top"] = f"{tag}/top-{it['depth'] - sq['node_depth']}"
                         meta[-1]["chain_item"] = f"{tag}/item_d{it['depth']}"
+        for sq in (it.get(VALUE_FIELD) or []) if value_render else []:      # value nodes: own options, no rng draw
+            mc = value_mc_node(sq, value_render)
+            if mc is None:
+                continue
+            exs.append(mc_node_example(it["prompt"], mc, 1.0, it["item_id"]))
+            meta.append({"item_id": it["item_id"], "source": it.get("source"), "kind": "value", "type": mc["type"],
+                         "truth_known": True, "target": mc["answer"], "mc": len(mc["options"]),
+                         "question": mc["question"], "var": None, "node_id": sq["id"], "render": value_render,
+                         "depth": f"value/depth/{sq.get('node_depth')}"})
     was_training = model.training
     model.eval()
     dev = next(model.parameters()).device
@@ -1778,7 +1903,7 @@ def evaluate_subq(model, tok, items: list[dict], max_len: int, bs: int, cache: d
             rank = 1 + sum(1 for j, x in enumerate(pr) if x > pr[m["target"]] or (x == pr[m["target"]]
                                                                                  and j < m["target"]))
             preds.append(dict(m, p_yes=py, probs=pr, pred=pred, answer=m["target"], rank=rank, correct=ok))
-            groups.setdefault("cot/mc", []).append(ok)
+            groups.setdefault("cot/mc" if m["kind"] != "value" else "value/mc", []).append(ok)
         else:
             ok = int((py > 0.5) == m["target"])
             preds.append(dict(m, p_yes=py, correct=ok))
@@ -1789,6 +1914,8 @@ def evaluate_subq(model, tok, items: list[dict], max_len: int, bs: int, cache: d
         for g in ("chain", "chain_top", "chain_item"):
             if g in m:
                 groups.setdefault(f"cot/{m[g]}", []).append(ok)
+        if m["kind"] == "value":
+            groups.setdefault(m["depth"], []).append(ok)
     metrics = {g: {"n": len(v), "acc": sum(v) / len(v)} for g, v in sorted(groups.items())}
     return metrics, preds
 

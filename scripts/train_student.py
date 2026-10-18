@@ -43,7 +43,8 @@ RESUME_FREE = {"stop_after_h", "ckpt_every_min", "ckpt_single", "stop_at_step", 
 # Training arguments added after checkpoints may have been written: a checkpoint without the key had this value.
 NEW_ARG_DEFAULTS = {"tree_view": "problem", "tree_sources": "", "tree_node_weight": 0.0, "attn_impl": "", "fsdp": False,
                     "fsdp_optim": None, "tree_mix_p": 0.5, "tree_scaffold": 0.0, "tree_depth_weight": 0.0,
-                    "chat_template": False, "tree_pack": 0, "tree_node_types": "", "tree_target": "real"}
+                    "chat_template": False, "tree_pack": 0, "tree_node_types": "", "tree_target": "real",
+                    "node_render": "op"}
 
 LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj",
                 "in_proj_qkv", "in_proj_z", "in_proj_a", "in_proj_b", "out_proj"]
@@ -110,7 +111,8 @@ def main() -> None:
     ap.add_argument("--tree-cap", type=int, default=10,
                     help="full-tree groups: at most this many nodes per problem (0 = no cap: every node every epoch)")
     ap.add_argument("--tree-view", default="problem",
-                    choices=["problem", "local", "ancestors", "statements", "statements+question", "local+ctxparse", "mix"],
+                    choices=["problem", "local", "ancestors", "statements", "statements+question", "local+ctxparse", "mix",
+                             "bare"],
                     help="full-tree groups: how a node is asked. problem = with the original problem (the TF/TFM/GF "
                          "arms); local = Tree Forcing: no problem text, only the preamble and the parents' results "
                          "(--tree-full true) or as many matched non-parent results (matched) or nothing (plain: "
@@ -122,7 +124,8 @@ def main() -> None:
                          "TFLP (true only): TFL with the parse nodes asked in the statements view; mix = MIX (true "
                          "only): each node asked once per epoch, in the statements view with probability "
                          "--tree-mix-p (a coin per seed, epoch, item and node), else in its TFL view; both in rng "
-                         "lockstep with TFL")
+                         "lockstep with TFL; bare = GFPVB (plain, --node-format value only): the node question "
+                         "with its own options and nothing else (no problem text)")
     ap.add_argument("--tree-mix-p", type=float, default=0.5,
                     help="--tree-view mix: share of node views asked in the statements view (the rest local)")
     ap.add_argument("--tree-scaffold", type=float, default=0.0,
@@ -167,9 +170,20 @@ def main() -> None:
     ap.add_argument("--tree-node-weight", type=float, default=0.0,
                     help="full-tree groups: loss weight of every node view (times the item weight); 0 = the per-problem "
                          "convention, --aux-total split evenly over the problem's views")
-    ap.add_argument("--node-format", default="yesno", choices=["yesno", "mc"],
+    ap.add_argument("--node-format", default="yesno", choices=["yesno", "mc", "value", "yesno+value"],
                     help="full-tree groups: ask nodes as yes/no questions, or in multiple-choice form with other "
-                         "confident No nodes of the item and 'None of them' as options (same stated results)")
+                         "confident No nodes of the item and 'None of them' as options (same stated results); value = "
+                         "the item's value nodes (field value_nodes, scripts/build_gsm8k_ops.py: one node per atomic "
+                         "operation, three options, one-hot target) in the rendering --node-render instead of the "
+                         "yes/no nodes (GFPQV / GFPQVQ / GFPQO / GFPVB; --tree-full plain, views problem / statements / "
+                         "statements+question / bare); yesno+value = GFPQVM: the yes/no views exactly as yesno, plus "
+                         "the value views, each format carrying half of the per-problem --aux-total (a problem with "
+                         "one format only gives it the whole)")
+    ap.add_argument("--node-render", default="op", choices=["op", "qop", "opsel"],
+                    help="--node-format value / yesno+value: the value-node rendering: op = the bare operation "
+                         "('What is 4 x 1.5?'), qop = the Socratic sub-question plus the operation, opsel = operation "
+                         "selection ('<sub-question> Which computation gives it?', three expressions); nodes without "
+                         "the rendering are not asked. --eval-subq scores the value nodes in this rendering")
     ap.add_argument("--aux-total", type=float, default=1.0,
                     help="full-tree groups: auxiliary weight per problem, split evenly over its node views")
     ap.add_argument("--aux-sources", default="", help="grouped training: comma list of item sources whose auxiliary "
@@ -279,12 +293,24 @@ def main() -> None:
                            args.tree_scaffold or args.fsdp or args.chat_template):
         raise SystemExit(f"--tree-pack {args.tree_pack}: at least 2 views per pack, for --tree-full plain --tree-view "
                          "statements (GFPS) without --tree-scaffold, --fsdp or --chat-template")
-    if args.tree_view != "problem" and not (args.tree_full == "true" and args.tree_view not in ("statements", "statements+question") or
+    value_fmt = args.node_format in ("value", "yesno+value")
+    if args.node_render != "op" and not value_fmt:
+        raise SystemExit(f"--node-render {args.node_render}: for --node-format value / yesno+value")
+    if value_fmt and (args.tree_full != "plain" or args.tree_view not in ("problem", "statements", "statements+question")
+                      + (("bare",) if args.node_format == "value" else ()) or args.tree_eligible_only or
+                      args.tree_scaffold or args.tree_depth_weight or args.tree_pack or args.tree_node_types or
+                      args.tree_target != "real"):
+        raise SystemExit(f"--node-format {args.node_format}: for --tree-full plain, views problem / statements / "
+                         "statements+question (and bare for value), without --tree-eligible-only, --tree-scaffold, "
+                         "--tree-depth-weight, --tree-pack, --tree-node-types or --tree-target")
+    if args.tree_view == "bare" and args.node_format != "value":
+        raise SystemExit("--tree-view bare (GFPVB): for --tree-full plain --node-format value")
+    if args.tree_view != "problem" and not (args.tree_full == "true" and args.tree_view not in ("statements", "statements+question", "bare") or
                                              args.tree_full in ("matched", "plain") and args.tree_view == "local" or
-                                             args.tree_full == "plain" and args.tree_view in ("statements", "statements+question")):
+                                             args.tree_full == "plain" and args.tree_view in ("statements", "statements+question", "bare")):
         raise SystemExit(f"--tree-view {args.tree_view} is implemented for --tree-full true (local/ancestors/"
                          "local+ctxparse/mix), matched (local) and plain (local, statements)")
-    if args.tree_view != "problem" and (args.tree_eligible_only or args.node_format != "yesno"):
+    if args.tree_view != "problem" and (args.tree_eligible_only or args.node_format not in ("yesno", "value", "yesno+value")):
         raise SystemExit("--tree-view local/ancestors/statements/local+ctxparse/mix does not combine with "
                          "--tree-eligible-only / --node-format mc")
     if not 0.0 <= args.tree_mix_p <= 1.0 or args.tree_mix_p != 0.5 and args.tree_view != "mix":
@@ -471,6 +497,15 @@ def main() -> None:
             raise SystemExit(f"--tree-node-types {args.tree_node_types}: no node of type(s) "
                              f"{','.join(sorted(node_types - have))} in the {args.tree_sources or 'tree'} items of "
                              f"{args.train} (types there: {','.join(sorted(str(x) for x in have))})")
+    if value_fmt:                            # GFPQV / GFPQVQ / GFPQO / GFPVB / GFPQVM: value nodes with the rendering
+        from cotdistill.student import VALUE_FIELD                            # must exist in the tree items
+        n_val = sum(bool((sq.get("renderings") or {}).get(args.node_render)) for it in train_items
+                    if tree_sources is None or it.get("source") in tree_sources for sq in it.get(VALUE_FIELD) or [])
+        if not n_val:
+            raise SystemExit(f"--node-format {args.node_format}: no {args.tree_sources or 'tree'} item of {args.train} "
+                             f"has value nodes ({VALUE_FIELD}) with the rendering {args.node_render} "
+                             "(build them with scripts/build_gsm8k_ops.py)")
+        print(f"value nodes ({args.node_render}): {n_val}", flush=True)
     if args.tree_view in ("statements", "statements+question", "local+ctxparse", "mix"):   # GFP-S, GFPQ, TFLP, MIX: every
         from cotdistill.treeplan import problem_no_options, statement_block   # view must build (fail before training);
         view_fn = problem_no_options if args.tree_view == "statements+question" else statement_block   # GFPQ needs
@@ -534,7 +569,7 @@ def main() -> None:
                                 mix_p=args.tree_mix_p, mix_seed=args.seed, mix_epoch=ep, scaffold_p=p_sc,
                                 depth_weight=args.tree_depth_weight, node_types=node_types,
                                 target_seed=args.seed if args.tree_target != "real" else None,
-                                **placebo_kw)
+                                node_render=args.node_render, **placebo_kw)
             if g and args.tree_pack and any(e.kind == "subq" for e in g):   # GFPSP: the GFPS views, packed
                 g = pack_views(g, tok, statement_block(it), max_len=args.max_len, max_nodes=args.tree_pack,
                                rng=pack_rng(args.seed, ep, it["item_id"]), stats=st)
@@ -1016,7 +1051,8 @@ def main() -> None:
                     f.write(json.dumps(p) + "\n")
         print(name, json.dumps(m), flush=True)
     for sname, spath in subq_sets(args.eval_subq or ""):
-        sm, spreds = evaluate_subq(model, tok, read_jsonl(spath), args.max_len, args.eval_bs, cache, seed=args.seed)
+        sm, spreds = evaluate_subq(model, tok, read_jsonl(spath), args.max_len, args.eval_bs, cache, seed=args.seed,
+                                   value_render=args.node_render)
         results["eval"][sname] = sm
         if is_main:
             with open(out / f"preds_{sname}.jsonl", "w") as f:
