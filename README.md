@@ -76,6 +76,12 @@ Owner: Haotian "Sora" Yang. Private research repository; data, results and notes
 | `GTF` | GFPS + fading written parents + depth weights | Statements |
 | `GFPSR` / `GFPQR` | As GFPS / GFPQ with each problem's node targets shuffled among its nodes | Same |
 | `GFPSX` / `GFPQX` | As GFPS / GFPQ with each node question replaced by a surface question about the problem text (placebo) | Same |
+| `GFPQV` / `GFPQVQ` | Final + atomic computation steps as three-option value questions ("What is 4 + 2?"; GFPQVQ prefixes the sub-question) | Statements plus the final question |
+| `GFPQO` | Final + operation choice per step ("Which computation gives it? A) 4 × 2 B) 4 ÷ 2 C) 4 + 2") | Same |
+| `GFPVB` | As GFPQV without the problem text | None (bare arithmetic) |
+| `GFPQVM` | GFPQ's yes/no nodes + GFPQV's value nodes, half the node weight each | Statements plus the final question |
+| `SI` / `SIB` | Stepwise internalisation: the worked atomic chain written before the options, removed over 4 stages (SI from the start, SIB from the answer end), last stage = test format | Final question only |
+| `SIYB` / `SISB` | SIB + GFPQ's yes/no nodes / SIB with wrong values in the chain (control) | Same |
 
 ## Setup
 
@@ -110,6 +116,8 @@ python scripts/ladder_readout.py 'results/hpc/l4b/*' --out results/ladder_readou
 
 The README is updated with every push.
 
+- 2026-10-18 (2): value nodes (`scripts/build_gsm8k_ops.py`, arms GFPQV / GFPQVQ / GFPQO / GFPVB / GFPQVM) and stepwise
+  internalisation v1 (`scripts/build_gsm8k_si.py`, arms SI / SIY / SIS and answer-end-first SIB / SIYB / SISB).
 - 2026-10-18: CHTC batch 5 (53 jobs, `cloud/condor/jobs5_*`, `cloud/chtc/*5*`): seeds and epoch sweeps for answer-only and
   Tree Forcing in one setting (GSM8K 10/25/50/100%, K&K, arithmetic chains 25%, 12B K&K at 1e-6, 9B GSM8K); GPU preflight.
 - 2026-10-17 (5): paper v2 draft with calibration (Section 4.4); CHTC batch 4 with Qwen3.5-9B (`cloud/chtc/*_9b*`,
