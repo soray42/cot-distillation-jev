@@ -1,0 +1,9 @@
+condor/jobs5_12b/105_12b_kkp_GFPS-c4lr1g12_s13_fsdp.env, 96, 2
+condor/jobs5_12b/106_12b_kkp_GFPS-c4lr1g12_s14_fsdp.env, 95, 2
+condor/jobs5_12b/109_12b_kkp_GFPSX-c4lr1g12_s13_fsdp.env, 92, 2
+condor/jobs5_12b/110_12b_kkp_GFPSX-c4lr1g12_s14_fsdp.env, 91, 2
+condor/jobs5_12b/114_12b_kkp_A2-c4lr1g12_s13_fsdp.env, 87, 2
+condor/jobs5_12b/115_12b_kkp_A2-c4lr1g12_s14_fsdp.env, 86, 2
+condor/jobs5_12b/116_12b_math25_GFPS-c4lr3g12_s14_fsdp.env, 85, 2
+condor/jobs5_12b/117_12b_math25_GFPSX-c4lr3g12_s14_fsdp.env, 84, 2
+condor/jobs5_12b/118_12b_math25_A2-c12lr3g12_s14_fsdp.env, 83, 2

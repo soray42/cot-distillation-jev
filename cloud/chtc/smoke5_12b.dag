@@ -1,0 +1,4 @@
+JOB smoke105 train5_12b.sub
+VARS smoke105 envfile="condor/jobs5_12b/105_12b_kkp_GFPS-c4lr1g12_s13_fsdp.env" name="smoke_105_12b_kkp_GFPS" prio="0" smoke="1" ngpu="2" cpus="12" mem="230GB" gpumem="40000"
+SCRIPT POST smoke105 post_push.sh smoke_105_12b_kkp_GFPS $RETURN
+

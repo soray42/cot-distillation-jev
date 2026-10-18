@@ -1,0 +1,35 @@
+# One batch-5 training job, Qwen3.5-4B (jobs5_4b.dag / smoke5_4b.dag), image cotd_4b.sif as batch 3, 40 GB disk.
+# As train_4b.sub / train_9b.sub / train.sub, except: code + data cotd_code_data_5_4b.tgz (a new file: nothing of
+# batches 1-4 is replaced), executable run_train5.sh (run_train.sh + a GPU preflight, exit 86 on a GPU that refuses a
+# CUDA context), and two guards against the black-hole slot that killed jobs 70-73 in seconds each (gpu2008, 2026-10-18):
+# that machine is excluded (by name, short or FQDN), and a preflight failure (exit 86) is retried in the same job (max_retries, same job id, so
+# DAGMan waits) on a machine the job has not failed on (job_machine_attrs history). Any other exit ends the job as
+# before (the DAG's RETRY 1 and POST push are unchanged). GPUs / CPUs / memory per job from the DAG.
+include : chtc_settings.inc
+universe = vanilla
+container_image = file://$(STAGING)/cotd_4b.sif
+executable = run_train5.sh
+arguments = $(envfile) $(name)
+environment = "STAGING=$(STAGING) CODE_TGZ=cotd_code_data_5_4b.tgz SMOKE_ONLY=$(smoke) NGPU_REQ=$(ngpu)"
+should_transfer_files = YES
+when_to_transfer_output = ON_EXIT
+transfer_input_files = cotd_code_data_5_4b.tgz
+transfer_output_files = results_$(name).tgz
+transfer_output_remaps = "results_$(name).tgz = results/results_$(name).tgz"
+job_machine_attrs = Machine
+job_machine_attrs_history_length = 4
+requirements = (HasCHTCStaging == true) && (TARGET.Machine =!= "gpu2008") && (regexp("^gpu2008[.]", TARGET.Machine) =!= true) && (TARGET.Machine =!= MY.MachineAttrMachine1) && (TARGET.Machine =!= MY.MachineAttrMachine2) && (TARGET.Machine =!= MY.MachineAttrMachine3)
+max_retries = 3
+retry_until = (ExitCode =!= 86)
+request_gpus = $(ngpu)
+require_gpus = (GlobalMemoryMb >= $(gpumem)) && (DriverVersion >= 12.8)
++WantGPULab = true
++GPUJobLength = "medium"
+request_cpus = $(cpus)
+request_memory = $(mem)
+request_disk = 40GB
+priority = $(prio)
+log = logs/train5_4b.log
+output = logs/$(name).condor.out
+error = logs/$(name).condor.err
+queue

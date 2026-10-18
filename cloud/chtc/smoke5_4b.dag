@@ -1,0 +1,12 @@
+JOB smoke101 train5_4b.sub
+VARS smoke101 envfile="condor/jobs5_4b/101_4b_gsm_GFPQ-c4lr3_s13_fsdp.env" name="smoke_101_4b_gsm_GFPQ" prio="0" smoke="1" ngpu="2" cpus="12" mem="120GB" gpumem="40000"
+SCRIPT POST smoke101 post_push.sh smoke_101_4b_gsm_GFPQ $RETURN
+
+JOB smoke107 train5_4b.sub
+VARS smoke107 envfile="condor/jobs5_4b/107_4b_kkp_GFPS-c4lr3_s12_fsdp.env" name="smoke_107_4b_kkp_GFPS" prio="0" smoke="1" ngpu="2" cpus="12" mem="120GB" gpumem="40000"
+SCRIPT POST smoke107 post_push.sh smoke_107_4b_kkp_GFPS $RETURN
+
+JOB smoke144 train5_4b.sub
+VARS smoke144 envfile="condor/jobs5_4b/144_4b_math25_GFPS-c4lr3_s12_fsdp.env" name="smoke_144_4b_math25_GFPS" prio="0" smoke="1" ngpu="2" cpus="12" mem="120GB" gpumem="40000"
+SCRIPT POST smoke144 post_push.sh smoke_144_4b_math25_GFPS $RETURN
+

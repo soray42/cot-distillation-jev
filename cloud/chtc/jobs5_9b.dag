@@ -1,0 +1,12 @@
+JOB j152 train5_9b.sub
+VARS j152 envfile="condor/jobs5_9b/152_9b_gsm_GFPQ-c4lr3_s13_fsdp.env" name="152_9b_gsm_GFPQ-c4lr3_s13_fsdp" prio="47" smoke="" ngpu="2" cpus="12" mem="200GB" gpumem="40000"
+SCRIPT POST j152 post_push.sh 152_9b_gsm_GFPQ-c4lr3_s13_fsdp $RETURN
+RETRY j152 1
+PRIORITY j152 47
+
+JOB j153 train5_9b.sub
+VARS j153 envfile="condor/jobs5_9b/153_9b_gsm_GFPQX-c4lr3_s13_fsdp.env" name="153_9b_gsm_GFPQX-c4lr3_s13_fsdp" prio="46" smoke="" ngpu="2" cpus="12" mem="200GB" gpumem="40000"
+SCRIPT POST j153 post_push.sh 153_9b_gsm_GFPQX-c4lr3_s13_fsdp $RETURN
+RETRY j153 1
+PRIORITY j153 46
+

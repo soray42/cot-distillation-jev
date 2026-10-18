@@ -1,0 +1,4 @@
+JOB smoke153 train5_9b.sub
+VARS smoke153 envfile="condor/jobs5_9b/153_9b_gsm_GFPQX-c4lr3_s13_fsdp.env" name="smoke_153_9b_gsm_GFPQX" prio="0" smoke="1" ngpu="2" cpus="12" mem="200GB" gpumem="40000"
+SCRIPT POST smoke153 post_push.sh smoke_153_9b_gsm_GFPQX $RETURN
+

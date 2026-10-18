@@ -1,0 +1,54 @@
+JOB j105 train5_12b.sub
+VARS j105 envfile="condor/jobs5_12b/105_12b_kkp_GFPS-c4lr1g12_s13_fsdp.env" name="105_12b_kkp_GFPS-c4lr1g12_s13_fsdp" prio="96" smoke="" ngpu="2" cpus="12" mem="230GB" gpumem="40000"
+SCRIPT POST j105 post_push.sh 105_12b_kkp_GFPS-c4lr1g12_s13_fsdp $RETURN
+RETRY j105 1
+PRIORITY j105 96
+
+JOB j106 train5_12b.sub
+VARS j106 envfile="condor/jobs5_12b/106_12b_kkp_GFPS-c4lr1g12_s14_fsdp.env" name="106_12b_kkp_GFPS-c4lr1g12_s14_fsdp" prio="95" smoke="" ngpu="2" cpus="12" mem="230GB" gpumem="40000"
+SCRIPT POST j106 post_push.sh 106_12b_kkp_GFPS-c4lr1g12_s14_fsdp $RETURN
+RETRY j106 1
+PRIORITY j106 95
+
+JOB j109 train5_12b.sub
+VARS j109 envfile="condor/jobs5_12b/109_12b_kkp_GFPSX-c4lr1g12_s13_fsdp.env" name="109_12b_kkp_GFPSX-c4lr1g12_s13_fsdp" prio="92" smoke="" ngpu="2" cpus="12" mem="230GB" gpumem="40000"
+SCRIPT POST j109 post_push.sh 109_12b_kkp_GFPSX-c4lr1g12_s13_fsdp $RETURN
+RETRY j109 1
+PRIORITY j109 92
+
+JOB j110 train5_12b.sub
+VARS j110 envfile="condor/jobs5_12b/110_12b_kkp_GFPSX-c4lr1g12_s14_fsdp.env" name="110_12b_kkp_GFPSX-c4lr1g12_s14_fsdp" prio="91" smoke="" ngpu="2" cpus="12" mem="230GB" gpumem="40000"
+SCRIPT POST j110 post_push.sh 110_12b_kkp_GFPSX-c4lr1g12_s14_fsdp $RETURN
+RETRY j110 1
+PRIORITY j110 91
+
+JOB j114 train5_12b.sub
+VARS j114 envfile="condor/jobs5_12b/114_12b_kkp_A2-c4lr1g12_s13_fsdp.env" name="114_12b_kkp_A2-c4lr1g12_s13_fsdp" prio="87" smoke="" ngpu="2" cpus="12" mem="230GB" gpumem="40000"
+SCRIPT POST j114 post_push.sh 114_12b_kkp_A2-c4lr1g12_s13_fsdp $RETURN
+RETRY j114 1
+PRIORITY j114 87
+
+JOB j115 train5_12b.sub
+VARS j115 envfile="condor/jobs5_12b/115_12b_kkp_A2-c4lr1g12_s14_fsdp.env" name="115_12b_kkp_A2-c4lr1g12_s14_fsdp" prio="86" smoke="" ngpu="2" cpus="12" mem="230GB" gpumem="40000"
+SCRIPT POST j115 post_push.sh 115_12b_kkp_A2-c4lr1g12_s14_fsdp $RETURN
+RETRY j115 1
+PRIORITY j115 86
+
+JOB j116 train5_12b.sub
+VARS j116 envfile="condor/jobs5_12b/116_12b_math25_GFPS-c4lr3g12_s14_fsdp.env" name="116_12b_math25_GFPS-c4lr3g12_s14_fsdp" prio="85" smoke="" ngpu="2" cpus="12" mem="230GB" gpumem="40000"
+SCRIPT POST j116 post_push.sh 116_12b_math25_GFPS-c4lr3g12_s14_fsdp $RETURN
+RETRY j116 1
+PRIORITY j116 85
+
+JOB j117 train5_12b.sub
+VARS j117 envfile="condor/jobs5_12b/117_12b_math25_GFPSX-c4lr3g12_s14_fsdp.env" name="117_12b_math25_GFPSX-c4lr3g12_s14_fsdp" prio="84" smoke="" ngpu="2" cpus="12" mem="230GB" gpumem="40000"
+SCRIPT POST j117 post_push.sh 117_12b_math25_GFPSX-c4lr3g12_s14_fsdp $RETURN
+RETRY j117 1
+PRIORITY j117 84
+
+JOB j118 train5_12b.sub
+VARS j118 envfile="condor/jobs5_12b/118_12b_math25_A2-c12lr3g12_s14_fsdp.env" name="118_12b_math25_A2-c12lr3g12_s14_fsdp" prio="83" smoke="" ngpu="2" cpus="12" mem="230GB" gpumem="40000"
+SCRIPT POST j118 post_push.sh 118_12b_math25_A2-c12lr3g12_s14_fsdp $RETURN
+RETRY j118 1
+PRIORITY j118 83
+
