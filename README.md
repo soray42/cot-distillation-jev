@@ -81,6 +81,7 @@ Owner: Haotian "Sora" Yang. Private research repository; data, results and notes
 | `GFPVB` | As GFPQV without the problem text | None (bare arithmetic) |
 | `GFPQVM` | GFPQ's yes/no nodes + GFPQV's value nodes, half the node weight each | Statements plus the final question |
 | `SI` / `SIB` | Stepwise internalisation: the worked atomic chain written before the options, removed over 4 stages (SI from the start, SIB from the answer end), last stage = test format | Final question only |
+| `GFPQC` | Step curriculum: yes/no nodes of steps <= j, stage by stage, then the final questions (--curriculum-steps) | Statements plus the final question |
 | `SIYB` / `SISB` | SIB + GFPQ's yes/no nodes / SIB with wrong values in the chain (control) | Same |
 
 ## Setup
@@ -116,6 +117,8 @@ python scripts/ladder_readout.py 'results/hpc/l4b/*' --out results/ladder_readou
 
 The README is updated with every push.
 
+- 2026-10-19: step curriculum (arm GFPQC); CHTC batch 7: 1- and 2-epoch runs of every new method, MC-node and answer-only
+  seeds 13/14, curriculum with a full final stage. Answer-only peaks at 1 epoch on GSM8K 4B; all comparisons now best vs best.
 - 2026-10-18 (3): CHTC batch 6 (`cloud/condor/jobs6_4b`): the new node designs and stepwise internalisation on GSM8K first;
   batch 5 trimmed to the GSM8K seeds and the answer-only epoch sweep.
 - 2026-10-18 (2): value nodes (`scripts/build_gsm8k_ops.py`, arms GFPQV / GFPQVQ / GFPQO / GFPVB / GFPQVM) and stepwise
