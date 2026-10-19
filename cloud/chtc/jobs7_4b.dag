@@ -1,0 +1,108 @@
+JOB j201 train7_4b.sub
+VARS j201 envfile="condor/jobs7_4b/201_4b_gsm_GFPQM-c1lr3_s13_fsdp.env" name="201_4b_gsm_GFPQM-c1lr3_s13_fsdp" prio="160" smoke="" ngpu="1" cpus="8" mem="80GB" gpumem="40000"
+SCRIPT POST j201 post_push.sh 201_4b_gsm_GFPQM-c1lr3_s13_fsdp $RETURN
+RETRY j201 1
+PRIORITY j201 160
+
+JOB j202 train7_4b.sub
+VARS j202 envfile="condor/jobs7_4b/202_4b_gsm_GFPQM-c1lr3_s14_fsdp.env" name="202_4b_gsm_GFPQM-c1lr3_s14_fsdp" prio="159" smoke="" ngpu="1" cpus="8" mem="80GB" gpumem="40000"
+SCRIPT POST j202 post_push.sh 202_4b_gsm_GFPQM-c1lr3_s14_fsdp $RETURN
+RETRY j202 1
+PRIORITY j202 159
+
+JOB j203 train7_4b.sub
+VARS j203 envfile="condor/jobs7_4b/203_4b_gsm_GFPQM-c2lr3_s13_fsdp.env" name="203_4b_gsm_GFPQM-c2lr3_s13_fsdp" prio="158" smoke="" ngpu="1" cpus="8" mem="80GB" gpumem="40000"
+SCRIPT POST j203 post_push.sh 203_4b_gsm_GFPQM-c2lr3_s13_fsdp $RETURN
+RETRY j203 1
+PRIORITY j203 158
+
+JOB j204 train7_4b.sub
+VARS j204 envfile="condor/jobs7_4b/204_4b_gsm_A2-c2lr3_s13_fsdp.env" name="204_4b_gsm_A2-c2lr3_s13_fsdp" prio="157" smoke="" ngpu="1" cpus="8" mem="80GB" gpumem="40000"
+SCRIPT POST j204 post_push.sh 204_4b_gsm_A2-c2lr3_s13_fsdp $RETURN
+RETRY j204 1
+PRIORITY j204 157
+
+JOB j205 train7_4b.sub
+VARS j205 envfile="condor/jobs7_4b/205_4b_gsm_GFPQM-c2lr3_s14_fsdp.env" name="205_4b_gsm_GFPQM-c2lr3_s14_fsdp" prio="156" smoke="" ngpu="1" cpus="8" mem="80GB" gpumem="40000"
+SCRIPT POST j205 post_push.sh 205_4b_gsm_GFPQM-c2lr3_s14_fsdp $RETURN
+RETRY j205 1
+PRIORITY j205 156
+
+JOB j206 train7_4b.sub
+VARS j206 envfile="condor/jobs7_4b/206_4b_gsm_A2-c2lr3_s14_fsdp.env" name="206_4b_gsm_A2-c2lr3_s14_fsdp" prio="155" smoke="" ngpu="1" cpus="8" mem="80GB" gpumem="40000"
+SCRIPT POST j206 post_push.sh 206_4b_gsm_A2-c2lr3_s14_fsdp $RETURN
+RETRY j206 1
+PRIORITY j206 155
+
+JOB j207 train7_4b.sub
+VARS j207 envfile="condor/jobs7_4b/207_4b_gsmsi_SIYB-c1lr3_s12_fsdp.env" name="207_4b_gsmsi_SIYB-c1lr3_s12_fsdp" prio="154" smoke="" ngpu="1" cpus="8" mem="80GB" gpumem="40000"
+SCRIPT POST j207 post_push.sh 207_4b_gsmsi_SIYB-c1lr3_s12_fsdp $RETURN
+RETRY j207 1
+PRIORITY j207 154
+
+JOB j208 train7_4b.sub
+VARS j208 envfile="condor/jobs7_4b/208_4b_gsmsi_SIYB-c2lr3_s12_fsdp.env" name="208_4b_gsmsi_SIYB-c2lr3_s12_fsdp" prio="153" smoke="" ngpu="1" cpus="8" mem="80GB" gpumem="40000"
+SCRIPT POST j208 post_push.sh 208_4b_gsmsi_SIYB-c2lr3_s12_fsdp $RETURN
+RETRY j208 1
+PRIORITY j208 153
+
+JOB j209 train7_4b.sub
+VARS j209 envfile="condor/jobs7_4b/209_4b_gsmsi_SIB-c1lr3_s12_fsdp.env" name="209_4b_gsmsi_SIB-c1lr3_s12_fsdp" prio="152" smoke="" ngpu="1" cpus="8" mem="80GB" gpumem="40000"
+SCRIPT POST j209 post_push.sh 209_4b_gsmsi_SIB-c1lr3_s12_fsdp $RETURN
+RETRY j209 1
+PRIORITY j209 152
+
+JOB j210 train7_4b.sub
+VARS j210 envfile="condor/jobs7_4b/210_4b_gsmsi_SIB-c2lr3_s12_fsdp.env" name="210_4b_gsmsi_SIB-c2lr3_s12_fsdp" prio="151" smoke="" ngpu="1" cpus="8" mem="80GB" gpumem="40000"
+SCRIPT POST j210 post_push.sh 210_4b_gsmsi_SIB-c2lr3_s12_fsdp $RETURN
+RETRY j210 1
+PRIORITY j210 151
+
+JOB j211 train7_4b.sub
+VARS j211 envfile="condor/jobs7_4b/211_4b_gsmops_GFPQVM-c1lr3_s12_fsdp.env" name="211_4b_gsmops_GFPQVM-c1lr3_s12_fsdp" prio="150" smoke="" ngpu="1" cpus="8" mem="80GB" gpumem="40000"
+SCRIPT POST j211 post_push.sh 211_4b_gsmops_GFPQVM-c1lr3_s12_fsdp $RETURN
+RETRY j211 1
+PRIORITY j211 150
+
+JOB j212 train7_4b.sub
+VARS j212 envfile="condor/jobs7_4b/212_4b_gsmops_GFPQVM-c2lr3_s12_fsdp.env" name="212_4b_gsmops_GFPQVM-c2lr3_s12_fsdp" prio="149" smoke="" ngpu="1" cpus="8" mem="80GB" gpumem="40000"
+SCRIPT POST j212 post_push.sh 212_4b_gsmops_GFPQVM-c2lr3_s12_fsdp $RETURN
+RETRY j212 1
+PRIORITY j212 149
+
+JOB j213 train7_4b.sub
+VARS j213 envfile="condor/jobs7_4b/213_4b_gsmops_GFPQV-c1lr3_s12_fsdp.env" name="213_4b_gsmops_GFPQV-c1lr3_s12_fsdp" prio="148" smoke="" ngpu="1" cpus="8" mem="80GB" gpumem="40000"
+SCRIPT POST j213 post_push.sh 213_4b_gsmops_GFPQV-c1lr3_s12_fsdp $RETURN
+RETRY j213 1
+PRIORITY j213 148
+
+JOB j214 train7_4b.sub
+VARS j214 envfile="condor/jobs7_4b/214_4b_gsmops_GFPQV-c2lr3_s12_fsdp.env" name="214_4b_gsmops_GFPQV-c2lr3_s12_fsdp" prio="147" smoke="" ngpu="1" cpus="8" mem="80GB" gpumem="40000"
+SCRIPT POST j214 post_push.sh 214_4b_gsmops_GFPQV-c2lr3_s12_fsdp $RETURN
+RETRY j214 1
+PRIORITY j214 147
+
+JOB j215 train7_4b.sub
+VARS j215 envfile="condor/jobs7_4b/215_4b_gsmops_GFPQO-c1lr3_s12_fsdp.env" name="215_4b_gsmops_GFPQO-c1lr3_s12_fsdp" prio="146" smoke="" ngpu="1" cpus="8" mem="80GB" gpumem="40000"
+SCRIPT POST j215 post_push.sh 215_4b_gsmops_GFPQO-c1lr3_s12_fsdp $RETURN
+RETRY j215 1
+PRIORITY j215 146
+
+JOB j216 train7_4b.sub
+VARS j216 envfile="condor/jobs7_4b/216_4b_gsmops_GFPQO-c2lr3_s12_fsdp.env" name="216_4b_gsmops_GFPQO-c2lr3_s12_fsdp" prio="145" smoke="" ngpu="1" cpus="8" mem="80GB" gpumem="40000"
+SCRIPT POST j216 post_push.sh 216_4b_gsmops_GFPQO-c2lr3_s12_fsdp $RETURN
+RETRY j216 1
+PRIORITY j216 145
+
+JOB j217 train7_4b.sub
+VARS j217 envfile="condor/jobs7_4b/217_4b_gsm_GFPQC-c1lr3_s12_fsdp.env" name="217_4b_gsm_GFPQC-c1lr3_s12_fsdp" prio="144" smoke="" ngpu="1" cpus="8" mem="80GB" gpumem="40000"
+SCRIPT POST j217 post_push.sh 217_4b_gsm_GFPQC-c1lr3_s12_fsdp $RETURN
+RETRY j217 1
+PRIORITY j217 144
+
+JOB j218 train7_4b.sub
+VARS j218 envfile="condor/jobs7_4b/218_4b_gsm_GFPQC-c2lr3_s12_fsdp.env" name="218_4b_gsm_GFPQC-c2lr3_s12_fsdp" prio="143" smoke="" ngpu="1" cpus="8" mem="80GB" gpumem="40000"
+SCRIPT POST j218 post_push.sh 218_4b_gsm_GFPQC-c2lr3_s12_fsdp $RETURN
+RETRY j218 1
+PRIORITY j218 143
+
