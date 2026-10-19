@@ -119,6 +119,8 @@ python scripts/ladder_readout.py 'results/hpc/l4b/*' --out results/ladder_readou
 
 The README is updated with every push.
 
+- 2026-10-19 (2): Tree Forcing v2 latent node slots (arms LS / LSU / LSR / LSY, cb0e84f); CHTC batch 8 (latent-slot pilot);
+  GSM8K-Aug builder (`scripts/build_gsm8kaug_tf.py`, 317,503 verified and decontaminated problems, 24k / 96k subsets).
 - 2026-10-19: step curriculum (arm GFPQC); CHTC batch 7: 1- and 2-epoch runs of every new method, MC-node and answer-only
   seeds 13/14, curriculum with a full final stage. Answer-only peaks at 1 epoch on GSM8K 4B; all comparisons now best vs best.
 - 2026-10-18 (3): CHTC batch 6 (`cloud/condor/jobs6_4b`): the new node designs and stepwise internalisation on GSM8K first;
