@@ -82,10 +82,11 @@ def _local(t):
 class _Call:
     """Opaque argument holder: FSDP's root pre-forward rebuilds lists and dicts it finds in the inputs (moving tensors
     to the device), which would detach hidden_out and the label-id cache from the caller's objects."""
-    __slots__ = ("args",)
+    __slots__ = ("args", "fn")
 
-    def __init__(self, *args):
+    def __init__(self, *args, fn=None):
         self.args = args
+        self.fn = fn                 # None: student.label_logits; else run(fn, ...) (latent slots: slot_forward)
 
 
 class Readout(torch.nn.Module):
@@ -100,10 +101,15 @@ class Readout(torch.nn.Module):
 
     def forward(self, call: _Call):
         from .student import label_logits
-        return label_logits(self.model, *call.args)
+        return (call.fn or label_logits)(self.model, *call.args)
 
     def readout(self, tokenizer, batch, max_len, cache, hidden_out=None, layers=None):
         return self(_Call(tokenizer, batch, max_len, cache, hidden_out, layers))
+
+    def run(self, fn, *args):
+        """fn(the wrapped model, *args) inside the root's forward (its parameters unsharded), e.g. student.slot_forward:
+        the main pass and the latent-slot decoding pass of one micro-batch."""
+        return self(_Call(*args, fn=fn))
 
     @torch.no_grad()
     def batched(self, tokenizer, exs: list, order: list[int], bs: int, max_len: int, cache: dict,

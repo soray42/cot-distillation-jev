@@ -83,6 +83,8 @@ Owner: Haotian "Sora" Yang. Private research repository; data, results and notes
 | `SI` / `SIB` | Stepwise internalisation: the worked atomic chain written before the options, removed over 4 stages (SI from the start, SIB from the answer end), last stage = test format | Final question only |
 | `GFPQC` | Step curriculum: yes/no nodes of steps <= j, stage by stage, then the final questions (--curriculum-steps) | Statements plus the final question |
 | `SIYB` / `SISB` | SIB + GFPQ's yes/no nodes / SIB with wrong values in the chain (control) | Same |
+| `LS` | Latent node slots: K x c reserved tokens before the options in every final question (train and test); in training, slot j's final-layer states, fed to the same network as the start of a separate sequence, must continue with worked step j (`--latent-slots`) | Final question only (one pass, same readout) |
+| `LSU` / `LSR` / `LSY` | The slots without slot loss (pause-token control) / slot targets from other problems (wrong-content control) / LS + GFPQ's yes/no nodes | Same / same / + statements plus the final question |
 
 ## Setup
 

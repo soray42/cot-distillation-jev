@@ -9,6 +9,11 @@ Writes metrics.json and preds_<set>.jsonl; scripts/score_preds.py gives per-grou
 every item of every set alone (batch 1, the readout forward of evaluate, no generation), after one warm-up item,
 CUDA-synchronized wall time per item -> timing_<set>.json (mean, median, p90, max, total, prompt tokens, device).
 The predictions and metrics are written as without the flag.
+
+Latent-slot models (train_student.py --latent-slots, arms LS / LSU / LSR / LSY): a saved model directory holds
+latent_slots.json, and every final question is then built with the same slot line as in training (final_text); the
+--latent-slots / --slot-* flags set or override it. --slot-necessity / --slot-decode run the necessity test and the
+decoding readout as at the end of training.
 """
 from __future__ import annotations
 
@@ -22,8 +27,9 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from cotdistill.student import (FINAL_TEMPLATE, encode_tail, evaluate, evaluate_subq, load_model,  # noqa: E402
-                                subq_sets, use_chat_template)
+from cotdistill.student import (SLOT_SIDECAR, SlotSpec, choose_slot_token, encode_tail, evaluate,  # noqa: E402
+                                evaluate_subq, final_text, load_model, parse_slot_necessity, set_slot_prompt,
+                                slot_evals, slot_spec, subq_sets, use_chat_template)
 
 
 def time_items(model, tok, items: list[dict], max_len: int, cache: dict) -> dict:
@@ -40,7 +46,7 @@ def time_items(model, tok, items: list[dict], max_len: int, cache: dict) -> dict
         evaluate(model, tok, [it], max_len, 1, cache)
         sync()
         secs.append(time.perf_counter() - t)
-        ntok.append(len(encode_tail(tok, FINAL_TEMPLATE.format(problem=it["prompt"]), max_len)))
+        ntok.append(len(encode_tail(tok, final_text(tok, it["prompt"]), max_len)))
     a = np.array(secs)
     return {"n": len(secs), "s_mean": float(a.mean()), "s_median": float(np.median(a)),
             "s_p90": float(np.percentile(a, 90)), "s_max": float(a.max()), "s_total": float(a.sum()),
@@ -68,6 +74,22 @@ def main() -> None:
                          "unchanged")
     ap.add_argument("--time", action="store_true", help="also time every item alone (batch 1, forward only): "
                     "timing_<set>.json")
+    ap.add_argument("--latent-slots", type=int, default=None,
+                    help="slot line of every final question: K slots (default: the model's latent_slots.json, if any; "
+                         "0 = none)")
+    ap.add_argument("--slot-c", type=int, default=None, help="tokens per slot (default: latent_slots.json, else 1)")
+    ap.add_argument("--slot-token", default=None, help="the slot token (default: latent_slots.json, else auto)")
+    ap.add_argument("--slot-place", default=None, choices=["before-options", "after-options"],
+                    help="slot line placement (default: latent_slots.json, else before-options)")
+    ap.add_argument("--slot-overflow", default="merge", choices=["merge", "truncate"],
+                    help="--slot-decode: how the targets of chains longer than K are shown (as in training)")
+    ap.add_argument("--slot-necessity", default="", help="necessity test modes (swap, drop, noise@<layer|mid>:<sigma>; "
+                    "train_student.py --slot-necessity)")
+    ap.add_argument("--slot-necessity-sets", default="", help="--slot-necessity: comma list of eval sets (default all)")
+    ap.add_argument("--slot-swap-token", default="auto", help="--slot-necessity swap: the replacement token")
+    ap.add_argument("--slot-decode", type=int, default=0, help="decode every slot of the first N items of "
+                    "--slot-decode-set greedily: slot_decode_<set>.jsonl")
+    ap.add_argument("--slot-decode-set", default="", help="--slot-decode: the eval set (default: the first --eval set)")
     args = ap.parse_args()
 
     import transformers
@@ -79,11 +101,36 @@ def main() -> None:
         tok.pad_token = tok.eos_token
     if args.chat_template:
         print("chat template: every item rendered as", repr(use_chat_template(tok, args.model)), flush=True)
+    side = Path(args.model) / SLOT_SIDECAR
+    sd = json.loads(side.read_text()) if side.exists() else {}
+    k = args.latent_slots if args.latent_slots is not None else sd.get("k", 0)
+    swap = None
+    if k:
+        if args.chat_template:
+            raise SystemExit("latent slots do not combine with --chat-template")
+        try:
+            token = choose_slot_token(tok, args.slot_token or sd.get("token", "auto"))
+            spec = SlotSpec(k, args.slot_c or sd.get("c", 1), token, args.slot_place or sd.get("place", "before-options"))
+            set_slot_prompt(tok, spec)
+            modes = parse_slot_necessity(args.slot_necessity)
+            if "swap" in modes:
+                swap = choose_slot_token(tok, args.slot_swap_token, avoid=(token,))
+        except ValueError as e:
+            raise SystemExit(f"latent slots: {e}")
+        print(f"latent slots ({'from ' + str(side) if sd else 'flags'}): {spec}", flush=True)
+    elif args.slot_necessity or args.slot_decode:
+        raise SystemExit("--slot-necessity / --slot-decode need a slot model (latent_slots.json) or --latent-slots")
     model = load_model(args.model, torch.bfloat16 if dev == "cuda" else torch.float32).to(dev)
     results, cache = {"args": vars(args), "eval": {}}, {}
+    evals = {}
     for kv in args.eval:
         name, path = kv.split("=", 1)
         items = [json.loads(l) for l in open(path) if l.strip()]
+        evals[name] = items
+        if k and items:
+            if any(spec.token in it["prompt"] or swap and swap in it["prompt"] for it in items):
+                raise SystemExit(f"{name}: the slot (or swap) token occurs in a prompt; pick another --slot-token")
+            print(name, "final question e.g.", repr(final_text(tok, items[0]["prompt"])), flush=True)
         hid = [] if name in args.dump_hidden.split(",") else None
         m, preds = evaluate(model, tok, items, args.max_len, args.bs, cache, hidden=hid,
                             layers=[int(x) for x in args.dump_layers.split(",") if x] or None)
@@ -99,6 +146,12 @@ def main() -> None:
             (out / f"timing_{name}.json").write_text(json.dumps(tm, indent=1))
             results.setdefault("timing", {})[name] = {k: v for k, v in tm.items() if k != "per_item_s"}
             print("timing", name, json.dumps(results["timing"][name]), flush=True)
+    if k:
+        results["latent_slots"] = slot_spec(tok).as_dict()
+        slot_evals(model, tok, evals, results, out, modes=parse_slot_necessity(args.slot_necessity),
+                   sets=[x for x in args.slot_necessity_sets.split(",") if x], swap_token=swap,
+                   decode_n=args.slot_decode, decode_set=args.slot_decode_set, max_len=args.max_len, bs=args.bs,
+                   cache=cache, overflow=args.slot_overflow)
     for sname, spath in subq_sets(args.eval_subq or ""):
         items = [json.loads(l) for l in open(spath) if l.strip()]
         sm, spreds = evaluate_subq(model, tok, items, args.max_len, args.bs, cache)

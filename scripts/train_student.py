@@ -33,13 +33,15 @@ from cotdistill.student import (Example, brier_loss, build_examples, build_fact_
                                 build_stage_examples, curriculum_item, evaluate, evaluate_local, evaluate_subq, kl_loss,
                                 label_logits,
                                 lm_loss, load_model, logit_softcap, micro_batches, pack_rng, pack_views, readouts,
-                                scaffold_fade, si_group, special_prefix, subq_sets, use_chat_template, worked_steps)
+                                scaffold_fade, si_group, slot_forward, slot_group, special_prefix, subq_sets,
+                                use_chat_template, worked_steps)
 
 
 # Arguments that do not change the training trajectory: a checkpoint may be resumed with different values.
 RESUME_FREE = {"stop_after_h", "ckpt_every_min", "ckpt_single", "stop_at_step", "code_commit", "eval", "eval_subq", "eval_bs",
                "eval_max_len", "dump_hidden", "dump_layers", "log_every", "save", "eval_local", "eval_local_view",
-               "log_update_loss", "eval_mid_preds"}
+               "log_update_loss", "eval_mid_preds", "slot_necessity", "slot_necessity_sets", "slot_swap_token",
+               "slot_decode", "slot_decode_set"}
 
 # Training arguments added after checkpoints may have been written: a checkpoint without the key had this value.
 NEW_ARG_DEFAULTS = {"tree_view": "problem", "tree_sources": "", "tree_node_weight": 0.0, "attn_impl": "", "fsdp": False,
@@ -47,7 +49,9 @@ NEW_ARG_DEFAULTS = {"tree_view": "problem", "tree_sources": "", "tree_node_weigh
                     "chat_template": False, "tree_pack": 0, "tree_node_types": "", "tree_target": "real",
                     "node_render": "op", "si_stages": 0, "si_chain": "true", "si_final_only": False, "si_smooth": 0.1,
                     "si_schedule": "global", "si_keep_optim": False, "si_remove": "front", "curriculum_steps": 0,
-                    "curriculum_mode": "cumulative", "curriculum_final_nodes": False}
+                    "curriculum_mode": "cumulative", "curriculum_final_nodes": False, "latent_slots": 0, "slot_c": 1,
+                    "slot_token": "auto", "slot_place": "before-options", "slot_lambda": 1.0, "slot_target": "tree",
+                    "slot_overflow": "merge", "slot_final_only": False}
 
 LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj",
                 "in_proj_qkv", "in_proj_z", "in_proj_a", "in_proj_b", "out_proj"]
@@ -234,6 +238,50 @@ def main() -> None:
     ap.add_argument("--curriculum-final-nodes", action="store_true",
                     help="--curriculum-steps: the last stage trains the final questions with all their node views "
                          "(GFPQ's groups) instead of the final questions only")
+    ap.add_argument("--latent-slots", type=int, default=0,
+                    help="latent node slots (Tree Forcing v2, design (a); LS / LSU / LSR / LSY; full-tree loop, "
+                         "--tree-full plain, yes/no nodes): K slots of --slot-c reserved tokens each in every final "
+                         "question's prompt (--slot-place), in training and in every evaluation (one forward pass, the "
+                         "same letter readout); in training only, slot j's final-layer states start a separate "
+                         "sequence through the same network and head that must continue with the problem's j-th worked "
+                         "step ('4 + 2 = 6'; field worked_steps, data/student_gsm8k_tf_si*), loss = letter CE + "
+                         "--slot-lambda x the mean slot decoding CE per problem; 0 = off")
+    ap.add_argument("--slot-c", type=int, default=1, help="--latent-slots: tokens (vectors) per slot")
+    ap.add_argument("--slot-token", default="auto",
+                    help="--latent-slots: the slot token, an existing single token of the tokenizer (auto = the first "
+                         "of <|box_start|>, <|quad_start|>, ... that is one; Qwen3.5: <|box_start|>)")
+    ap.add_argument("--slot-place", default="before-options", choices=["before-options", "after-options"],
+                    help="--latent-slots: the slot line between the problem and its options (before-options: the "
+                         "slots see the problem only; prompts without an options block get it at the end) or after "
+                         "the options, right before the 'Answer:' cue")
+    ap.add_argument("--slot-lambda", type=float, default=1.0,
+                    help="--latent-slots: weight of the slot decoding loss per problem (split over its supervised "
+                         "slots, as --aux-total over the node views)")
+    ap.add_argument("--slot-target", default="tree", choices=["tree", "none", "shuffled"],
+                    help="--latent-slots: tree = slot j decodes the j-th worked step (LS / LSY); none = the slots without "
+                         "any slot loss (LSU, the pause-token control; no decoding pass); shuffled = LSR, the "
+                         "wrong-content control: the same supervised slots, texts drawn from other problems' slot "
+                         "targets (keyed by --seed and the item, fixed over the epochs)")
+    ap.add_argument("--slot-overflow", default="merge", choices=["merge", "truncate"],
+                    help="--latent-slots: a chain longer than K: merge = steps K..n joined into slot K (the answer's "
+                         "step stays in), truncate = the first K steps")
+    ap.add_argument("--slot-final-only", action="store_true",
+                    help="--latent-slots: train the final questions only (LS / LSU / LSR); off = also the node views of "
+                         "the full-tree group (LSY with GFPQ's yes/no views, which carry no slots)")
+    ap.add_argument("--slot-necessity", default="",
+                    help="--latent-slots, after training: the necessity test, a comma list of modes, each evaluated on "
+                         "--slot-necessity-sets next to the intact slots: swap (every slot token replaced by "
+                         "--slot-swap-token), drop (no slot line, the A2 prompt), noise@<layer|mid>:<sigma> (Gaussian "
+                         "noise of sigma x RMS on the slot states after that decoder layer); eval keys <set>@<mode>, "
+                         "metrics slot_necessity, preds_<set>@<mode>.jsonl")
+    ap.add_argument("--slot-necessity-sets", default="", help="--slot-necessity: comma list of eval sets (default all)")
+    ap.add_argument("--slot-swap-token", default="auto",
+                    help="--slot-necessity swap: the replacement token (auto = the next reserved token, <|quad_start|>)")
+    ap.add_argument("--slot-decode", type=int, default=0,
+                    help="--latent-slots, after training: decode every slot of the first N items of --slot-decode-set "
+                         "back to text greedily (same separate-sequence path): slot_decode_<set>.jsonl and "
+                         "metrics slot_decode (exact / value match by slot)")
+    ap.add_argument("--slot-decode-set", default="", help="--slot-decode: the eval set (default: the first --eval set)")
     ap.add_argument("--aux-total", type=float, default=1.0,
                     help="full-tree groups: auxiliary weight per problem, split evenly over its node views")
     ap.add_argument("--aux-sources", default="", help="grouped training: comma list of item sources whose auxiliary "
@@ -329,10 +377,11 @@ def main() -> None:
     args = ap.parse_args()
     tree_opts = (args.tree_view != "problem" or args.tree_sources or args.tree_node_weight or args.tree_cap == 0 or
                  args.tree_scaffold or args.tree_depth_weight or args.tree_pack or args.tree_node_types or
-                 args.tree_target != "real")
+                 args.tree_target != "real" or args.latent_slots)
     if tree_opts and not args.tree_full:
         raise SystemExit("--tree-view / --tree-sources / --tree-node-weight / --tree-cap 0 / --tree-scaffold / "
-                         "--tree-depth-weight / --tree-pack / --tree-node-types / --tree-target need --tree-full")
+                         "--tree-depth-weight / --tree-pack / --tree-node-types / --tree-target / --latent-slots need "
+                         "--tree-full")
     if args.tree_target != "real" and (args.tree_full != "plain" or args.node_format != "yesno" or
                                        args.tree_view not in ("problem", "statements", "statements+question") or
                                        args.tree_eligible_only or args.tree_scaffold):
@@ -434,6 +483,29 @@ def main() -> None:
                          "--tree-pack, --stop-after-h / --ckpt-every-min / --stop-at-step (no multi-stage resume), "
                          "--depth-stages, --fact-stages, --facts-always, --tree-eligible-only, --tree-scaffold, "
                          "--tree-depth-weight or --tree-target; no --eval-at (it evaluates at its stage ends)")
+    slot_flags = (args.slot_c != 1 or args.slot_token != "auto" or args.slot_place != "before-options" or
+                  args.slot_lambda != 1.0 or args.slot_target != "tree" or args.slot_overflow != "merge" or
+                  args.slot_final_only or args.slot_necessity or args.slot_necessity_sets or
+                  args.slot_swap_token != "auto" or args.slot_decode or args.slot_decode_set)
+    if args.latent_slots < 0 or slot_flags and not args.latent_slots:
+        raise SystemExit("--slot-* options need --latent-slots K >= 1")
+    if args.latent_slots and (args.tree_full != "plain" or args.node_format != "yesno" or
+                              args.tree_view not in ("problem", "statements", "statements+question") or
+                              args.si_stages or args.curriculum_steps or args.tree_pack or args.tree_scaffold or
+                              args.tree_target != "real" or args.tree_eligible_only or args.chat_template or
+                              args.depth_stages or args.fact_stages or args.facts_always or args.slot_c < 1 or
+                              args.slot_lambda < 0 or args.slot_decode < 0):
+        raise SystemExit(f"--latent-slots {args.latent_slots}: for the full-tree loop with --tree-full plain and yes/no "
+                         "nodes (views problem / statements / statements+question), without --si-stages, "
+                         "--curriculum-steps, --tree-pack, --tree-scaffold, --tree-target, --tree-eligible-only, "
+                         "--chat-template, --depth-stages, --fact-stages or --facts-always; --slot-c >= 1, "
+                         "--slot-lambda >= 0, --slot-decode >= 0")
+    if args.latent_slots:
+        from cotdistill.student import parse_slot_necessity
+        try:
+            parse_slot_necessity(args.slot_necessity)
+        except ValueError as e:
+            raise SystemExit(str(e))
     if args.ckpt_single and not resumable:
         raise SystemExit("--ckpt-single needs --stop-after-h, --ckpt-every-min or --stop-at-step")
     if args.chat_template and args.rationale_lm:
@@ -512,6 +584,46 @@ def main() -> None:
         raise SystemExit(f"--subq-filter {args.subq_filter}: no node of {args.train} has on_path (decision-chain data "
                          "only, e.g. DATA=data/student_chain); the filter would drop every node")
     evals = {kv.split("=", 1)[0]: read_jsonl(kv.split("=", 1)[1]) for kv in args.eval}
+    slot = None                      # --latent-slots: the slot spec (registered for every final question evaluate builds)
+    slot_tg: dict = {}               # item_id -> slot targets (LS / LSY: the worked steps; LSR: other problems' steps)
+    slot_loss_on = False             # a decoding pass (LSU and --slot-lambda 0: none)
+    slot_stats: dict = {}
+    swap_token = None
+    if args.latent_slots:
+        from cotdistill.student import (SlotSpec, choose_slot_token, final_text, set_slot_prompt, shuffled_slot_targets,
+                                        slot_targets, slot_token_id)
+        try:
+            token = choose_slot_token(tok, args.slot_token)
+            if "swap" in parse_slot_necessity(args.slot_necessity):
+                swap_token = choose_slot_token(tok, args.slot_swap_token, avoid=(token,))
+                if swap_token == token:
+                    raise ValueError(f"--slot-swap-token {swap_token!r} is the slot token")
+        except ValueError as e:
+            raise SystemExit(f"--latent-slots: {e}")
+        for name, items in [("train", train_items)] + list(evals.items()):
+            bad = [it["item_id"] for it in items if token in it["prompt"] or swap_token and swap_token in it["prompt"]]
+            if bad:
+                raise SystemExit(f"--latent-slots: the slot (or swap) token occurs in {len(bad)} {name} prompts, e.g. "
+                                 f"{bad[0]}: pick another --slot-token / --slot-swap-token")
+        slot = SlotSpec(args.latent_slots, args.slot_c, token, args.slot_place)
+        set_slot_prompt(tok, slot)
+        srcs = {x for x in args.tree_sources.split(",") if x} or None     # supervision: the --tree-sources items
+        sup_items = [it for it in train_items if srcs is None or it.get("source") in srcs]
+        if args.slot_target == "shuffled":
+            slot_tg = shuffled_slot_targets(sup_items, k=slot.k, overflow=args.slot_overflow, seed=args.seed)
+        elif args.slot_target == "tree":
+            slot_tg = {it["item_id"]: slot_targets(it, slot.k, args.slot_overflow) for it in sup_items}
+        n_sup = sum(t is not None for ts in slot_tg.values() for t in ts)
+        if args.slot_target != "none" and not n_sup:
+            raise SystemExit(f"--latent-slots: no {args.tree_sources or 'training'} item of {args.train} has worked "
+                             "steps (field worked_steps: scripts/build_gsm8k_si.py, or a numgen program)")
+        slot_loss_on = args.slot_target != "none" and args.slot_lambda > 0
+        print(f"latent slots: {slot.k} x {slot.c} {token!r} (id {slot_token_id(tok, token)}), {slot.place}, target "
+              f"{args.slot_target}, lambda {args.slot_lambda}, overflow {args.slot_overflow}, "
+              f"{'final views only' if args.slot_final_only else 'with the node views'}; {n_sup} supervised slots over "
+              f"{sum(any(t is not None for t in ts) for ts in slot_tg.values())} items; decoding pass "
+              f"{'on' if slot_loss_on else 'off'}; final question e.g. {final_text(tok, train_items[0]['prompt'])!r}",
+              flush=True)
 
     def epoch_examples() -> list[Example]:
         ex = []
@@ -656,6 +768,7 @@ def main() -> None:
         b = args.items_per_update
         groups, ps = [], []
         sst: dict = {}                       # --si-stages: this pass's chain counts
+        sst_slot: dict = {}                  # --latent-slots: this pass's slot counts
         for it in items:
             p_sc = None
             if fade is not None:             # GTF: p(t) of the update this problem's group lands in
@@ -685,6 +798,9 @@ def main() -> None:
                 g = si_group(g, it, stage=si_stage, n_stages=args.si_stages, chain=args.si_chain, seed=args.seed,
                              epoch=ep, smooth=args.si_smooth, final_only=args.si_final_only, remove=args.si_remove,
                              stats=sst)
+            if g and slot is not None:       # --latent-slots: the slot line (+ targets) in the final view
+                g = slot_group(g, it, spec=slot, targets=slot_tg.get(it["item_id"]) if slot_tg else None,
+                               lam=args.slot_lambda, final_only=args.slot_final_only, stats=sst_slot)
             if g and node_stage:             # node stages train no final question
                 g = [e for e in g if e.kind != "final"]
             if g:
@@ -693,6 +809,9 @@ def main() -> None:
         if tree_opts and not tree_stats:     # the plan's counting pass: views, dropped views, stated results
             tree_stats.update(st)
             print("tree views", json.dumps(st, sort_keys=True), flush=True)
+        if slot is not None and not slot_stats:
+            slot_stats.update(sst_slot)
+            print("latent slot views", json.dumps(sst_slot, sort_keys=True), flush=True)
         if args.tree_view == "mix":
             print(f"mix pass {ep}: {st.get('statements_views', 0)} statements views, {st.get('local_views', 0)} local "
                   "views", flush=True)
@@ -914,11 +1033,15 @@ def main() -> None:
         t_a = time.time()
         parts = fsdp_lib.split_update(tok, upd, args.max_len, args.micro_bs, args.token_budget,
                                       args.token_budget_seqs, fs.world)
-        acc = torch.zeros(6, dtype=torch.float64, device=fs.device)  # loss, final, node, node CE sum, nodes, padded tok
-        for mb, pad, ntok in parts[fs.rank]:
+        acc = torch.zeros(6 if not slot_loss_on else 9, dtype=torch.float64, device=fs.device)  # loss, final, node,
+        for mb, pad, ntok in parts[fs.rank]:      # node CE sum, nodes, padded tok (+ slot loss, slot CE sum, slots)
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
-                z = label_logits(model, tok, mb, args.max_len, cache)
-                loss = kl_loss(z, mb, args.label_smoothing) * len(mb) / norm
+                if slot_loss_on:         # every rank runs both passes (pads at weight 0): same collectives
+                    z, sl, sls = slot_forward(model, tok, mb, args.max_len, cache)
+                    loss = (kl_loss(z, mb, args.label_smoothing) * len(mb) + sl) / norm
+                else:
+                    z = label_logits(model, tok, mb, args.max_len, cache)
+                    loss = kl_loss(z, mb, args.label_smoothing) * len(mb) / norm
                 if args.lambda_brier:
                     loss = loss + args.lambda_brier * brier_loss(z, mb) * len(mb) / norm
             loss.backward()
@@ -926,6 +1049,10 @@ def main() -> None:
                 continue
             acc[0] += loss.detach().double()
             acc[5] += ntok
+            if slot_loss_on:
+                acc[6] += sl.item() / norm
+                acc[7] += sls["slot_ce_sum"]
+                acc[8] += sls["slot_n"]
             if tree_opts:
                 with torch.no_grad():
                     for zz, e in zip(z, mb):
@@ -944,10 +1071,11 @@ def main() -> None:
         trainer.step()
         trainer.zero_grad()
         a = acc.tolist()
+        slot_part = {"loss_slot": a[6], "slot_ce_sum": a[7], "slot_n": int(a[8])} if slot_loss_on else {}
         return {"loss": a[0], "loss_final": a[1], "loss_node": a[2], "node_ce": a[3] / max(1.0, a[4]), "gnorm": gnorm,
                 "fwd": len(parts[fs.rank]) * fs.world, "pad_fwd": sum(x[1] for r in parts for x in r),
                 "pad_tok": int(a[5]), "fb_s": t_b - t_a, "clip_s": t_c - t_b, "opt_s": time.time() - t_c,
-                **{k: v for k, v in trainer.timing.items() if k != "opt_step_s"}}
+                **{k: v for k, v in trainer.timing.items() if k != "opt_step_s"}, **slot_part}
 
     def fsdp_row(fu: dict) -> dict:
         """--fsdp log columns: the update's loss, forwards, padded tokens, time split and per-rank memory (collective)."""
@@ -1002,10 +1130,14 @@ def main() -> None:
             upd, upd_iter = upd_iter[0], upd_iter[1:]
             norm, upd_loss = 3 * args.items_per_update, 0.0
             split = {"final": 0.0, "subq": 0.0, "node_ce": 0.0, "node_n": 0}
+            if slot_loss_on:
+                split.update(slot=0.0, slot_ce=0.0, slot_n=0)
             if fs is not None:           # the same sequences split across the ranks, gradients summed
                 fu = fsdp_update(upd, norm)
                 upd_loss = fu["loss"]
                 split.update(final=fu["loss_final"], subq=fu["loss_node"], node_ce=fu["node_ce"], node_n=1)
+                if slot_loss_on:
+                    split.update(slot=fu["loss_slot"], slot_ce=fu["slot_ce_sum"], slot_n=fu["slot_n"])
                 seen_tok += sum(min(args.max_len, len(e.text) // 3) for e in upd)
                 if tree_opts:
                     gwin.append(fu["gnorm"])
@@ -1016,8 +1148,15 @@ def main() -> None:
                 for mb in mbs:
                     rd = readouts(mb)                  # --tree-pack: one entry per node view of a pack; else mb
                     with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
-                        z = label_logits(model, tok, mb, args.max_len, cache)
-                        loss = kl_loss(z, rd, args.label_smoothing) * len(rd) / norm
+                        if slot_loss_on:               # --latent-slots: the main pass + the slot decoding pass
+                            z, sl, sls = slot_forward(model, tok, mb, args.max_len, cache)
+                            loss = (kl_loss(z, rd, args.label_smoothing) * len(rd) + sl) / norm
+                            split["slot"] += sl.item() / norm
+                            split["slot_ce"] += sls["slot_ce_sum"]
+                            split["slot_n"] += sls["slot_n"]
+                        else:
+                            z = label_logits(model, tok, mb, args.max_len, cache)
+                            loss = kl_loss(z, rd, args.label_smoothing) * len(rd) / norm
                         if args.lambda_brier:          # as in the grouped loop (was silently ignored in full-tree arms)
                             loss = loss + args.lambda_brier * brier_loss(z, rd) * len(rd) / norm
                     loss.backward()
@@ -1056,6 +1195,9 @@ def main() -> None:
                                node_ce=split["node_ce"] / max(1, split["node_n"]),
                                gnorm=sum(gwin) / len(gwin), gnorm_max=max(gwin),
                                clip_frac=sum(g > 1.0 for g in gwin) / len(gwin))
+                    if slot_loss_on:   # the slot decoding loss (weighted, in loss) and its mean unweighted CE per slot
+                        row.update(loss_slot=split["slot"], slot_ce=split["slot_ce"] / max(1, split["slot_n"]),
+                                   slot_n=split["slot_n"])
                     gwin.clear()
                 history.append(row)
                 print(json.dumps(row), flush=True)
@@ -1208,6 +1350,17 @@ def main() -> None:
                 for p in preds:
                     f.write(json.dumps(p) + "\n")
         print(name, json.dumps(m), flush=True)
+    if slot is not None:                 # --latent-slots: the spec, the counts, the necessity test, the decoding readout
+        from cotdistill.student import SLOT_SIDECAR, slot_evals
+        results["latent_slots"] = {**slot.as_dict(), "target": args.slot_target, "lambda": args.slot_lambda,
+                                   "overflow": args.slot_overflow, "final_only": args.slot_final_only,
+                                   "swap_token": swap_token, "views": slot_stats}
+        slot_evals(model, tok, evals, results, out, modes=parse_slot_necessity(args.slot_necessity),
+                   sets=[x for x in args.slot_necessity_sets.split(",") if x], swap_token=swap_token,
+                   decode_n=args.slot_decode, decode_set=args.slot_decode_set, max_len=args.eval_max_len,
+                   bs=args.eval_bs, cache=cache, seed=args.seed, overflow=args.slot_overflow, write=is_main)
+        if is_main:
+            (out / SLOT_SIDECAR).write_text(json.dumps(slot.as_dict(), indent=1))
     for sname, spath in subq_sets(args.eval_subq or ""):
         sm, spreds = evaluate_subq(model, tok, read_jsonl(spath), args.max_len, args.eval_bs, cache, seed=args.seed,
                                    value_render=args.node_render)
@@ -1237,6 +1390,8 @@ def main() -> None:
             if is_main:
                 model.model.save_pretrained(out / "model", state_dict=sd, safe_serialization=True)
                 tok.save_pretrained(out / "model")
+                if slot is not None:     # eval_student rebuilds the slot line from it
+                    shutil.copy(out / SLOT_SIDECAR, out / "model" / SLOT_SIDECAR)
             del sd
         fs.barrier()
         dist.destroy_process_group()
@@ -1248,6 +1403,8 @@ def main() -> None:
             model = model.merge_and_unload()
         model.to(torch.bfloat16).save_pretrained(out / "model", safe_serialization=True)
         tok.save_pretrained(out / "model")
+        if slot is not None:             # eval_student rebuilds the slot line from it
+            shutil.copy(out / SLOT_SIDECAR, out / "model" / SLOT_SIDECAR)
     if resumable:                        # finished: metrics (and weights) are written, the checkpoint goes
         shutil.rmtree(ck_dir, ignore_errors=True)
 

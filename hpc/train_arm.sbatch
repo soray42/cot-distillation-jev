@@ -118,6 +118,22 @@
 # evaluation (EVALMID sets) at the end of every stage but the last, so EVALAT stays empty. Knobs: XARGS="--curriculum-mode
 # exact" (stage j = the steps == j), "--curriculum-final-nodes" (the last stage = GFPQ's groups), "--reset-optim" (with
 # TAG). No STOPH / CKPTMIN; relays must put CSTEPS in their reset list.
+# Latent node slots (Tree Forcing v2, design (a) of notes/latent_primer_zh_2026-10-19.md; DATA=data/student_gsm8k_tf_si*,
+# whose worked_steps give the targets; XARGS="--tree-sources gsm8k_tf" as for GFPQ): every final question gets a line of
+# SLOTK (default 6) x SLOTC (default 1) reserved tokens (<|box_start|> on Qwen3.5) between the problem and its options
+# (SLOTPLACE=after-options: after the options), in training and in every evaluation (one forward pass, the same letter
+# readout; a saved model carries latent_slots.json for eval_student). LS = in training only, slot j's final-layer
+# states start a separate sequence through the same network and head that must continue with the j-th worked step
+# ("4 + 2 = 6"; chains longer than SLOTK: the tail merged into the last slot), loss = letter CE + SLOTLAM (default 1)
+# x the mean slot decoding CE per problem; final views only · LSU = the same slots without any slot loss (pause-token
+# control, no decoding pass) · LSR = LS with each slot's target drawn from other problems' steps (wrong-content
+# control; same supervised slots) · LSY = LS + GFPQ's yes/no node views (no slots in them). After training: the
+# necessity test SLOTNEC (default swap,drop,noise@mid:1.0: slot tokens swapped for <|quad_start|>, no slot line, noise
+# of 1 x RMS on the slot states after the middle decoder layer; on SLOTNECSETS, default the EVALMID sets, else all; keys
+# <set>@<mode>, metrics slot_necessity) and the decoding readout of the first SLOTDEC (default 32) items of the first eval
+# set (slot_decode_<set>.jsonl). SLOTK/SLOTC/SLOTLAM/SLOTPLACE also name the run dir (-sk<K>-sc<c>-sl<lam>-sp<place>)
+# for these arms; relays must put SLOTK SLOTC SLOTLAM SLOTPLACE SLOTNEC SLOTNECSETS SLOTDEC in their reset list.
+# NGPU=2 / the 1-rank FSDP route work (test_latent_slots TestFSDP); STOPH/CKPTMIN resume works on one GPU.
 # NODEW=w gives every node view weight w (--tree-node-weight; default: the per-problem split, aux 1.0 / views, about
 # .023 per K&K node); set it to the same value for all arms of a comparison. LOCAL_EVAL=path scores the
 # local-step probe (--eval-local: every K&K node in its local view, eval key local_kk); when unset it is
@@ -185,6 +201,8 @@ for f in $EVALS; do [ -f "${f#*=}" ] || { echo "missing eval file ${f#*=}"; exit
 
 arm_config() {           # sets F S T RLM DS DX EPD for arm $1 (EPD: the arm's default EPOCHS, empty = 2)
   RLM=; DS=; DX=; EPD=
+  local SL="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --latent-slots ${SLOTK:-6} --slot-c ${SLOTC:-1} --slot-lambda ${SLOTLAM:-1.0} --slot-place ${SLOTPLACE:-before-options} --slot-necessity ${SLOTNEC:-swap,drop,noise@mid:1.0} --slot-decode ${SLOTDEC:-32}"
+  local NS="${SLOTNECSETS:-${EVALMID:-}}"; SL="$SL${NS:+ --slot-necessity-sets $NS}"
   case "$1" in
     A1) F=gold;    S=none;   T=cot ;;
     A2) F=teacher; S=none;   T=cot ;;
@@ -251,6 +269,10 @@ arm_config() {           # sets F S T RLM DS DX EPD for arm $1 (EPD: the arm's d
     SIYB) F=teacher; S=cot; T=cot; EPD=$(( ${SISTAGES:-4} + 1 )); DX="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --si-stages ${SISTAGES:-4} --si-remove back" ;;  # SIB + GFPQ's yes/no node views
     SISB) F=teacher; S=cot; T=cot; EPD=$(( ${SISTAGES:-4} + 1 )); DX="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --si-stages ${SISTAGES:-4} --si-final-only --si-chain wrong --si-remove back" ;;  # SIB with wrong values (control)
     GFPQC) F=teacher; S=cot; T=cot; DX="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --curriculum-steps ${CSTEPS:-4}" ;;  # step curriculum: GFPQ's node views by solution step (<= 1, <= 2, ...), then the final questions
+    LS) F=teacher; S=cot; T=cot; DX="$SL --slot-final-only" ;;   # latent node slots: slot j decodes worked step j (training only), final views only
+    LSU) F=teacher; S=cot; T=cot; DX="$SL --slot-final-only --slot-target none" ;;   # the same slots, no slot loss (pause-token control)
+    LSR) F=teacher; S=cot; T=cot; DX="$SL --slot-final-only --slot-target shuffled" ;;   # slot targets from other problems (wrong-content control)
+    LSY) F=teacher; S=cot; T=cot; DX="$SL" ;;   # LS + GFPQ's yes/no node views
     *) echo "unknown ARM $1"; return 1 ;;
   esac
 }
@@ -343,7 +365,8 @@ if [ -n "${EVAL_BASE:-}" ]; then          # untrained backbone control (Jeff nee
 fi
 for ARM in $ARMS; do
   SF=$(sed -n 's/.*--subq-filter[ =]\([a-z]*\).*/\1/p' <<< "${XARGS:-}")               # XARGS chain filter -> -sf<f>
-  OUT="runs/${ARM}${SF:+-sf$SF}${NODEW:+-nw$NODEW}${TAG:+-$TAG}-$(basename "$MODEL")-$(basename "$DATA")-s${SEED}"   # TAG names recipe variants; NODEW -> -nw<w>
+  SLD=; case "$ARM" in LS|LSU|LSR|LSY) SLD="${SLOTK:+-sk$SLOTK}${SLOTC:+-sc$SLOTC}${SLOTLAM:+-sl$SLOTLAM}${SLOTPLACE:+-sp${SLOTPLACE%%-*}}" ;; esac
+  OUT="runs/${ARM}${SF:+-sf$SF}${NODEW:+-nw$NODEW}${SLD}${TAG:+-$TAG}-$(basename "$MODEL")-$(basename "$DATA")-s${SEED}"   # TAG names recipe variants; NODEW -> -nw<w>; slot knobs -> -sk/-sc/-sl/-sp
   if [ -n "${STOPH:-}${CKPTMIN:-}" ] && [ -f "$OUT/metrics.json" ] && [ ! -d "$OUT/ckpt" ]; then
     echo "=== $ARM: $OUT finished in an earlier job, skipped"; continue
   fi

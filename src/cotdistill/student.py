@@ -1950,14 +1950,15 @@ def evaluate(model, tok, items: list[dict], max_len: int, bs: int, cache: dict,
     """Final-question predictions for eval records (prompt, labels, gold_label; optional gold_probs, group).
 
     Items are batched by length to limit padding; predictions come back in input order. If `hidden` is a list,
-    it receives each item's readout hidden state (float32, CPU), also in input order."""
+    it receives each item's readout hidden state (float32, CPU), also in input order. The question text is
+    final_text's: FINAL_TEMPLATE, with the latent slot line when set_slot_prompt registered one for tok."""
     was_training = model.training
     model.eval()
     dev = next(model.parameters()).device
     order = sorted(range(len(items)), key=lambda i: len(items[i]["prompt"]))
     probs_by, hid_by = {}, {}
     if getattr(model, "cotd_readout", False):    # FSDP2 root: the same batches, split across the ranks and gathered
-        exs = [Example(FINAL_TEMPLATE.format(problem=it["prompt"]), it["labels"], [0.0] * len(it["labels"]), 1.0,
+        exs = [Example(final_text(tok, it["prompt"]), it["labels"], [0.0] * len(it["labels"]), 1.0,
                        "final", it["item_id"]) for it in items]
         zs, hs = model.batched(tok, exs, order, bs, max_len, cache, hidden is not None, layers)
         for i, z in enumerate(zs):
@@ -1967,7 +1968,7 @@ def evaluate(model, tok, items: list[dict], max_len: int, bs: int, cache: dict,
     else:
         for s in range(0, len(order), bs):
             idx = order[s:s + bs]
-            batch = [Example(FINAL_TEMPLATE.format(problem=items[i]["prompt"]), items[i]["labels"],
+            batch = [Example(final_text(tok, items[i]["prompt"]), items[i]["labels"],
                              [0.0] * len(items[i]["labels"]), 1.0, "final", items[i]["item_id"]) for i in idx]
             hs = [] if hidden is not None else None
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev.type == "cuda"):
@@ -2197,3 +2198,528 @@ def evaluate_local(model, tok, items: list[dict], max_len: int, bs: int, cache: 
             groups.setdefault(g, []).append(ok)
     metrics = {g: {"n": len(v), "acc": sum(v) / len(v)} for g, v in sorted(groups.items())}
     return metrics, preds
+
+
+# ---- latent node slots (--latent-slots; arms LS / LSU / LSR / LSY; opt-in, nothing below runs on the default path) ---
+# Tree Forcing v2, design (a) of notes/latent_primer_zh_2026-10-19.md: K x c existing reserved tokens in the final
+# question's prompt; at training only, the final-layer states of slot j are fed as the first input embeddings of a short
+# separate sequence through the same network and head, which must continue with the j-th worked step ("4 + 2 = 6").
+# The deployed model is the same network read out the same way in one forward pass over the prompt with the slots.
+SLOT_TOKENS = ("<|box_start|>", "<|quad_start|>", "<|object_ref_start|>", "<|box_end|>", "<|quad_end|>",
+               "<|object_ref_end|>")      # Qwen3.5's reserved grounding tokens: single ids, no special processing
+SLOT_PLACES = ("before-options", "after-options")
+SLOT_TARGETS = ("tree", "none", "shuffled")
+SLOT_OVERFLOW = ("merge", "truncate")
+SLOT_MERGE_SEP = "; "
+SLOT_END = "\n"                           # closes every decoded step (the greedy readout stops there)
+FINAL_CUE = FINAL_TEMPLATE.replace("{problem}", "", 1)      # "\n\nAnswer:"
+
+
+@dataclass(frozen=True)
+class SlotSpec:
+    """The slot line of a final question: k slots of c copies each of token, placed before the options block or at the
+    end of the prompt (place)."""
+    k: int
+    c: int
+    token: str
+    place: str = "before-options"
+
+    def as_dict(self) -> dict:
+        return dataclasses.asdict(self)
+
+
+@dataclass
+class SlotExample(Example):
+    """A final view with latent slots (a subclass, so Example and every existing arm's tuples are unchanged).
+    slot_targets[j] is slot j's step text or None (no loss); each supervised slot's decoding loss (mean token CE of
+    its text + SLOT_END) weighs weight x slot_lambda, slot_lambda = lambda / supervised slots of the problem (the
+    per-problem convention of the node views), so a weight-0 copy (FSDP pad) has no slot loss either."""
+    slot_targets: tuple = ()
+    slot_lambda: float = 0.0
+
+
+def slot_token_id(tokenizer, token: str) -> int:
+    """The id of a slot token: it must be one token on its own and in a run (token x 3 -> 3 ids) and not the pad,
+    eos, bos or unk token."""
+    ids = tokenizer.encode(token, add_special_tokens=False)
+    if len(ids) != 1:
+        raise ValueError(f"slot token {token!r} is {len(ids)} tokens, not one")
+    if tokenizer.encode(token * 3, add_special_tokens=False) != ids * 3:
+        raise ValueError(f"slot token {token!r}: a run of three does not encode to three copies of its id")
+    bad = {tokenizer.pad_token_id, tokenizer.eos_token_id, tokenizer.bos_token_id, tokenizer.unk_token_id} - {None}
+    if ids[0] in bad:
+        raise ValueError(f"slot token {token!r} is the tokenizer's pad / eos / bos / unk token")
+    return ids[0]
+
+
+def choose_slot_token(tokenizer, requested: str = "auto", avoid: tuple = ()) -> str:
+    """requested itself (checked by slot_token_id), or for "auto" the first token of SLOT_TOKENS that is a valid slot
+    token for this tokenizer and not in avoid. A tokenizer without any (GPT-2) needs an explicit token."""
+    if requested != "auto":
+        slot_token_id(tokenizer, requested)
+        return requested
+    for t in SLOT_TOKENS:
+        if t in avoid:
+            continue
+        try:
+            slot_token_id(tokenizer, t)
+            return t
+        except ValueError:
+            continue
+    raise ValueError(f"no reserved token of {SLOT_TOKENS} is a single token of this tokenizer: pass a token "
+                     "(e.g. --slot-token §)")
+
+
+def slot_prompt(prompt: str, spec: SlotSpec) -> str:
+    """prompt with the slot line ("\\n" + k x c tokens): before-options puts it before the last "\\nOptions:\\n" line
+    (between the problem and its options; a prompt without that block, e.g. BBEH's inline layouts, gets it at the
+    end); after-options at the end of the prompt (after the options, right before the "Answer:" cue)."""
+    line = "\n" + spec.token * (spec.k * spec.c)
+    if spec.place == "before-options":
+        head, sep, tail = prompt.rpartition("\nOptions:\n")
+        if sep:
+            return head + line + sep + tail
+    elif spec.place != "after-options":
+        raise ValueError(f"--slot-place {spec.place!r}: one of {', '.join(SLOT_PLACES)}")
+    return prompt + line
+
+
+def slot_text(text: str, spec: SlotSpec) -> str:
+    """A final question text (FINAL_TEMPLATE: prompt + FINAL_CUE) with the slot line in its prompt."""
+    if not text.endswith(FINAL_CUE):
+        raise ValueError("latent slots: a final question text must end with the 'Answer:' cue")
+    return slot_prompt(text[:-len(FINAL_CUE)], spec) + FINAL_CUE
+
+
+_SLOTS: dict[int, tuple] = {}
+
+
+def set_slot_prompt(tokenizer, spec: SlotSpec | None) -> None:
+    """Register (spec) or clear (None) the slot line of every final question evaluate builds with this tokenizer
+    (final_text), and the slot id slot_forward / slot_decode look for. Keyed by the tokenizer object (kept), as
+    set_chat_render."""
+    if spec is None:
+        _SLOTS.pop(id(tokenizer), None)
+        return
+    _SLOTS[id(tokenizer)] = (tokenizer, spec, slot_token_id(tokenizer, spec.token))
+
+
+def slot_spec(tokenizer) -> SlotSpec | None:
+    hit = _SLOTS.get(id(tokenizer))
+    return hit[1] if hit is not None and hit[0] is tokenizer else None
+
+
+def _slot_reg(tokenizer) -> tuple[SlotSpec, int]:
+    hit = _SLOTS.get(id(tokenizer))
+    if hit is None or hit[0] is not tokenizer:
+        raise ValueError("latent slots: no slot prompt registered for this tokenizer (set_slot_prompt)")
+    return hit[1], hit[2]
+
+
+def final_text(tokenizer, prompt: str) -> str:
+    """The final question text of an eval record: FINAL_TEMPLATE, with the registered slot line (set_slot_prompt) if
+    any, i.e. exactly the training final view of a slot arm (slot_group)."""
+    text = FINAL_TEMPLATE.format(problem=prompt)
+    spec = slot_spec(tokenizer)
+    return slot_text(text, spec) if spec is not None else text
+
+
+def slot_targets(item: dict, k: int, overflow: str = "merge") -> list[str | None]:
+    """Slot j's target (j = 0..k-1): the text of the item's j-th worked step (worked_steps: the atomic chain of
+    data/student_gsm8k_tf_si*, "4 + 2 = 6", the answer's operation last; numgen: the program's chain), None for the
+    slots after a shorter chain (no loss) and every slot of an item without a chain. A chain longer than k: overflow
+    "merge" joins steps k..n into the last slot (SLOT_MERGE_SEP, so the answer-producing step stays in), "truncate"
+    keeps the first k steps."""
+    if overflow not in SLOT_OVERFLOW:
+        raise ValueError(f"--slot-overflow {overflow!r}: one of {', '.join(SLOT_OVERFLOW)}")
+    steps = worked_steps(item) or []
+    texts = [s["text"] for s in steps]
+    if len(texts) > k:
+        texts = texts[:k - 1] + [SLOT_MERGE_SEP.join(texts[k - 1:])] if overflow == "merge" else texts[:k]
+    return texts + [None] * (k - len(texts))
+
+
+def shuffled_slot_targets(items: list[dict], *, k: int, overflow: str = "merge", seed: int = 0) -> dict:
+    """LSR, the wrong-content control: item_id -> slot targets with the same supervised slots as slot_targets (same
+    count and positions) whose texts are drawn from the slot targets of OTHER items (never one of the item's own
+    texts), by a generator keyed by seed and the item (not the training rng; fixed over the epochs). The pool is every
+    supervised target of items (in file order), so lengths and merged lines follow the real distribution."""
+    real = {it["item_id"]: slot_targets(it, k, overflow) for it in items}
+    pool = [(iid, t) for iid, ts in real.items() for t in ts if t is not None]
+    out = {}
+    for iid, ts in real.items():
+        own = {t for t in ts if t is not None}
+        foreign = [i for i, (src, t) in enumerate(pool) if src != iid and t not in own] if own else []
+        if own and not foreign:
+            raise ValueError(f"--slot-target shuffled: no foreign slot target for {iid}")
+        rng = random.Random(f"slot-shuffle|{seed}|{iid}")
+        out[iid] = [pool[foreign[rng.randrange(len(foreign))]][1] if t is not None else None for t in ts]
+    return out
+
+
+def slot_group(group: list[Example], item: dict, *, spec: SlotSpec, targets: list | None, lam: float = 1.0,
+               final_only: bool = False, stats: dict | None = None) -> list[Example]:
+    """A full-tree group (build_full_tree's [final] + node views) of a slot arm: the final view's text gets the slot line
+    (slot_text) and becomes a SlotExample with targets (LS: slot_targets, LSR: shuffled_slot_targets) and slot_lambda =
+    lam / supervised slots; targets None (LSU, the pause-token control) keeps a plain Example (no decoding pass). Node
+    views stay as built (LSY: GFPQ's, without slots) or are dropped (final_only: LS / LSU / LSR). Draws nothing from any
+    generator (rng lockstep with the arm's GFPQ). stats counts slot_items, slot_supervised (slots with a target),
+    slot_items_without_chain and slot_items_merged (an overflow target)."""
+    st = stats if stats is not None else {}
+    bump = lambda key, n=1: st.__setitem__(key, st.get(key, 0) + n)
+    out = []
+    for e in group:
+        if e.kind == "final":
+            text = slot_text(e.text, spec)
+            bump("slot_items")
+            if targets is None:
+                out.append(dataclasses.replace(e, text=text))
+                continue
+            tg = tuple(targets)
+            if len(tg) != spec.k:
+                raise ValueError(f"{item.get('item_id')}: {len(tg)} slot targets for {spec.k} slots")
+            m = sum(t is not None for t in tg)
+            bump("slot_supervised", m)
+            bump("slot_items_without_chain", m == 0)
+            bump("slot_items_merged", any(t is not None and SLOT_MERGE_SEP in t for t in tg))
+            out.append(SlotExample(**dict(dataclasses.asdict(e), text=text), slot_targets=tg,
+                                   slot_lambda=lam / m if m else 0.0))
+        elif not final_only:
+            out.append(e)
+    return out
+
+
+def _letters(model, tokenizer, head, h: torch.Tensor, batch: list, cache: dict) -> list[torch.Tensor]:
+    """label_logits' letter readout of the readout states h (one row per example)."""
+    out, cap, dev = [], logit_softcap(model), head.weight.device
+    for i, e in enumerate(batch):
+        key = tuple(e.labels)
+        if key not in cache:
+            cache[key] = torch.tensor(letter_token_ids(tokenizer, e.labels), device=dev)
+        rows = cache[key]
+        bias = head.bias[rows] if getattr(head, "bias", None) is not None else None
+        out.append(head_logits(h[i], head.weight[rows], bias, cap).float())
+    return out
+
+
+def _slot_positions(ids: torch.Tensor, sid: int, spec: SlotSpec, item_id) -> torch.Tensor:
+    pos = (ids == sid).nonzero().flatten()
+    if pos.numel() != spec.k * spec.c:
+        raise ValueError(f"{item_id}: {pos.numel()} slot tokens in the encoded prompt, want {spec.k} x {spec.c} (the "
+                         "token occurs in the text, or the prompt was cut)")
+    return pos
+
+
+def _ce_rows(h: torch.Tensor, w: torch.Tensor, y: torch.Tensor, softcap: float | None = None) -> torch.Tensor:
+    z = (h.to(w.dtype) @ w.T).float()
+    if softcap:
+        z = softcap * torch.tanh(z / softcap)
+    return F.cross_entropy(z, y, reduction="none")
+
+
+def _decode_inputs(model, tokenizer, vecs: list[torch.Tensor], conts: list[list[int]]):
+    """The separate decoding sequences: [special prefix] + slot states (c vectors) + continuation tokens, as input
+    embeddings of the same network (its own embedding module, so a scaled embedding stays scaled), right-padded."""
+    emb = model.get_input_embeddings()
+    pre = special_prefix(tokenizer)
+    n, c, P = len(vecs), vecs[0].shape[0], len(pre)
+    L = P + c + max(len(x) for x in conts)
+    pad = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
+    dev = emb.weight.device
+    ids = torch.full((n, L), pad, dtype=torch.long, device=dev)
+    mask = torch.zeros((n, L), dtype=torch.long, device=dev)
+    for r, x in enumerate(conts):
+        if P:
+            ids[r, :P] = torch.tensor(pre, device=dev)
+        if x:
+            ids[r, P + c:P + c + len(x)] = torch.tensor(x, device=dev)
+        mask[r, :P + c + len(x)] = 1
+    e = emb(ids)
+    v = torch.stack(vecs).to(e.dtype)
+    return torch.cat([e[:, :P], v, e[:, P + c:]], dim=1), mask, P + c
+
+
+def slot_forward(model, tokenizer, batch: list, max_len: int, cache: dict, _detach: bool = False,
+                 _always: bool = False):
+    """One training micro-batch of a slot arm: (letter logits as label_logits gives them, the summed slot decoding
+    loss, stats). One main pass over the batch (collate); for every SlotExample, slot j's final-layer states (its c
+    positions, found by the slot id) are NOT detached and start a separate sequence followed by the target text +
+    SLOT_END, read by the same body and head (next-token CE on the text tokens, mean per slot), so the decoding loss
+    reaches the main pass through those states. Loss = sum over supervised slots of weight x slot_lambda x CE. Examples
+    without targets (node views, LSU) only give letter logits. Under FSDP (Readout root) both passes run inside the
+    root's forward, and a micro-batch without a supervised slot still runs a decoding pass (one sequence at weight 0),
+    so every rank makes the same FSDP collectives. stats: slot_n (supervised slots), slot_ce_sum (their unweighted
+    CEs). _detach (tests only) cuts the slot states from the main pass."""
+    if getattr(model, "cotd_readout", False):
+        return model.run(slot_forward, tokenizer, batch, max_len, cache, _detach, True)
+    spec, sid = _slot_reg(tokenizer)
+    body, head = text_parts(model)
+    dev = head.weight.device
+    b = collate(tokenizer, batch, max_len, dev)
+    hidden = body(input_ids=b["input_ids"], attention_mask=b["attention_mask"], use_cache=False).last_hidden_state
+    rows = torch.arange(hidden.shape[0], device=dev)
+    out = _letters(model, tokenizer, head, hidden[rows, b["last"]], batch, cache)
+    vecs, conts, wts = [], [], []
+    for i, e in enumerate(batch):
+        tg = getattr(e, "slot_targets", ())
+        if not any(t is not None for t in tg):
+            continue
+        pos = _slot_positions(b["input_ids"][i], sid, spec, e.item_id)
+        for j, t in enumerate(tg):
+            if t is None:
+                continue
+            v = hidden[i, pos[j * spec.c:(j + 1) * spec.c]]
+            vecs.append(v.detach() if _detach else v)
+            conts.append(tokenizer.encode(t + SLOT_END, add_special_tokens=False))
+            wts.append(e.weight * e.slot_lambda)
+    zero = hidden.new_zeros((), dtype=torch.float32)
+    n_real = len(conts)
+    if not vecs and not _always:
+        return out, zero, {"slot_n": 0, "slot_ce_sum": 0.0}
+    if not vecs:                             # FSDP: a weight-0 decoding sequence keeps the ranks' collectives equal
+        vecs, conts, wts = [hidden[0, :spec.c]], [[tokenizer.eos_token_id if tokenizer.eos_token_id is not None
+                                                    else 0] * 2], [0.0]
+    embeds, mask, s0 = _decode_inputs(model, tokenizer, vecs, [x[:-1] for x in conts])
+    dh = body(inputs_embeds=embeds, attention_mask=mask, use_cache=False).last_hidden_state
+    hs = torch.cat([dh[r, s0 - 1:s0 - 1 + len(x)] for r, x in enumerate(conts)])
+    ys = torch.tensor([t for x in conts for t in x], device=dev)
+    wrow = torch.tensor([w / len(x) for w, x in zip(wts, conts) for _ in x], device=dev, dtype=torch.float32)
+    cap = logit_softcap(model)
+    ce = torch.cat([torch.utils.checkpoint.checkpoint(_ce_rows, hs[j:j + 512], head.weight, ys[j:j + 512], cap,
+                                                      use_reentrant=False) for j in range(0, len(ys), 512)])
+    with torch.no_grad():
+        seg = torch.repeat_interleave(torch.arange(len(conts), device=dev),
+                                      torch.tensor([len(x) for x in conts], device=dev))
+        per = torch.zeros(len(conts), device=dev).index_add_(0, seg, ce.detach().float())
+        per = per / torch.tensor([len(x) for x in conts], device=dev, dtype=torch.float32)
+    return out, zero + (wrow * ce).sum(), {"slot_n": n_real, "slot_ce_sum": float(per[:n_real].sum())}
+
+
+def _value(text: str | None) -> str | None:
+    """The result of a step text: what follows its last '=' (stripped), else None."""
+    if not text or "=" not in text:
+        return None
+    return text.rsplit("=", 1)[1].strip() or None
+
+
+def slot_decode(model, tokenizer, items: list[dict], *, max_len: int, bs: int = 8, max_new: int = 24,
+                overflow: str = "merge") -> list[dict]:
+    """The "slot j decodes to 4 + 2 = 6" readout: for each item, the main pass over its final question with the
+    registered slot line (final_text), then every slot's final-layer states start a separate sequence (as in training)
+    decoded greedily with the same body and head, up to max_new tokens or SLOT_END. Rows: item_id, n_steps and per slot
+    target (slot_targets; None past the chain), decoded, exact (decoded == target) and value_ok (same result after
+    the last '='). Under FSDP every rank decodes the same items inside the root's forward."""
+    if getattr(model, "cotd_readout", False):
+        return model.run(_slot_decode, tokenizer, items, max_len, bs, max_new, overflow)
+    return _slot_decode(model, tokenizer, items, max_len, bs, max_new, overflow)
+
+
+@torch.no_grad()
+def _slot_decode(model, tokenizer, items, max_len, bs, max_new, overflow) -> list[dict]:
+    spec, sid = _slot_reg(tokenizer)
+    was_training = model.training
+    model.eval()
+    body, head = text_parts(model)
+    dev = head.weight.device
+    emb = model.get_input_embeddings()
+    cap = logit_softcap(model)
+    bias = head.bias if getattr(head, "bias", None) is not None else None
+    rows = []
+    for s in range(0, len(items), bs):
+        its = items[s:s + bs]
+        exs = [Example(final_text(tokenizer, it["prompt"]), it["labels"], [0.0] * len(it["labels"]), 1.0, "final",
+                       it["item_id"]) for it in its]
+        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev.type == "cuda"):
+            b = collate(tokenizer, exs, max_len, dev)
+            hidden = body(input_ids=b["input_ids"], attention_mask=b["attention_mask"],
+                          use_cache=False).last_hidden_state
+            vecs = []
+            for i, e in enumerate(exs):
+                pos = _slot_positions(b["input_ids"][i], sid, spec, e.item_id)
+                vecs += [hidden[i, pos[j * spec.c:(j + 1) * spec.c]] for j in range(spec.k)]
+            x, _, _ = _decode_inputs(model, tokenizer, vecs, [[]] * len(vecs))
+            gen = [[] for _ in vecs]
+            done = [False] * len(vecs)
+            for _ in range(max_new):
+                h = body(inputs_embeds=x, use_cache=False).last_hidden_state[:, -1]
+                nxt = head_logits(h, head.weight, bias, cap).float().argmax(-1)
+                for r, t in enumerate(nxt.tolist()):
+                    if not done[r]:
+                        gen[r].append(t)
+                        done[r] = SLOT_END in tokenizer.decode(gen[r])
+                if all(done):
+                    break
+                x = torch.cat([x, emb(nxt)[:, None].to(x.dtype)], dim=1)
+        for i, it in enumerate(its):
+            tg = slot_targets(it, spec.k, overflow)
+            slots = []
+            for j in range(spec.k):
+                d = tokenizer.decode(gen[i * spec.k + j]).split(SLOT_END)[0].strip()
+                t = tg[j]
+                slots.append({"slot": j + 1, "target": t, "decoded": d, "exact": None if t is None else d == t,
+                              "value_ok": None if t is None else _value(d) is not None and _value(d) == _value(t)})
+            rows.append({"item_id": it["item_id"], "n_steps": len(worked_steps(it) or []), "slots": slots})
+    if was_training:
+        model.train()
+    return rows
+
+
+def slot_decode_summary(rows: list[dict]) -> dict:
+    """Exact-match and value rates of slot_decode rows, overall and per slot (supervised slots only)."""
+    out: dict = {}
+    for key in ["all"] + sorted({f"slot{s['slot']}" for r in rows for s in r["slots"]}, key=lambda x: int(x[4:])):
+        xs = [s for r in rows for s in r["slots"] if s["target"] is not None and (key == "all" or f"slot{s['slot']}" == key)]
+        if xs:
+            out[key] = {"n": len(xs), "exact": sum(bool(s["exact"]) for s in xs) / len(xs),
+                        "value": sum(bool(s["value_ok"]) for s in xs) / len(xs)}
+    return out
+
+
+class _SlotNoise:
+    """Necessity test "noise@<layer>:<sigma>": Gaussian noise of sigma x the state's RMS added to the output of decoder
+    layer <layer> (an index into the decoder layers, "mid" = the middle one) at the slot positions only (found by the
+    slot id in the input ids, captured by a pre-hook on the text decoder), from a fixed generator. A context manager;
+    the hooks are removed on exit. (The final layer's slot states are not read by the readout, so the layer must be an
+    intermediate one.)"""
+
+    def __init__(self, model, tokenizer, layer, sigma: float, seed: int = 0):
+        from .fsdp import decoder_layers
+        root = model.model if getattr(model, "cotd_readout", False) else model
+        self.body, _ = text_parts(root)
+        self.layers = decoder_layers(self.body)
+        n = len(self.layers)
+        li = n // 2 if layer == "mid" else int(layer)
+        li = li + n if li < 0 else li
+        if not 0 <= li <= n - 2:
+            raise ValueError(f"slot noise layer {layer}: an intermediate decoder layer, 0..{n - 2} (of {n})")
+        self.layer = self.layers[li]
+        self.li = li
+        self.sid = _slot_reg(tokenizer)[1]
+        self.sigma, self.seed = sigma, seed
+        self.ids = None
+        self.handles = []
+
+    def __enter__(self):
+        def pre(mod, args, kwargs):
+            self.ids = kwargs.get("input_ids", args[0] if args else None)
+        self.gen = None
+
+        def post(mod, args, out):
+            if self.ids is None:
+                return out
+            h = out[0] if isinstance(out, tuple) else out
+            mask = (self.ids == self.sid)
+            if not bool(mask.any()):
+                return out
+            if self.gen is None or self.gen.device != h.device:
+                self.gen = torch.Generator(device=h.device).manual_seed(self.seed)
+            sel = h[mask]
+            rms = sel.float().pow(2).mean(-1, keepdim=True).sqrt()
+            noise = torch.randn(sel.shape, generator=self.gen, device=h.device, dtype=torch.float32)
+            h = h.clone()
+            h[mask] = (sel.float() + self.sigma * rms * noise).to(h.dtype)
+            return (h,) + tuple(out[1:]) if isinstance(out, tuple) else h
+        self.handles = [self.body.register_forward_pre_hook(pre, with_kwargs=True),
+                        self.layer.register_forward_hook(post)]
+        return self
+
+    def __exit__(self, *exc):
+        for h in self.handles:
+            h.remove()
+        self.handles = []
+        return False
+
+
+def parse_slot_necessity(spec: str) -> list[str]:
+    """--slot-necessity value -> modes: "swap" (every slot token replaced by the swap token: same length), "drop" (the
+    prompt without the slot line: the A2 format), "noise@<layer>:<sigma>" (_SlotNoise; <layer> an int or "mid")."""
+    modes = [x.strip() for x in spec.split(",") if x.strip()]
+    for m in modes:
+        if m in ("swap", "drop"):
+            continue
+        hit = re.fullmatch(r"noise@(mid|-?\d+):([0-9.]+(?:e-?\d+)?)", m)
+        if not hit:
+            raise ValueError(f"--slot-necessity {m!r}: swap, drop or noise@<layer|mid>:<sigma>")
+    return modes
+
+
+def slot_necessity(model, tok, items: list[dict], max_len: int, bs: int, cache: dict, modes: list[str], *,
+                   swap_token: str, intact: dict, seed: int = 0) -> dict:
+    """The necessity test: evaluate's metrics and predictions on items with the slots perturbed (parse_slot_necessity
+    modes), next to the intact metrics: {mode: (metrics + acc_intact / nll_intact / acc_drop = intact - perturbed,
+    preds)}. The registered slot prompt is restored afterwards."""
+    spec, _ = _slot_reg(tok)
+    out = {}
+    try:
+        for m in modes:
+            if m == "swap":
+                set_slot_prompt(tok, dataclasses.replace(spec, token=swap_token))
+                mm, pr = evaluate(model, tok, items, max_len, bs, cache)
+            elif m == "drop":
+                set_slot_prompt(tok, None)
+                mm, pr = evaluate(model, tok, items, max_len, bs, cache)
+            else:
+                layer, sigma = m[len("noise@"):].split(":")
+                set_slot_prompt(tok, spec)
+                with _SlotNoise(model, tok, layer, float(sigma), seed=seed):
+                    mm, pr = evaluate(model, tok, items, max_len, bs, cache)
+            set_slot_prompt(tok, spec)
+            if "acc" in mm and "acc" in intact:
+                mm = dict(mm, acc_intact=intact["acc"], acc_drop=intact["acc"] - mm["acc"],
+                          nll_intact=intact.get("nll"))
+            out[m] = (mm, pr)
+    finally:
+        set_slot_prompt(tok, spec)
+    return out
+
+
+def slot_mode_name(mode: str) -> str:
+    """A file-name-safe name of a necessity mode ("noise@mid:1.0" -> "noise_mid_1.0")."""
+    return re.sub(r"[^A-Za-z0-9._-]", "_", mode)
+
+
+SLOT_SIDECAR = "latent_slots.json"          # next to a saved slot-arm model: the slot line eval_student rebuilds
+
+
+def slot_evals(model, tok, evals: dict, results: dict, out, *, modes: list[str], sets: list[str], swap_token: str | None,
+               decode_n: int, decode_set: str, max_len: int, bs: int, cache: dict, seed: int = 0,
+               overflow: str = "merge", write: bool = True) -> None:
+    """After the plain evaluations of a slot arm (results["eval"][set] = the intact metrics): the necessity test
+    (slot_necessity) on the named sets (all when empty; names not in evals are skipped), eval keys <set>@<mode>,
+    results["slot_necessity"][set][mode] and preds_<set>@<mode>.jsonl; then the decoding readout (slot_decode) of the
+    first decode_n items of decode_set (default / absent: the first set): slot_decode_<set>.jsonl and
+    results["slot_decode"] (slot_decode_summary). write False: no files (FSDP ranks other than 0)."""
+    import json
+    from pathlib import Path
+    out = Path(out)
+    for name in sets or list(evals):
+        if name not in evals:
+            print(f"slot necessity: no eval set {name!r}, skipped", flush=True)
+            continue
+        if not modes:
+            break
+        intact = results["eval"].get(name) or evaluate(model, tok, evals[name], max_len, bs, cache)[0]
+        res = slot_necessity(model, tok, evals[name], max_len, bs, cache, modes, swap_token=swap_token or "",
+                             intact=intact, seed=seed)
+        for mode, (mm, pr) in res.items():
+            key = f"{name}@{mode}"
+            results["eval"][key] = mm
+            results.setdefault("slot_necessity", {}).setdefault(name, {})[mode] = {
+                k: mm.get(k) for k in ("n", "acc", "acc_intact", "acc_drop", "nll", "nll_intact", "ece")}
+            if write:
+                with open(out / f"preds_{name}@{slot_mode_name(mode)}.jsonl", "w") as f:
+                    for p in pr:
+                        f.write(json.dumps(p) + "\n")
+            print(key, json.dumps(results["slot_necessity"][name][mode]), flush=True)
+    if decode_n and evals:
+        name = decode_set if decode_set in evals else next(iter(evals))
+        rows = slot_decode(model, tok, evals[name][:decode_n], max_len=max_len, bs=bs, overflow=overflow)
+        results["slot_decode"] = {"set": name, "items": len(rows), **slot_decode_summary(rows)}
+        if write:
+            with open(out / f"slot_decode_{name}.jsonl", "w") as f:
+                for r in rows:
+                    f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        print("slot decode", json.dumps(results["slot_decode"]), flush=True)
+        for r in rows[:2]:
+            print("  ", r["item_id"], " | ".join(f"{s['slot']}: {s['decoded']!r} ({s['target']!r})" for s in r["slots"]),
+                  flush=True)
