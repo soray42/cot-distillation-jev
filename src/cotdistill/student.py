@@ -1596,6 +1596,41 @@ def si_group(group: list[Example], item: dict, *, stage: int, n_stages: int, cha
     return out
 
 
+# ---- step curriculum (--curriculum-steps; arm GFPQC; opt-in, nothing below runs on the default path) ----------------
+CURRICULUM_MODES = ("cumulative", "exact")
+
+
+def curriculum_stage(step: int, n_stages: int) -> int:
+    """The curriculum node stage (1..n_stages) of a node at solution step `step` (GSM8K: the Socratic step index, the
+    node field "step", 1-based): its step, with every step beyond n_stages folded into the last node stage, so no node
+    is left out of the curriculum."""
+    if isinstance(step, bool) or not isinstance(step, int) or step < 1:
+        raise ValueError(f"curriculum: node step {step!r}, want an integer >= 1")
+    return min(step, n_stages)
+
+
+def curriculum_item(item: dict, *, stage: int, n_stages: int, mode: str = "cumulative") -> dict:
+    """item for curriculum node stage `stage` (1..n_stages): a shallow copy whose subqs are only the tree nodes (with an
+    "id") of that stage (curriculum_stage) or earlier (mode "cumulative") / of that stage only (mode "exact"); every
+    other field is the item's. build_full_tree on it asks exactly those nodes in the arm's view, with the per-problem
+    weight split over them (the --tree-node-types convention); the caller drops the final view (node stages train no
+    final question). Nodes without a step raise ValueError."""
+    if mode not in CURRICULUM_MODES:
+        raise ValueError(f"--curriculum-mode {mode!r}: one of {', '.join(CURRICULUM_MODES)}")
+    if not 1 <= stage <= n_stages:
+        raise ValueError(f"curriculum node stage {stage} of {n_stages}")
+    keep = []
+    for sq in item.get("subqs") or []:
+        if "id" not in sq:
+            continue
+        if "step" not in sq:
+            raise ValueError(f"curriculum: {item.get('item_id')} node {sq['id']} has no step")
+        c = curriculum_stage(sq["step"], n_stages)
+        if c == stage or mode == "cumulative" and c < stage:
+            keep.append(sq)
+    return dict(item, subqs=keep)
+
+
 def text_parts(model):
     """(backbone returning last_hidden_state, output embedding) for causal or multimodal wrappers."""
     head = model.get_output_embeddings()

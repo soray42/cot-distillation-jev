@@ -30,7 +30,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from cotdistill.student import (Example, brier_loss, build_examples, build_fact_examples, build_full_tree, build_group,  # noqa: E402
-                                build_stage_examples, evaluate, evaluate_local, evaluate_subq, kl_loss, label_logits,
+                                build_stage_examples, curriculum_item, evaluate, evaluate_local, evaluate_subq, kl_loss,
+                                label_logits,
                                 lm_loss, load_model, logit_softcap, micro_batches, pack_rng, pack_views, readouts,
                                 scaffold_fade, si_group, special_prefix, subq_sets, use_chat_template, worked_steps)
 
@@ -45,7 +46,8 @@ NEW_ARG_DEFAULTS = {"tree_view": "problem", "tree_sources": "", "tree_node_weigh
                     "fsdp_optim": None, "tree_mix_p": 0.5, "tree_scaffold": 0.0, "tree_depth_weight": 0.0,
                     "chat_template": False, "tree_pack": 0, "tree_node_types": "", "tree_target": "real",
                     "node_render": "op", "si_stages": 0, "si_chain": "true", "si_final_only": False, "si_smooth": 0.1,
-                    "si_schedule": "global", "si_keep_optim": False, "si_remove": "front"}
+                    "si_schedule": "global", "si_keep_optim": False, "si_remove": "front", "curriculum_steps": 0,
+                    "curriculum_mode": "cumulative", "curriculum_final_nodes": False}
 
 LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj",
                 "in_proj_qkv", "in_proj_z", "in_proj_a", "in_proj_b", "out_proj"]
@@ -214,6 +216,24 @@ def main() -> None:
     ap.add_argument("--si-remove", default="front", choices=["front", "back"],
                     help="--si-stages: remove the steps from the front (ICoT-SI; the kept steps keep their numbers) "
                          "or from the back (the steps nearest the answer first)")
+    ap.add_argument("--curriculum-steps", type=int, default=0,
+                    help="step curriculum (GFPQC; full-tree loop, --tree-full plain, yes/no nodes): K node stages, "
+                         "then the final questions. Node stage j (1..K) trains only the node views (the arm's view, "
+                         "e.g. GFPQ's) of the nodes whose solution step (node field step: GSM8K's Socratic step "
+                         "index) is <= j (--curriculum-mode cumulative) or == j (exact), every step beyond K counted "
+                         "as K (no node is left out); no final question in the node stages; each problem's node "
+                         "views share --aux-total (the --tree-node-types convention); problems without a node of the "
+                         "stage are not in it. The last stage trains the final questions only (--curriculum-final-"
+                         "nodes: with all their node views, GFPQ's groups). --epochs is the total, split evenly "
+                         "(epochs / (K + 1) passes per stage, each stage counted in its own updates per pass); one "
+                         "warmup + cosine schedule over all stages; the AdamW state is kept across stages "
+                         "(--reset-optim resets it); a mid-training evaluation (--eval-mid sets) at the end of every "
+                         "stage but the last, no --eval-at; 0 = off")
+    ap.add_argument("--curriculum-mode", default="cumulative", choices=["cumulative", "exact"],
+                    help="--curriculum-steps: node stage j asks the steps <= j (cumulative) or == j (exact)")
+    ap.add_argument("--curriculum-final-nodes", action="store_true",
+                    help="--curriculum-steps: the last stage trains the final questions with all their node views "
+                         "(GFPQ's groups) instead of the final questions only")
     ap.add_argument("--aux-total", type=float, default=1.0,
                     help="full-tree groups: auxiliary weight per problem, split evenly over its node views")
     ap.add_argument("--aux-sources", default="", help="grouped training: comma list of item sources whose auxiliary "
@@ -400,6 +420,20 @@ def main() -> None:
                          "--si-final-only), without --tree-pack, --stop-after-h / --ckpt-every-min / --stop-at-step "
                          "(no multi-stage resume), --depth-stages, --fact-stages or --facts-always; --si-smooth a "
                          "probability")
+    if args.curriculum_steps < 0 or ((args.curriculum_mode != "cumulative" or args.curriculum_final_nodes)
+                                     and not args.curriculum_steps):
+        raise SystemExit("--curriculum-mode / --curriculum-final-nodes need --curriculum-steps K >= 1")
+    if args.curriculum_steps and (args.tree_full != "plain" or args.node_format != "yesno" or
+                                  args.tree_view not in ("problem", "statements", "statements+question") or
+                                  args.si_stages or args.tree_pack or resumable or args.depth_stages or
+                                  args.fact_stages or args.facts_always or args.tree_eligible_only or
+                                  args.tree_scaffold or args.tree_depth_weight or args.tree_target != "real" or
+                                  args.eval_at):
+        raise SystemExit(f"--curriculum-steps {args.curriculum_steps}: for the full-tree loop with --tree-full plain, "
+                         "yes/no nodes (views problem / statements / statements+question), without --si-stages, "
+                         "--tree-pack, --stop-after-h / --ckpt-every-min / --stop-at-step (no multi-stage resume), "
+                         "--depth-stages, --fact-stages, --facts-always, --tree-eligible-only, --tree-scaffold, "
+                         "--tree-depth-weight or --tree-target; no --eval-at (it evaluates at its stage ends)")
     if args.ckpt_single and not resumable:
         raise SystemExit("--ckpt-single needs --stop-after-h, --ckpt-every-min or --stop-at-step")
     if args.chat_template and args.rationale_lm:
@@ -547,6 +581,23 @@ def main() -> None:
                              f"has value nodes ({VALUE_FIELD}) with the rendering {args.node_render} "
                              "(build them with scripts/build_gsm8k_ops.py)")
         print(f"value nodes ({args.node_render}): {n_val}", flush=True)
+    if args.curriculum_steps:                # GFPQC: every tree node of the --tree-sources items needs its step
+        from cotdistill.student import curriculum_stage
+        by_stage: dict = {}
+        for it in train_items:
+            if tree_sources is None or it.get("source") in tree_sources:
+                for sq in it.get("subqs") or []:
+                    if "id" in sq:
+                        try:
+                            c = curriculum_stage(sq.get("step"), args.curriculum_steps)
+                            by_stage[c] = by_stage.get(c, 0) + 1
+                        except ValueError as e:
+                            raise SystemExit(f"--curriculum-steps: {it['item_id']} node {sq['id']}: {e}")
+        if not by_stage:
+            raise SystemExit(f"--curriculum-steps: no {args.tree_sources or 'tree'} item of {args.train} has tree nodes")
+        print(f"curriculum: {args.curriculum_steps} node stages ({args.curriculum_mode}) + the final stage"
+              f"{' with all nodes' if args.curriculum_final_nodes else ''}; nodes by stage (steps beyond "
+              f"{args.curriculum_steps} in the last): {json.dumps(dict(sorted(by_stage.items())))}", flush=True)
     if args.tree_view in ("statements", "statements+question", "local+ctxparse", "mix"):   # GFP-S, GFPQ, TFLP, MIX: every
         from cotdistill.treeplan import problem_no_options, statement_block   # view must build (fail before training);
         view_fn = problem_no_options if args.tree_view == "statements+question" else statement_block   # GFPQ needs
@@ -588,11 +639,15 @@ def main() -> None:
         fade = {"U": upp, "T": max(1, math.ceil(args.epochs * upp))}
 
     si_log: list[dict] = []                  # --si-stages: the chain counts of every pass
+    cur_log: list[dict] = []                 # --curriculum-steps: the problems and views of every pass
 
-    def fulltree_updates(si_stage: int | None = None) -> list[list[Example]]:
+    def fulltree_updates(si_stage: int | None = None, cur_stage: int | None = None) -> list[list[Example]]:
         """Problems in shuffled order, each as [final] + all its node views; items_per_update problems per update
         (the number of sequences per update varies with tree size). si_stage (--si-stages): the final views carry
-        that stage's worked steps (student.si_group, which draws from no shared generator)."""
+        that stage's worked steps (student.si_group, which draws from no shared generator). cur_stage
+        (--curriculum-steps K): 1..K = node stage j, each problem's node views of that stage only
+        (student.curriculum_item) and no final view, problems without one left out; K + 1 = the final stage, the
+        final views only (--curriculum-final-nodes: the whole group)."""
         items = train_items[:]
         order_rng.shuffle(items)
         st: dict = {}
@@ -605,7 +660,15 @@ def main() -> None:
             p_sc = None
             if fade is not None:             # GTF: p(t) of the update this problem's group lands in
                 p_sc = scaffold_fade(ep * fade["U"] + len(groups) // b, fade["T"], args.tree_scaffold)
-            g = build_full_tree(it, mode=args.tree_full, rng=rng, cap=args.tree_cap,
+            src = it
+            node_stage = cur_stage is not None and cur_stage <= args.curriculum_steps
+            if node_stage:                   # --curriculum-steps: this node stage's nodes of a tree item
+                if tree_sources is not None and it.get("source") not in tree_sources:
+                    continue
+                src = curriculum_item(it, stage=cur_stage, n_stages=args.curriculum_steps, mode=args.curriculum_mode)
+            elif cur_stage is not None and not args.curriculum_final_nodes:   # the final stage: final views only
+                src = dict(it, subqs=[])
+            g = build_full_tree(src, mode=args.tree_full, rng=rng, cap=args.tree_cap,
                                 aux_total=args.aux_total, node_format=args.node_format,
                                 final=args.final, eligible_only=args.tree_eligible_only,
                                 subq_target=args.subq_target, permute_final=args.permute_final,
@@ -622,6 +685,8 @@ def main() -> None:
                 g = si_group(g, it, stage=si_stage, n_stages=args.si_stages, chain=args.si_chain, seed=args.seed,
                              epoch=ep, smooth=args.si_smooth, final_only=args.si_final_only, remove=args.si_remove,
                              stats=sst)
+            if g and node_stage:             # node stages train no final question
+                g = [e for e in g if e.kind != "final"]
             if g:
                 groups.append(g)
                 ps.append(p_sc)
@@ -634,6 +699,12 @@ def main() -> None:
         if si_stage is not None:
             si_log.append({"pass": ep, "stage": si_stage, **sst})
             print(f"si pass {ep} stage {si_stage}/{args.si_stages}: {json.dumps(sst, sort_keys=True)}", flush=True)
+        if cur_stage is not None:
+            row = {"pass": ep, "stage": cur_stage if cur_stage <= args.curriculum_steps else "final",
+                   "problems": len(groups), "node_views": sum(e.kind != "final" for g in groups for e in g),
+                   "finals": sum(e.kind == "final" for g in groups for e in g), "updates": -(-len(groups) // b)}
+            cur_log.append(row)
+            print(f"curriculum pass {ep}: {json.dumps(row)}", flush=True)
         if fade is not None:
             print(f"scaffold pass {ep}: {st.get('scaffold_views', 0)} scaffold views of "
                   f"{st.get('scaffold_eligible', 0)} eligible derived nodes, p(t) {ps[0] if ps else 0:.4f} -> "
@@ -645,6 +716,10 @@ def main() -> None:
         per_step = 1                          # stage
         stages = [(f"si{k}", (lambda k=k: fulltree_updates(k)), args.epochs / (args.si_stages + 1))
                   for k in range(args.si_stages + 1)]
+    elif args.tree_full and args.curriculum_steps:   # step curriculum: K node stages, then the final questions, epochs
+        per_step = 1                                  # / (K + 1) each
+        stages = [(f"cur{k}" if k <= args.curriculum_steps else "curfinal", (lambda k=k: fulltree_updates(cur_stage=k)),
+                   args.epochs / (args.curriculum_steps + 1)) for k in range(1, args.curriculum_steps + 2)]
     elif args.tree_full:
         per_step = 1                 # make() returns whole updates
         stages = [("fulltree", fulltree_updates, args.epochs)]
@@ -680,8 +755,10 @@ def main() -> None:
         # SI: every stage has the same updates per pass (one group per problem with a final), so one counting pass as
         # in the single-stage full-tree loop (the generators then stand where GFPQ's do: SIY in rng lockstep with it)
         n = len(make()) if not args.si_stages or si_k == 0 else plan[0][2]
-        plan.append((name, make, n, max(1, math.ceil(epochs * n / per_step))))
+        # (a curriculum node stage without any problem, e.g. --curriculum-mode exact on a few items: no update)
+        plan.append((name, make, n, 0 if args.curriculum_steps and not n else max(1, math.ceil(epochs * n / per_step))))
         print(f"stage {name}: {n} examples per pass, {plan[-1][3]} steps", flush=True)
+    cur_log.clear()                          # the counting passes are not training
     if args.si_stages:
         si_log.clear()                       # the counting pass is not training
         if not any(worked_steps(it) for it in train_items if tree_sources is None or it.get("source") in tree_sources):
@@ -703,11 +780,11 @@ def main() -> None:
     for e in (float(x) for x in args.eval_at.split(",") if x):
         assert epochs_total, "--eval-at needs a single-stage run (no --depth-stages/--fact-stages)"
         eval_steps[max(1, round(e / epochs_total * total_steps))] = e
-    if args.si_stages:                       # the end of every stage but the last (the final evaluation follows it)
+    if args.si_stages or args.curriculum_steps:   # the end of every stage but the last (the final evaluation follows)
         done = 0
         for k, (_, _, _, stage_steps) in enumerate(plan[:-1]):
             done += stage_steps
-            eval_steps[done] = round((k + 1) * args.epochs / (args.si_stages + 1), 6)
+            eval_steps[done] = round((k + 1) * args.epochs / (len(plan)), 6)
     mid_names = [x for x in args.eval_mid.split(",") if x in evals] or list(evals)   # absent names (smoke) skipped
     mid_sets = {}
     for name in mid_names:
@@ -886,7 +963,7 @@ def main() -> None:
     model.train()
     reset_stages = args.reset_optim or bool(args.si_stages) and not args.si_keep_optim
     gsched = None                            # --si-stages with --si-schedule global: one schedule over every stage
-    if args.si_stages and args.si_schedule == "global":
+    if args.si_stages and args.si_schedule == "global" or args.curriculum_steps:
         gwarm = max(1, int(args.warmup * total_steps))
         gsched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s, w=gwarm, t=total_steps: min(1.0, (s + 1) / w) * 0.5 * (
             1 + math.cos(math.pi * min(1.0, s / t))))
@@ -917,7 +994,7 @@ def main() -> None:
             step, upd_iter = resume["step"], resume["upd_iter"]
             print(f"resumed from {ck_dir} at step {step}", flush=True)
         gwin: list[float] = []           # pre-clip gradient norms since the last log row (Tree Forcing arms)
-        while (name == "fulltree" or name.startswith("si")) and step < end:
+        while (name == "fulltree" or name.startswith("si") or name.startswith("cur")) and step < end:
             # One problem group per update; the loss is scaled by 1 / (3 x items_per_update), the per-sequence
             # normalisation of the 1 final + 2 auxiliary grouped arms, so the learning-rate scale is comparable.
             if not upd_iter:
@@ -1115,6 +1192,8 @@ def main() -> None:
         results["tree_view_stats"] = tree_stats
     if args.si_stages:
         results["si"] = si_log
+    if args.curriculum_steps:
+        results["curriculum"] = cur_log
     if fs is not None:
         results["fsdp"] = {"world": fs.world, "optim": args.fsdp_optim}
     for name, items in evals.items():    # (--fsdp: every rank evaluates its share of the batches; rank 0 writes)

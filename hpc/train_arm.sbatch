@@ -110,6 +110,14 @@
 # wrong values: same lines and counts, wrong content). Knobs: XARGS="--si-smooth P --si-schedule stage --si-keep-optim
 # --si-remove back --si-chain wrong-results" (with TAG). No STOPH / CKPTMIN (multi-stage runs do not resume); relays
 # must put SISTAGES in their reset list.
+# Step curriculum (GFPQC; any data whose tree nodes have a solution step, e.g. data/student_gsm8k_tf, field step = the
+# Socratic step index; XARGS="--tree-sources gsm8k_tf" as for GFPQ): CSTEPS (default 4) node stages, then the final
+# questions, EPOCHS / (CSTEPS + 1) passes per stage (EPOCHS is the total): node stage j trains only GFPQ's node views of
+# the steps <= j (every step beyond CSTEPS counted as CSTEPS), no final question; the last stage trains the final
+# questions only. AdamW state kept across stages, one warmup + cosine schedule over all of them; mid-training
+# evaluation (EVALMID sets) at the end of every stage but the last, so EVALAT stays empty. Knobs: XARGS="--curriculum-mode
+# exact" (stage j = the steps == j), "--curriculum-final-nodes" (the last stage = GFPQ's groups), "--reset-optim" (with
+# TAG). No STOPH / CKPTMIN; relays must put CSTEPS in their reset list.
 # NODEW=w gives every node view weight w (--tree-node-weight; default: the per-problem split, aux 1.0 / views, about
 # .023 per K&K node); set it to the same value for all arms of a comparison. LOCAL_EVAL=path scores the
 # local-step probe (--eval-local: every K&K node in its local view, eval key local_kk); when unset it is
@@ -242,6 +250,7 @@ arm_config() {           # sets F S T RLM DS DX EPD for arm $1 (EPD: the arm's d
     SIB) F=teacher; S=cot; T=cot; EPD=$(( ${SISTAGES:-4} + 1 )); DX="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --si-stages ${SISTAGES:-4} --si-final-only --si-remove back" ;;  # SI, steps removed from the answer end first
     SIYB) F=teacher; S=cot; T=cot; EPD=$(( ${SISTAGES:-4} + 1 )); DX="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --si-stages ${SISTAGES:-4} --si-remove back" ;;  # SIB + GFPQ's yes/no node views
     SISB) F=teacher; S=cot; T=cot; EPD=$(( ${SISTAGES:-4} + 1 )); DX="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --si-stages ${SISTAGES:-4} --si-final-only --si-chain wrong --si-remove back" ;;  # SIB with wrong values (control)
+    GFPQC) F=teacher; S=cot; T=cot; DX="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --curriculum-steps ${CSTEPS:-4}" ;;  # step curriculum: GFPQ's node views by solution step (<= 1, <= 2, ...), then the final questions
     *) echo "unknown ARM $1"; return 1 ;;
   esac
 }
