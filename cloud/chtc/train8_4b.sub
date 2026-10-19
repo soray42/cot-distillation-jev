@@ -1,0 +1,34 @@
+# One batch-8 training job, Qwen3.5-4B (jobs8_4b.dag / smoke8_4b.dag): train7_4b.sub with the batch-8 code + data
+# (cotd_code_data_8_4b.tgz, a new file: nothing of batches 1-7 is replaced), its own DAGMan log and the executable
+# run_train8.sh (= run_train5.sh, GPU preflight, exit 86 -> retried away from the machine, except that the results tgz
+# takes the run dir train_arm.sbatch logs: the latent-slot variants' dirs carry -sc2 / -spafter / -sl0.3 ...); the same
+# gpu2008 exclusion, image cotd_4b.sif and 40 GB disk. GPUs / CPUs / memory per job from the DAG (1 GPU: the friend's
+# fsdp1 patch).
+include : chtc_settings.inc
+universe = vanilla
+container_image = file://$(STAGING)/cotd_4b.sif
+executable = run_train8.sh
+arguments = $(envfile) $(name)
+environment = "STAGING=$(STAGING) CODE_TGZ=cotd_code_data_8_4b.tgz SMOKE_ONLY=$(smoke) NGPU_REQ=$(ngpu)"
+should_transfer_files = YES
+when_to_transfer_output = ON_EXIT
+transfer_input_files = cotd_code_data_8_4b.tgz
+transfer_output_files = results_$(name).tgz
+transfer_output_remaps = "results_$(name).tgz = results/results_$(name).tgz"
+job_machine_attrs = Machine
+job_machine_attrs_history_length = 4
+requirements = (HasCHTCStaging == true) && (TARGET.Machine =!= "gpu2008") && (regexp("^gpu2008[.]", TARGET.Machine) =!= true) && (TARGET.Machine =!= MY.MachineAttrMachine1) && (TARGET.Machine =!= MY.MachineAttrMachine2) && (TARGET.Machine =!= MY.MachineAttrMachine3)
+max_retries = 3
+retry_until = (ExitCode =!= 86)
+request_gpus = $(ngpu)
+require_gpus = (GlobalMemoryMb >= $(gpumem)) && (DriverVersion >= 12.8)
++WantGPULab = true
++GPUJobLength = "medium"
+request_cpus = $(cpus)
+request_memory = $(mem)
+request_disk = 40GB
+priority = $(prio)
+log = logs/train8_4b.log
+output = logs/$(name).condor.out
+error = logs/$(name).condor.err
+queue

@@ -1,0 +1,13 @@
+condor/jobs8_4b/219_4b_gsmsi_LS-c1lr3_s12_fsdp.env, 190, 1
+condor/jobs8_4b/220_4b_gsmsi_LS-c2lr3_s12_fsdp.env, 189, 1
+condor/jobs8_4b/221_4b_gsmsi_LSU-c1lr3_s12_fsdp.env, 188, 1
+condor/jobs8_4b/222_4b_gsmsi_LSU-c2lr3_s12_fsdp.env, 187, 1
+condor/jobs8_4b/223_4b_gsmsi_LSR-c1lr3_s12_fsdp.env, 186, 1
+condor/jobs8_4b/224_4b_gsmsi_LSR-c2lr3_s12_fsdp.env, 185, 1
+condor/jobs8_4b/225_4b_gsmsi_LSY-c1lr3_s12_fsdp.env, 184, 1
+condor/jobs8_4b/226_4b_gsmsi_LSY-c2lr3_s12_fsdp.env, 183, 1
+condor/jobs8_4b/227_4b_gsmsi_LS-sc2-c2lr3_s12_fsdp.env, 182, 1
+condor/jobs8_4b/228_4b_gsmsi_LS-sc4-c2lr3_s12_fsdp.env, 181, 1
+condor/jobs8_4b/229_4b_gsmsi_LS-spafter-c2lr3_s12_fsdp.env, 180, 1
+condor/jobs8_4b/230_4b_gsmsi_LS-sl0.3-c1lr3_s12_fsdp.env, 179, 1
+condor/jobs8_4b/231_4b_gsmsi_LS-sl3-c1lr3_s12_fsdp.env, 178, 1

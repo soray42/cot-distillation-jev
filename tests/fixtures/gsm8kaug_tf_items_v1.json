@@ -1,0 +1,3253 @@
+{
+ "about": "built rows of data/student_gsm8kaug_tf (md5 ba26676fe55beeed599f2be1b9527d69) and their raw rows of whynlp/gsm8k-aug rev 62440e946e / gsm8k-aug-nl rev 88f8ada364; audit.txt rows first, then equation_only gsm8kaug-train-112, no_tree gsm8kaug-train-122, no_chain gsm8kaug-train-368",
+ "items": [
+  {
+   "item_id": "gsm8kaug-train-0",
+   "source": "gsm8k_tf",
+   "group": "gsm8kaug_tf/s4",
+   "type": "choice",
+   "prompt": "Question: Out of 600 employees in a company, 30% got promoted while 10% received bonus. How many employees did not get either a promotion or a bonus?\nOptions:\nA) 510\nB) 300\nC) 630\nD) 610\nE) 360",
+   "labels": [
+    "A",
+    "B",
+    "C",
+    "D",
+    "E"
+   ],
+   "gold_label": "E",
+   "teacher": {
+    "A": 0.0,
+    "B": 0.0,
+    "C": 0.0,
+    "D": 0.0,
+    "E": 1.0
+   },
+   "options": [
+    "510",
+    "300",
+    "630",
+    "610",
+    "360"
+   ],
+   "option_kinds": [
+    "perturb_p1",
+    "partial_ab",
+    "perturb_p1",
+    "partial_ab",
+    "gold"
+   ],
+   "recipe": "qo2",
+   "depth": 4,
+   "dep_level": 2,
+   "subqs": [
+    {
+     "id": "s1v",
+     "question": "Is this step correct? 600 x 30/100 = 180 employees were promoted.",
+     "opposite": "Is this step wrong? 600 x 30/100 = 180 employees were promoted.",
+     "truth": true,
+     "p_cot": 1.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [],
+     "initial": null,
+     "status": "direct",
+     "probe": 180.0,
+     "step": 1,
+     "expr": "600*30/100",
+     "value": 180.0,
+     "flags": [],
+     "gold_ancestor": true,
+     "node_depth": 0
+    },
+    {
+     "id": "s1n",
+     "question": "Is this step correct? 600 x 30/100 = 186 employees were promoted.",
+     "opposite": "Is this step wrong? 600 x 30/100 = 186 employees were promoted.",
+     "truth": false,
+     "p_cot": 0.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [],
+     "initial": null,
+     "status": "direct",
+     "probe": 186.0,
+     "step": 1,
+     "expr": "600*30/100",
+     "value": 180.0,
+     "flags": [],
+     "gold_ancestor": true,
+     "node_depth": 0,
+     "wrong": "slip"
+    },
+    {
+     "id": "s2v",
+     "question": "Is this step correct? 600 x 10/100 = 60 employees received a bonus.",
+     "opposite": "Is this step wrong? 600 x 10/100 = 60 employees received a bonus.",
+     "truth": true,
+     "p_cot": 1.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [],
+     "initial": null,
+     "status": "direct",
+     "probe": 60.0,
+     "step": 2,
+     "expr": "600*10/100",
+     "value": 60.0,
+     "flags": [],
+     "gold_ancestor": false,
+     "node_depth": 0
+    },
+    {
+     "id": "s2n",
+     "question": "Is this step correct? 600 x 10/100 = 54 employees received a bonus.",
+     "opposite": "Is this step wrong? 600 x 10/100 = 54 employees received a bonus.",
+     "truth": false,
+     "p_cot": 0.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [],
+     "initial": null,
+     "status": "direct",
+     "probe": 54.0,
+     "step": 2,
+     "expr": "600*10/100",
+     "value": 60.0,
+     "flags": [],
+     "gold_ancestor": false,
+     "node_depth": 0,
+     "wrong": "slip"
+    },
+    {
+     "id": "s3v",
+     "question": "Is this step correct? So a total of 180+60=240 employees received a promotion or a bonus.",
+     "opposite": "Is this step wrong? So a total of 180+60=240 employees received a promotion or a bonus.",
+     "truth": true,
+     "p_cot": 1.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [
+      "s1v"
+     ],
+     "initial": null,
+     "status": "direct",
+     "probe": 240.0,
+     "step": 3,
+     "expr": "180+60",
+     "value": 240.0,
+     "flags": [
+      "parents_uncertain"
+     ],
+     "gold_ancestor": true,
+     "node_depth": 1
+    },
+    {
+     "id": "s3n",
+     "question": "Is this step correct? So a total of 180+60=230 employees received a promotion or a bonus.",
+     "opposite": "Is this step wrong? So a total of 180+60=230 employees received a promotion or a bonus.",
+     "truth": false,
+     "p_cot": 0.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [
+      "s1v"
+     ],
+     "initial": null,
+     "status": "direct",
+     "probe": 230.0,
+     "step": 3,
+     "expr": "180+60",
+     "value": 240.0,
+     "flags": [
+      "parents_uncertain"
+     ],
+     "gold_ancestor": true,
+     "node_depth": 1,
+     "wrong": "perturb"
+    }
+   ],
+   "random_subqs": [],
+   "rationale": "",
+   "augment": null,
+   "has_tree": true,
+   "tree_fix": true,
+   "row_kind": "final",
+   "problem_id": "gsm8kaug-train-0",
+   "node_status": "ok",
+   "licence_class": "UNK",
+   "licence": "unspecified: whynlp/gsm8k-aug and gsm8k-aug-nl state no licence (GPT-4 augmentation of GSM8K train, GSM8K MIT; Deng et al. 2023)",
+   "label_basis": "gold",
+   "node_basis": "program",
+   "pool_rank": 229743,
+   "n_steps": 4,
+   "tree_source": "gsm8kaug_tf",
+   "value_nodes": [
+    {
+     "id": "s1o1",
+     "type": "op",
+     "step": 1,
+     "op_index": 1,
+     "n_ops": 1,
+     "last_of_step": true,
+     "expr": "600*30/100",
+     "subq": "___ employees were promoted.",
+     "kind": "pct",
+     "a": "30",
+     "op": "% of",
+     "b": "600",
+     "value": "180",
+     "depends_on": [],
+     "node_depth": 0,
+     "gold_ancestor": true,
+     "gold_step": false,
+     "flags": [],
+     "renderings": {
+      "op": {
+       "question": "What is 30% of 600?",
+       "options": [
+        "60",
+        "180",
+        "20"
+       ],
+       "answer": 1,
+       "wrong": [
+        "other",
+        null,
+        "operator"
+       ]
+      },
+      "qop": {
+       "question": "___ employees were promoted. It is 30% of 600. What is the value?",
+       "options": [
+        "60",
+        "180",
+        "20"
+       ],
+       "answer": 1,
+       "wrong": [
+        "other",
+        null,
+        "operator"
+       ]
+      },
+      "opsel": {
+       "question": "___ employees were promoted. Which computation gives it?",
+       "options": [
+        "30% of 30",
+        "30% of 10",
+        "30% of 600"
+       ],
+       "answer": 2,
+       "wrong": [
+        "operand",
+        "operand",
+        null
+       ],
+       "design": "operand"
+      }
+     },
+     "percent": {
+      "written_in": "problem",
+      "form": "compound"
+     }
+    },
+    {
+     "id": "s2o1",
+     "type": "op",
+     "step": 2,
+     "op_index": 1,
+     "n_ops": 1,
+     "last_of_step": true,
+     "expr": "600*10/100",
+     "subq": "___ employees received a bonus.",
+     "kind": "pct",
+     "a": "10",
+     "op": "% of",
+     "b": "600",
+     "value": "60",
+     "depends_on": [],
+     "node_depth": 0,
+     "gold_ancestor": false,
+     "gold_step": false,
+     "flags": [],
+     "renderings": {
+      "op": {
+       "question": "What is 10% of 600?",
+       "options": [
+        "590",
+        "540",
+        "60"
+       ],
+       "answer": 2,
+       "wrong": [
+        "operator",
+        "complement",
+        null
+       ]
+      },
+      "qop": {
+       "question": "___ employees received a bonus. It is 10% of 600. What is the value?",
+       "options": [
+        "590",
+        "540",
+        "60"
+       ],
+       "answer": 2,
+       "wrong": [
+        "operator",
+        "complement",
+        null
+       ]
+      },
+      "opsel": {
+       "question": "___ employees received a bonus. Which computation gives it?",
+       "options": [
+        "10% of 10",
+        "10% of 600",
+        "10% of 180"
+       ],
+       "answer": 1,
+       "wrong": [
+        "operand",
+        null,
+        "operand"
+       ],
+       "design": "operand"
+      }
+     },
+     "percent": {
+      "written_in": "problem",
+      "form": "compound"
+     }
+    },
+    {
+     "id": "s3o1",
+     "type": "op",
+     "step": 3,
+     "op_index": 1,
+     "n_ops": 1,
+     "last_of_step": true,
+     "expr": "180+60",
+     "subq": "So a total of ___ employees received a promotion or a bonus.",
+     "kind": "bin",
+     "a": "180",
+     "op": "+",
+     "b": "60",
+     "value": "240",
+     "depends_on": [
+      "s1o1"
+     ],
+     "node_depth": 1,
+     "gold_ancestor": true,
+     "gold_step": false,
+     "flags": [
+      "parents_uncertain"
+     ],
+     "renderings": {
+      "op": {
+       "question": "What is 180 + 60?",
+       "options": [
+        "290",
+        "240",
+        "340"
+       ],
+       "answer": 1,
+       "wrong": [
+        "perturb",
+        null,
+        "perturb"
+       ]
+      },
+      "qop": {
+       "question": "So a total of ___ employees received a promotion or a bonus. It is 180 + 60. What is the value?",
+       "options": [
+        "290",
+        "240",
+        "340"
+       ],
+       "answer": 1,
+       "wrong": [
+        "perturb",
+        null,
+        "perturb"
+       ]
+      },
+      "opsel": {
+       "question": "So a total of ___ employees received a promotion or a bonus. Which computation gives it?",
+       "options": [
+        "180 + 180",
+        "180 + 600",
+        "180 + 60"
+       ],
+       "answer": 2,
+       "wrong": [
+        "operand",
+        "operand",
+        null
+       ],
+       "design": "operand"
+      }
+     }
+    }
+   ],
+   "worked_steps": [
+    {
+     "id": "s1o1",
+     "step": 1,
+     "op_index": 1,
+     "kind": "pct",
+     "a": "30",
+     "op": "% of",
+     "b": "600",
+     "value": "180",
+     "text": "30% of 600 = 180",
+     "node": "s1o1",
+     "a_from": null,
+     "b_from": null,
+     "wrong": "20",
+     "wrong_tier": "node",
+     "wrong_text": "30% of 600 = 20",
+     "wrong_result_text": "30% of 600 = 20"
+    },
+    {
+     "id": "s2o1",
+     "step": 2,
+     "op_index": 1,
+     "kind": "pct",
+     "a": "10",
+     "op": "% of",
+     "b": "600",
+     "value": "60",
+     "text": "10% of 600 = 60",
+     "node": "s2o1",
+     "a_from": null,
+     "b_from": null,
+     "wrong": "590",
+     "wrong_tier": "node",
+     "wrong_text": "10% of 600 = 590",
+     "wrong_result_text": "10% of 600 = 590"
+    },
+    {
+     "id": "s3o1",
+     "step": 3,
+     "op_index": 1,
+     "kind": "bin",
+     "a": "180",
+     "op": "+",
+     "b": "60",
+     "value": "240",
+     "text": "180 + 60 = 240",
+     "node": "s3o1",
+     "a_from": 0,
+     "b_from": 1,
+     "wrong": "340",
+     "wrong_tier": "node",
+     "wrong_text": "20 + 590 = 340",
+     "wrong_result_text": "180 + 60 = 340"
+    },
+    {
+     "id": "s4o1",
+     "step": 4,
+     "op_index": 1,
+     "kind": "bin",
+     "a": "600",
+     "op": "−",
+     "b": "240",
+     "value": "360",
+     "text": "600 − 240 = 360",
+     "node": null,
+     "a_from": null,
+     "b_from": 2,
+     "wrong": "840",
+     "wrong_tier": "operator",
+     "wrong_text": "600 − 340 = 840",
+     "wrong_result_text": "600 − 240 = 840"
+    }
+   ]
+  },
+  {
+   "item_id": "gsm8kaug-train-5",
+   "source": "gsm8k_tf",
+   "group": "gsm8kaug_tf/s4",
+   "type": "choice",
+   "prompt": "Question: John's bike had a flat and he used $5 from his savings to repair it. Before the repair, he bought 2 spare tires. Each tire costs three times the price of the repair fee, and a helmet; which costs twice the price of a tire. After that, he had $340 savings left. How much money did John have saved before his bike had a flat?\nOptions:\nA) 405\nB) 1210\nC) 1215\nD) 1205\nE) 343",
+   "labels": [
+    "A",
+    "B",
+    "C",
+    "D",
+    "E"
+   ],
+   "gold_label": "A",
+   "teacher": {
+    "A": 1.0,
+    "B": 0.0,
+    "C": 0.0,
+    "D": 0.0,
+    "E": 0.0
+   },
+   "options": [
+    "405",
+    "1210",
+    "1215",
+    "1205",
+    "343"
+   ],
+   "option_kinds": [
+    "gold",
+    "perturb_p1",
+    "partial_gn",
+    "perturb_p1",
+    "partial_ab"
+   ],
+   "recipe": "qo2",
+   "depth": 4,
+   "dep_level": 2,
+   "subqs": [
+    {
+     "id": "s1v",
+     "question": "Is this step correct? Each tire costs $5 x 3 = $15.",
+     "opposite": "Is this step wrong? Each tire costs $5 x 3 = $15.",
+     "truth": true,
+     "p_cot": 1.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [],
+     "initial": null,
+     "status": "direct",
+     "probe": 15.0,
+     "step": 1,
+     "expr": "5*3",
+     "value": 15.0,
+     "flags": [],
+     "gold_ancestor": true,
+     "node_depth": 0
+    },
+    {
+     "id": "s1n",
+     "question": "Is this step correct? Each tire costs $5 x 3 = $5.",
+     "opposite": "Is this step wrong? Each tire costs $5 x 3 = $5.",
+     "truth": false,
+     "p_cot": 0.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [],
+     "initial": null,
+     "status": "direct",
+     "probe": 5.0,
+     "step": 1,
+     "expr": "5*3",
+     "value": 15.0,
+     "flags": [],
+     "gold_ancestor": true,
+     "node_depth": 0,
+     "wrong": "perturb"
+    },
+    {
+     "id": "s2v",
+     "question": "Is it true that 15 × 2 = 30?",
+     "opposite": "Is it false that 15 × 2 = 30?",
+     "truth": true,
+     "p_cot": 1.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [
+      "s1v"
+     ],
+     "initial": null,
+     "status": "direct",
+     "probe": 30.0,
+     "step": 2,
+     "expr": "15*2",
+     "value": 30.0,
+     "flags": [],
+     "gold_ancestor": false,
+     "node_depth": 1
+    },
+    {
+     "id": "s2n",
+     "question": "Is it true that 15 × 2 = 15?",
+     "opposite": "Is it false that 15 × 2 = 15?",
+     "truth": false,
+     "p_cot": 0.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [
+      "s1v"
+     ],
+     "initial": null,
+     "status": "direct",
+     "probe": 15.0,
+     "step": 2,
+     "expr": "15*2",
+     "value": 30.0,
+     "flags": [],
+     "gold_ancestor": false,
+     "node_depth": 1,
+     "wrong": "slip"
+    },
+    {
+     "id": "s3v",
+     "question": "Is this step correct? So, he spent $5 + $15 * 2 + $30 = $65 for the repair.",
+     "opposite": "Is this step wrong? So, he spent $5 + $15 * 2 + $30 = $65 for the repair.",
+     "truth": true,
+     "p_cot": 1.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [
+      "s1v"
+     ],
+     "initial": null,
+     "status": "direct",
+     "probe": 65.0,
+     "step": 3,
+     "expr": "5+15*2+30",
+     "value": 65.0,
+     "flags": [
+      "parents_uncertain"
+     ],
+     "gold_ancestor": true,
+     "node_depth": 1
+    },
+    {
+     "id": "s3n",
+     "question": "Is this step correct? So, he spent $5 + $15 * 2 + $30 = $75 for the repair.",
+     "opposite": "Is this step wrong? So, he spent $5 + $15 * 2 + $30 = $75 for the repair.",
+     "truth": false,
+     "p_cot": 0.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [
+      "s1v"
+     ],
+     "initial": null,
+     "status": "direct",
+     "probe": 75.0,
+     "step": 3,
+     "expr": "5+15*2+30",
+     "value": 65.0,
+     "flags": [
+      "parents_uncertain"
+     ],
+     "gold_ancestor": true,
+     "node_depth": 1,
+     "wrong": "perturb"
+    }
+   ],
+   "random_subqs": [],
+   "rationale": "",
+   "augment": null,
+   "has_tree": true,
+   "tree_fix": true,
+   "row_kind": "final",
+   "problem_id": "gsm8kaug-train-5",
+   "node_status": "ok",
+   "licence_class": "UNK",
+   "licence": "unspecified: whynlp/gsm8k-aug and gsm8k-aug-nl state no licence (GPT-4 augmentation of GSM8K train, GSM8K MIT; Deng et al. 2023)",
+   "label_basis": "gold",
+   "node_basis": "program",
+   "pool_rank": 317118,
+   "n_steps": 4,
+   "tree_source": "gsm8kaug_tf",
+   "value_nodes": [
+    {
+     "id": "s1o1",
+     "type": "op",
+     "step": 1,
+     "op_index": 1,
+     "n_ops": 1,
+     "last_of_step": true,
+     "expr": "5*3",
+     "subq": "Each tire costs ___.",
+     "kind": "bin",
+     "a": "5",
+     "op": "×",
+     "b": "3",
+     "value": "15",
+     "depends_on": [],
+     "node_depth": 0,
+     "gold_ancestor": true,
+     "gold_step": false,
+     "flags": [],
+     "renderings": {
+      "op": {
+       "question": "What is 5 × 3?",
+       "options": [
+        "8",
+        "35",
+        "15"
+       ],
+       "answer": 2,
+       "wrong": [
+        "operator",
+        "other",
+        null
+       ]
+      },
+      "qop": {
+       "question": "Each tire costs ___. It is 5 × 3. What is the value?",
+       "options": [
+        "8",
+        "35",
+        "15"
+       ],
+       "answer": 2,
+       "wrong": [
+        "operator",
+        "other",
+        null
+       ]
+      },
+      "opsel": {
+       "question": "Each tire costs ___. Which computation gives it?",
+       "options": [
+        "5 × 3",
+        "340 × 3",
+        "2 × 3"
+       ],
+       "answer": 0,
+       "wrong": [
+        null,
+        "operand",
+        "operand"
+       ],
+       "design": "operand"
+      }
+     }
+    },
+    {
+     "id": "s2o1",
+     "type": "op",
+     "step": 2,
+     "op_index": 1,
+     "n_ops": 1,
+     "last_of_step": true,
+     "expr": "15*2",
+     "subq": "The helmet costs ___.",
+     "kind": "bin",
+     "a": "15",
+     "op": "×",
+     "b": "2",
+     "value": "30",
+     "depends_on": [
+      "s1o1"
+     ],
+     "node_depth": 1,
+     "gold_ancestor": false,
+     "gold_step": false,
+     "flags": [],
+     "renderings": {
+      "op": {
+       "question": "What is 15 × 2?",
+       "options": [
+        "65",
+        "35",
+        "30"
+       ],
+       "answer": 2,
+       "wrong": [
+        "other",
+        "other",
+        null
+       ]
+      },
+      "qop": {
+       "question": "The helmet costs ___. It is 15 × 2. What is the value?",
+       "options": [
+        "65",
+        "35",
+        "30"
+       ],
+       "answer": 2,
+       "wrong": [
+        "other",
+        "other",
+        null
+       ]
+      },
+      "opsel": {
+       "question": "The helmet costs ___. Which computation gives it?",
+       "options": [
+        "15 × 2",
+        "15 ÷ 2",
+        "15 − 2"
+       ],
+       "answer": 0,
+       "wrong": [
+        null,
+        "operator",
+        "operator"
+       ],
+       "design": "operator"
+      }
+     }
+    },
+    {
+     "id": "s3o1",
+     "type": "op",
+     "step": 3,
+     "op_index": 1,
+     "n_ops": 3,
+     "last_of_step": false,
+     "expr": "5+15*2+30",
+     "subq": "So, he spent ___ for the repair.",
+     "kind": "bin",
+     "a": "15",
+     "op": "×",
+     "b": "2",
+     "value": "30",
+     "depends_on": [
+      "s1o1"
+     ],
+     "node_depth": 1,
+     "gold_ancestor": true,
+     "gold_step": false,
+     "flags": [
+      "parents_uncertain"
+     ],
+     "renderings": {
+      "op": {
+       "question": "What is 15 × 2?",
+       "options": [
+        "13",
+        "30",
+        "65"
+       ],
+       "answer": 1,
+       "wrong": [
+        "operator",
+        null,
+        "other"
+       ]
+      },
+      "qop": {
+       "question": "So, he spent ___ for the repair. It is 5 + 15 × 2 + 30. What is 15 × 2?",
+       "options": [
+        "13",
+        "30",
+        "65"
+       ],
+       "answer": 1,
+       "wrong": [
+        "operator",
+        null,
+        "other"
+       ]
+      }
+     }
+    },
+    {
+     "id": "s3o2",
+     "type": "op",
+     "step": 3,
+     "op_index": 2,
+     "n_ops": 3,
+     "last_of_step": false,
+     "expr": "5+15*2+30",
+     "subq": "So, he spent ___ for the repair.",
+     "kind": "bin",
+     "a": "5",
+     "op": "+",
+     "b": "30",
+     "value": "35",
+     "depends_on": [
+      "s3o1"
+     ],
+     "node_depth": 2,
+     "gold_ancestor": true,
+     "gold_step": false,
+     "flags": [
+      "parents_uncertain"
+     ],
+     "renderings": {
+      "op": {
+       "question": "What is 5 + 30?",
+       "options": [
+        "35",
+        "65",
+        "150"
+       ],
+       "answer": 0,
+       "wrong": [
+        null,
+        "other",
+        "operator"
+       ]
+      },
+      "qop": {
+       "question": "So, he spent ___ for the repair. It is 5 + 30 + 30. What is 5 + 30?",
+       "options": [
+        "35",
+        "65",
+        "150"
+       ],
+       "answer": 0,
+       "wrong": [
+        null,
+        "other",
+        "operator"
+       ]
+      }
+     }
+    },
+    {
+     "id": "s3o3",
+     "type": "op",
+     "step": 3,
+     "op_index": 3,
+     "n_ops": 3,
+     "last_of_step": true,
+     "expr": "5+15*2+30",
+     "subq": "So, he spent ___ for the repair.",
+     "kind": "bin",
+     "a": "35",
+     "op": "+",
+     "b": "30",
+     "value": "65",
+     "depends_on": [
+      "s3o2"
+     ],
+     "node_depth": 3,
+     "gold_ancestor": true,
+     "gold_step": false,
+     "flags": [
+      "parents_uncertain"
+     ],
+     "renderings": {
+      "op": {
+       "question": "What is 35 + 30?",
+       "options": [
+        "65",
+        "30",
+        "35"
+       ],
+       "answer": 0,
+       "wrong": [
+        null,
+        "other",
+        "other"
+       ]
+      },
+      "qop": {
+       "question": "So, he spent ___ for the repair. It is 35 + 30. What is the value?",
+       "options": [
+        "65",
+        "30",
+        "35"
+       ],
+       "answer": 0,
+       "wrong": [
+        null,
+        "other",
+        "other"
+       ]
+      },
+      "opsel": {
+       "question": "So, he spent ___ for the repair. Which computation gives it?",
+       "options": [
+        "35 × 30",
+        "35 − 30",
+        "35 + 30"
+       ],
+       "answer": 2,
+       "wrong": [
+        "operator",
+        "operator",
+        null
+       ],
+       "design": "operator"
+      }
+     }
+    }
+   ],
+   "worked_steps": [
+    {
+     "id": "s1o1",
+     "step": 1,
+     "op_index": 1,
+     "kind": "bin",
+     "a": "5",
+     "op": "×",
+     "b": "3",
+     "value": "15",
+     "text": "5 × 3 = 15",
+     "node": "s1o1",
+     "a_from": null,
+     "b_from": null,
+     "wrong": "35",
+     "wrong_tier": "node",
+     "wrong_text": "5 × 3 = 35",
+     "wrong_result_text": "5 × 3 = 35"
+    },
+    {
+     "id": "s2o1",
+     "step": 2,
+     "op_index": 1,
+     "kind": "bin",
+     "a": "15",
+     "op": "×",
+     "b": "2",
+     "value": "30",
+     "text": "15 × 2 = 30",
+     "node": "s2o1",
+     "a_from": 0,
+     "b_from": null,
+     "wrong": "65",
+     "wrong_tier": "node",
+     "wrong_text": "35 × 2 = 65",
+     "wrong_result_text": "15 × 2 = 65"
+    },
+    {
+     "id": "s3o1",
+     "step": 3,
+     "op_index": 1,
+     "kind": "bin",
+     "a": "15",
+     "op": "×",
+     "b": "2",
+     "value": "30",
+     "text": "15 × 2 = 30",
+     "node": "s3o1",
+     "a_from": 0,
+     "b_from": null,
+     "wrong": "13",
+     "wrong_tier": "node",
+     "wrong_text": "35 × 2 = 13",
+     "wrong_result_text": "15 × 2 = 13"
+    },
+    {
+     "id": "s3o2",
+     "step": 3,
+     "op_index": 2,
+     "kind": "bin",
+     "a": "5",
+     "op": "+",
+     "b": "30",
+     "value": "35",
+     "text": "5 + 30 = 35",
+     "node": "s3o2",
+     "a_from": null,
+     "b_from": 2,
+     "wrong": "65",
+     "wrong_tier": "node",
+     "wrong_text": "5 + 13 = 65",
+     "wrong_result_text": "5 + 30 = 65"
+    },
+    {
+     "id": "s3o3",
+     "step": 3,
+     "op_index": 3,
+     "kind": "bin",
+     "a": "35",
+     "op": "+",
+     "b": "30",
+     "value": "65",
+     "text": "35 + 30 = 65",
+     "node": "s3o3",
+     "a_from": 3,
+     "b_from": 2,
+     "wrong": "30",
+     "wrong_tier": "node",
+     "wrong_text": "65 + 13 = 30",
+     "wrong_result_text": "35 + 30 = 30"
+    },
+    {
+     "id": "s4o1",
+     "step": 4,
+     "op_index": 1,
+     "kind": "bin",
+     "a": "340",
+     "op": "+",
+     "b": "65",
+     "value": "405",
+     "text": "340 + 65 = 405",
+     "node": null,
+     "a_from": null,
+     "b_from": 4,
+     "wrong": "275",
+     "wrong_tier": "operator",
+     "wrong_text": "340 + 30 = 275",
+     "wrong_result_text": "340 + 65 = 275"
+    }
+   ]
+  },
+  {
+   "item_id": "gsm8kaug-train-57",
+   "source": "gsm8k_tf",
+   "group": "gsm8kaug_tf/s3",
+   "type": "choice",
+   "prompt": "Question: Annie is making a blanket. The blanket is made of 20 rows and each row has 20 squares. Annie has already finished 20% of the blanket. How many squares does she have left to do?\nOptions:\nA) 30\nB) 80\nC) 16\nD) 320\nE) 300",
+   "labels": [
+    "A",
+    "B",
+    "C",
+    "D",
+    "E"
+   ],
+   "gold_label": "D",
+   "teacher": {
+    "A": 0.0,
+    "B": 0.0,
+    "C": 0.0,
+    "D": 1.0,
+    "E": 0.0
+   },
+   "options": [
+    "30",
+    "80",
+    "16",
+    "320",
+    "300"
+   ],
+   "option_kinds": [
+    "perturb_p1",
+    "primary",
+    "primary",
+    "gold",
+    "perturb_gold"
+   ],
+   "recipe": "inter",
+   "depth": 3,
+   "dep_level": 2,
+   "subqs": [
+    {
+     "id": "s1v",
+     "question": "Is it true that 20 × 20 = 400?",
+     "opposite": "Is it false that 20 × 20 = 400?",
+     "truth": true,
+     "p_cot": 1.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [],
+     "initial": null,
+     "status": "direct",
+     "probe": 400.0,
+     "step": 1,
+     "expr": "20*20",
+     "value": 400.0,
+     "flags": [],
+     "gold_ancestor": true,
+     "node_depth": 0
+    },
+    {
+     "id": "s1n",
+     "question": "Is it true that 20 × 20 = 500?",
+     "opposite": "Is it false that 20 × 20 = 500?",
+     "truth": false,
+     "p_cot": 0.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [],
+     "initial": null,
+     "status": "direct",
+     "probe": 500.0,
+     "step": 1,
+     "expr": "20*20",
+     "value": 400.0,
+     "flags": [],
+     "gold_ancestor": true,
+     "node_depth": 0,
+     "wrong": "perturb"
+    },
+    {
+     "id": "s2v",
+     "question": "Is it true that 400 × 20 ÷ 100 = 80?",
+     "opposite": "Is it false that 400 × 20 ÷ 100 = 80?",
+     "truth": true,
+     "p_cot": 1.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [
+      "s1v"
+     ],
+     "initial": null,
+     "status": "direct",
+     "probe": 80.0,
+     "step": 2,
+     "expr": "400*20/100",
+     "value": 80.0,
+     "flags": [],
+     "gold_ancestor": true,
+     "node_depth": 1
+    },
+    {
+     "id": "s2n",
+     "question": "Is it true that 400 × 20 ÷ 100 = 76?",
+     "opposite": "Is it false that 400 × 20 ÷ 100 = 76?",
+     "truth": false,
+     "p_cot": 0.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [
+      "s1v"
+     ],
+     "initial": null,
+     "status": "direct",
+     "probe": 76.0,
+     "step": 2,
+     "expr": "400*20/100",
+     "value": 80.0,
+     "flags": [],
+     "gold_ancestor": true,
+     "node_depth": 1,
+     "wrong": "slip"
+    }
+   ],
+   "random_subqs": [],
+   "rationale": "",
+   "augment": null,
+   "has_tree": true,
+   "tree_fix": true,
+   "row_kind": "final",
+   "problem_id": "gsm8kaug-train-57",
+   "node_status": "ok",
+   "licence_class": "UNK",
+   "licence": "unspecified: whynlp/gsm8k-aug and gsm8k-aug-nl state no licence (GPT-4 augmentation of GSM8K train, GSM8K MIT; Deng et al. 2023)",
+   "label_basis": "gold",
+   "node_basis": "program",
+   "pool_rank": 210835,
+   "n_steps": 3,
+   "tree_source": "gsm8kaug_tf",
+   "value_nodes": [
+    {
+     "id": "s1o1",
+     "type": "op",
+     "step": 1,
+     "op_index": 1,
+     "n_ops": 1,
+     "last_of_step": true,
+     "expr": "20*20",
+     "subq": "",
+     "kind": "bin",
+     "a": "20",
+     "op": "×",
+     "b": "20",
+     "value": "400",
+     "depends_on": [],
+     "node_depth": 0,
+     "gold_ancestor": true,
+     "gold_step": false,
+     "flags": [],
+     "renderings": {
+      "op": {
+       "question": "What is 20 × 20?",
+       "options": [
+        "500",
+        "400",
+        "900"
+       ],
+       "answer": 1,
+       "wrong": [
+        "perturb",
+        null,
+        "perturb"
+       ]
+      }
+     }
+    },
+    {
+     "id": "s2o1",
+     "type": "op",
+     "step": 2,
+     "op_index": 1,
+     "n_ops": 1,
+     "last_of_step": true,
+     "expr": "400*20/100",
+     "subq": "",
+     "kind": "pct",
+     "a": "20",
+     "op": "% of",
+     "b": "400",
+     "value": "80",
+     "depends_on": [
+      "s1o1"
+     ],
+     "node_depth": 1,
+     "gold_ancestor": true,
+     "gold_step": false,
+     "flags": [],
+     "renderings": {
+      "op": {
+       "question": "What is 20% of 400?",
+       "options": [
+        "80",
+        "380",
+        "20"
+       ],
+       "answer": 0,
+       "wrong": [
+        null,
+        "operator",
+        "operator"
+       ]
+      }
+     },
+     "percent": {
+      "written_in": "problem",
+      "form": "compound"
+     }
+    }
+   ],
+   "worked_steps": [
+    {
+     "id": "s1o1",
+     "step": 1,
+     "op_index": 1,
+     "kind": "bin",
+     "a": "20",
+     "op": "×",
+     "b": "20",
+     "value": "400",
+     "text": "20 × 20 = 400",
+     "node": "s1o1",
+     "a_from": null,
+     "b_from": null,
+     "wrong": "900",
+     "wrong_tier": "node",
+     "wrong_text": "20 × 20 = 900",
+     "wrong_result_text": "20 × 20 = 900"
+    },
+    {
+     "id": "s2o1",
+     "step": 2,
+     "op_index": 1,
+     "kind": "pct",
+     "a": "20",
+     "op": "% of",
+     "b": "400",
+     "value": "80",
+     "text": "20% of 400 = 80",
+     "node": "s2o1",
+     "a_from": null,
+     "b_from": 0,
+     "wrong": "20",
+     "wrong_tier": "node",
+     "wrong_text": "20% of 900 = 20",
+     "wrong_result_text": "20% of 400 = 20"
+    },
+    {
+     "id": "s3o1",
+     "step": 3,
+     "op_index": 1,
+     "kind": "bin",
+     "a": "400",
+     "op": "−",
+     "b": "80",
+     "value": "320",
+     "text": "400 − 80 = 320",
+     "node": null,
+     "a_from": 0,
+     "b_from": 1,
+     "wrong": "480",
+     "wrong_tier": "operator",
+     "wrong_text": "900 − 20 = 480",
+     "wrong_result_text": "400 − 80 = 480"
+    }
+   ]
+  },
+  {
+   "item_id": "gsm8kaug-train-181",
+   "source": "gsm8k_tf",
+   "group": "gsm8kaug_tf/s8",
+   "type": "choice",
+   "prompt": "Question: A farmer has 7 cows and 4 horses. Each cow eats 3 bags of hay a week and each horse eats 2 bags. He also has chickens that eat 1 bag of feed a week and there are twice as many chickens as cows. If hay costs $5 a bag and feed costs $3 a bag, how much does the farmer spend on feed in one week?\nOptions:\nA) 5\nB) 187\nC) 222\nD) 224\nE) 185",
+   "labels": [
+    "A",
+    "B",
+    "C",
+    "D",
+    "E"
+   ],
+   "gold_label": "B",
+   "teacher": {
+    "A": 0.0,
+    "B": 1.0,
+    "C": 0.0,
+    "D": 0.0,
+    "E": 0.0
+   },
+   "options": [
+    "5",
+    "187",
+    "222",
+    "224",
+    "185"
+   ],
+   "option_kinds": [
+    "primary",
+    "gold",
+    "primary",
+    "perturb_p1",
+    "perturb_gold"
+   ],
+   "recipe": "slip",
+   "depth": 8,
+   "dep_level": 3,
+   "subqs": [
+    {
+     "id": "s1v",
+     "question": "Is this step correct? The cows eat a total of 7*3= 21 bags of hay weekly.",
+     "opposite": "Is this step wrong? The cows eat a total of 7*3= 21 bags of hay weekly.",
+     "truth": true,
+     "p_cot": 1.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [],
+     "initial": null,
+     "status": "direct",
+     "probe": 21.0,
+     "step": 1,
+     "expr": "7*3",
+     "value": 21.0,
+     "flags": [],
+     "gold_ancestor": true,
+     "node_depth": 0
+    },
+    {
+     "id": "s1n",
+     "question": "Is this step correct? The cows eat a total of 7*3= 18 bags of hay weekly.",
+     "opposite": "Is this step wrong? The cows eat a total of 7*3= 18 bags of hay weekly.",
+     "truth": false,
+     "p_cot": 0.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [],
+     "initial": null,
+     "status": "direct",
+     "probe": 18.0,
+     "step": 1,
+     "expr": "7*3",
+     "value": 21.0,
+     "flags": [],
+     "gold_ancestor": true,
+     "node_depth": 0,
+     "wrong": "slip"
+    },
+    {
+     "id": "s2v",
+     "question": "Is this step correct? The horses eat a total of 4*2= 8 bags of hay weekly.",
+     "opposite": "Is this step wrong? The horses eat a total of 4*2= 8 bags of hay weekly.",
+     "truth": true,
+     "p_cot": 1.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [],
+     "initial": null,
+     "status": "direct",
+     "probe": 8.0,
+     "step": 2,
+     "expr": "4*2",
+     "value": 8.0,
+     "flags": [],
+     "gold_ancestor": true,
+     "node_depth": 0
+    },
+    {
+     "id": "s2n",
+     "question": "Is this step correct? The horses eat a total of 4*2= 2 bags of hay weekly.",
+     "opposite": "Is this step wrong? The horses eat a total of 4*2= 2 bags of hay weekly.",
+     "truth": false,
+     "p_cot": 0.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [],
+     "initial": null,
+     "status": "direct",
+     "probe": 2.0,
+     "step": 2,
+     "expr": "4*2",
+     "value": 8.0,
+     "flags": [],
+     "gold_ancestor": true,
+     "node_depth": 0,
+     "wrong": "slip"
+    },
+    {
+     "id": "s3v",
+     "question": "Is this step correct? There are 7*2= 14 chicken on the farm.",
+     "opposite": "Is this step wrong? There are 7*2= 14 chicken on the farm.",
+     "truth": true,
+     "p_cot": 1.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [],
+     "initial": null,
+     "status": "direct",
+     "probe": 14.0,
+     "step": 3,
+     "expr": "7*2",
+     "value": 14.0,
+     "flags": [],
+     "gold_ancestor": true,
+     "node_depth": 0
+    },
+    {
+     "id": "s3n",
+     "question": "Is this step correct? There are 7*2= 7 chicken on the farm.",
+     "opposite": "Is this step wrong? There are 7*2= 7 chicken on the farm.",
+     "truth": false,
+     "p_cot": 0.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [],
+     "initial": null,
+     "status": "direct",
+     "probe": 7.0,
+     "step": 3,
+     "expr": "7*2",
+     "value": 14.0,
+     "flags": [],
+     "gold_ancestor": true,
+     "node_depth": 0,
+     "wrong": "slip"
+    },
+    {
+     "id": "s4v",
+     "question": "Is it true that 14 × 1 = 14?",
+     "opposite": "Is it false that 14 × 1 = 14?",
+     "truth": true,
+     "p_cot": 1.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [
+      "s3v"
+     ],
+     "initial": null,
+     "status": "direct",
+     "probe": 14.0,
+     "step": 4,
+     "expr": "14*1",
+     "value": 14.0,
+     "flags": [],
+     "gold_ancestor": true,
+     "node_depth": 1
+    },
+    {
+     "id": "s4n",
+     "question": "Is it true that 14 × 1 = 42?",
+     "opposite": "Is it false that 14 × 1 = 42?",
+     "truth": false,
+     "p_cot": 0.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [
+      "s3v"
+     ],
+     "initial": null,
+     "status": "direct",
+     "probe": 42.0,
+     "step": 4,
+     "expr": "14*1",
+     "value": 14.0,
+     "flags": [],
+     "gold_ancestor": true,
+     "node_depth": 1,
+     "wrong": "other"
+    },
+    {
+     "id": "s5v",
+     "question": "Is this step correct? The farmer spends 21*5=$105 on hay for the cows.",
+     "opposite": "Is this step wrong? The farmer spends 21*5=$105 on hay for the cows.",
+     "truth": true,
+     "p_cot": 1.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [
+      "s1v"
+     ],
+     "initial": null,
+     "status": "direct",
+     "probe": 105.0,
+     "step": 5,
+     "expr": "21*5",
+     "value": 105.0,
+     "flags": [],
+     "gold_ancestor": true,
+     "node_depth": 1
+    },
+    {
+     "id": "s5n",
+     "question": "Is this step correct? The farmer spends 21*5=$70 on hay for the cows.",
+     "opposite": "Is this step wrong? The farmer spends 21*5=$70 on hay for the cows.",
+     "truth": false,
+     "p_cot": 0.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [
+      "s1v"
+     ],
+     "initial": null,
+     "status": "direct",
+     "probe": 70.0,
+     "step": 5,
+     "expr": "21*5",
+     "value": 105.0,
+     "flags": [],
+     "gold_ancestor": true,
+     "node_depth": 1,
+     "wrong": "slip"
+    },
+    {
+     "id": "s6v",
+     "question": "Is this step correct? The farmer spends 8*5=$40 on hay for the horses.",
+     "opposite": "Is this step wrong? The farmer spends 8*5=$40 on hay for the horses.",
+     "truth": true,
+     "p_cot": 1.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [
+      "s2v"
+     ],
+     "initial": null,
+     "status": "direct",
+     "probe": 40.0,
+     "step": 6,
+     "expr": "8*5",
+     "value": 40.0,
+     "flags": [],
+     "gold_ancestor": true,
+     "node_depth": 1
+    },
+    {
+     "id": "s6n",
+     "question": "Is this step correct? The farmer spends 8*5=$10 on hay for the horses.",
+     "opposite": "Is this step wrong? The farmer spends 8*5=$10 on hay for the horses.",
+     "truth": false,
+     "p_cot": 0.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [
+      "s2v"
+     ],
+     "initial": null,
+     "status": "direct",
+     "probe": 10.0,
+     "step": 6,
+     "expr": "8*5",
+     "value": 40.0,
+     "flags": [],
+     "gold_ancestor": true,
+     "node_depth": 1,
+     "wrong": "slip"
+    },
+    {
+     "id": "s7v",
+     "question": "Is this step correct? The farmer spends 14*3=$42 on feed for the chickens.",
+     "opposite": "Is this step wrong? The farmer spends 14*3=$42 on feed for the chickens.",
+     "truth": true,
+     "p_cot": 1.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [
+      "s4v"
+     ],
+     "initial": null,
+     "status": "direct",
+     "probe": 42.0,
+     "step": 7,
+     "expr": "14*3",
+     "value": 42.0,
+     "flags": [],
+     "gold_ancestor": true,
+     "node_depth": 2
+    },
+    {
+     "id": "s7n",
+     "question": "Is this step correct? The farmer spends 14*3=$28 on feed for the chickens.",
+     "opposite": "Is this step wrong? The farmer spends 14*3=$28 on feed for the chickens.",
+     "truth": false,
+     "p_cot": 0.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [
+      "s4v"
+     ],
+     "initial": null,
+     "status": "direct",
+     "probe": 28.0,
+     "step": 7,
+     "expr": "14*3",
+     "value": 42.0,
+     "flags": [],
+     "gold_ancestor": true,
+     "node_depth": 2,
+     "wrong": "slip"
+    }
+   ],
+   "random_subqs": [],
+   "rationale": "",
+   "augment": null,
+   "has_tree": true,
+   "tree_fix": true,
+   "row_kind": "final",
+   "problem_id": "gsm8kaug-train-181",
+   "node_status": "ok",
+   "licence_class": "UNK",
+   "licence": "unspecified: whynlp/gsm8k-aug and gsm8k-aug-nl state no licence (GPT-4 augmentation of GSM8K train, GSM8K MIT; Deng et al. 2023)",
+   "label_basis": "gold",
+   "node_basis": "program",
+   "pool_rank": 300291,
+   "n_steps": 8,
+   "tree_source": "gsm8kaug_tf",
+   "value_nodes": [
+    {
+     "id": "s1o1",
+     "type": "op",
+     "step": 1,
+     "op_index": 1,
+     "n_ops": 1,
+     "last_of_step": true,
+     "expr": "7*3",
+     "subq": "The cows eat a total of ___ bags of hay weekly.",
+     "kind": "bin",
+     "a": "7",
+     "op": "×",
+     "b": "3",
+     "value": "21",
+     "depends_on": [],
+     "node_depth": 0,
+     "gold_ancestor": true,
+     "gold_step": false,
+     "flags": [],
+     "renderings": {
+      "op": {
+       "question": "What is 7 × 3?",
+       "options": [
+        "4",
+        "21",
+        "42"
+       ],
+       "answer": 1,
+       "wrong": [
+        "operator",
+        null,
+        "other"
+       ]
+      },
+      "qop": {
+       "question": "The cows eat a total of ___ bags of hay weekly. It is 7 × 3. What is the value?",
+       "options": [
+        "4",
+        "21",
+        "42"
+       ],
+       "answer": 1,
+       "wrong": [
+        "operator",
+        null,
+        "other"
+       ]
+      },
+      "opsel": {
+       "question": "The cows eat a total of ___ bags of hay weekly. Which computation gives it?",
+       "options": [
+        "7 + 3",
+        "7 − 3",
+        "7 × 3"
+       ],
+       "answer": 2,
+       "wrong": [
+        "operator",
+        "operator",
+        null
+       ],
+       "design": "operator"
+      }
+     }
+    },
+    {
+     "id": "s2o1",
+     "type": "op",
+     "step": 2,
+     "op_index": 1,
+     "n_ops": 1,
+     "last_of_step": true,
+     "expr": "4*2",
+     "subq": "The horses eat a total of ___ bags of hay weekly.",
+     "kind": "bin",
+     "a": "4",
+     "op": "×",
+     "b": "2",
+     "value": "8",
+     "depends_on": [],
+     "node_depth": 0,
+     "gold_ancestor": true,
+     "gold_step": false,
+     "flags": [],
+     "renderings": {
+      "op": {
+       "question": "What is 4 × 2?",
+       "options": [
+        "21",
+        "42",
+        "8"
+       ],
+       "answer": 2,
+       "wrong": [
+        "other",
+        "other",
+        null
+       ]
+      },
+      "qop": {
+       "question": "The horses eat a total of ___ bags of hay weekly. It is 4 × 2. What is the value?",
+       "options": [
+        "21",
+        "42",
+        "8"
+       ],
+       "answer": 2,
+       "wrong": [
+        "other",
+        "other",
+        null
+       ]
+      },
+      "opsel": {
+       "question": "The horses eat a total of ___ bags of hay weekly. Which computation gives it?",
+       "options": [
+        "4 × 4",
+        "4 × 2",
+        "4 × 7"
+       ],
+       "answer": 1,
+       "wrong": [
+        "operand",
+        null,
+        "operand"
+       ],
+       "design": "operand"
+      }
+     }
+    },
+    {
+     "id": "s3o1",
+     "type": "op",
+     "step": 3,
+     "op_index": 1,
+     "n_ops": 1,
+     "last_of_step": true,
+     "expr": "7*2",
+     "subq": "There are ___ chicken on the farm.",
+     "kind": "bin",
+     "a": "7",
+     "op": "×",
+     "b": "2",
+     "value": "14",
+     "depends_on": [],
+     "node_depth": 0,
+     "gold_ancestor": true,
+     "gold_step": false,
+     "flags": [],
+     "renderings": {
+      "op": {
+       "question": "What is 7 × 2?",
+       "options": [
+        "40",
+        "21",
+        "14"
+       ],
+       "answer": 2,
+       "wrong": [
+        "other",
+        "other",
+        null
+       ]
+      },
+      "qop": {
+       "question": "There are ___ chicken on the farm. It is 7 × 2. What is the value?",
+       "options": [
+        "40",
+        "21",
+        "14"
+       ],
+       "answer": 2,
+       "wrong": [
+        "other",
+        "other",
+        null
+       ]
+      },
+      "opsel": {
+       "question": "There are ___ chicken on the farm. Which computation gives it?",
+       "options": [
+        "7 × 7",
+        "7 × 2",
+        "7 × 4"
+       ],
+       "answer": 1,
+       "wrong": [
+        "operand",
+        null,
+        "operand"
+       ],
+       "design": "operand"
+      }
+     }
+    },
+    {
+     "id": "s5o1",
+     "type": "op",
+     "step": 5,
+     "op_index": 1,
+     "n_ops": 1,
+     "last_of_step": true,
+     "expr": "21*5",
+     "subq": "The farmer spends ___ on hay for the cows.",
+     "kind": "bin",
+     "a": "21",
+     "op": "×",
+     "b": "5",
+     "value": "105",
+     "depends_on": [
+      "s1o1"
+     ],
+     "node_depth": 1,
+     "gold_ancestor": true,
+     "gold_step": false,
+     "flags": [],
+     "renderings": {
+      "op": {
+       "question": "What is 21 × 5?",
+       "options": [
+        "105",
+        "145",
+        "26"
+       ],
+       "answer": 0,
+       "wrong": [
+        null,
+        "other",
+        "operator"
+       ]
+      },
+      "qop": {
+       "question": "The farmer spends ___ on hay for the cows. It is 21 × 5. What is the value?",
+       "options": [
+        "105",
+        "145",
+        "26"
+       ],
+       "answer": 0,
+       "wrong": [
+        null,
+        "other",
+        "operator"
+       ]
+      },
+      "opsel": {
+       "question": "The farmer spends ___ on hay for the cows. Which computation gives it?",
+       "options": [
+        "21 × 5",
+        "21 − 5",
+        "21 ÷ 5"
+       ],
+       "answer": 0,
+       "wrong": [
+        null,
+        "operator",
+        "operator"
+       ],
+       "design": "operator"
+      }
+     }
+    },
+    {
+     "id": "s6o1",
+     "type": "op",
+     "step": 6,
+     "op_index": 1,
+     "n_ops": 1,
+     "last_of_step": true,
+     "expr": "8*5",
+     "subq": "The farmer spends ___ on hay for the horses.",
+     "kind": "bin",
+     "a": "8",
+     "op": "×",
+     "b": "5",
+     "value": "40",
+     "depends_on": [
+      "s2o1"
+     ],
+     "node_depth": 1,
+     "gold_ancestor": true,
+     "gold_step": false,
+     "flags": [],
+     "renderings": {
+      "op": {
+       "question": "What is 8 × 5?",
+       "options": [
+        "145",
+        "40",
+        "13"
+       ],
+       "answer": 1,
+       "wrong": [
+        "other",
+        null,
+        "operator"
+       ]
+      },
+      "qop": {
+       "question": "The farmer spends ___ on hay for the horses. It is 8 × 5. What is the value?",
+       "options": [
+        "145",
+        "40",
+        "13"
+       ],
+       "answer": 1,
+       "wrong": [
+        "other",
+        null,
+        "operator"
+       ]
+      },
+      "opsel": {
+       "question": "The farmer spends ___ on hay for the horses. Which computation gives it?",
+       "options": [
+        "8 × 2",
+        "8 × 5",
+        "8 × 4"
+       ],
+       "answer": 1,
+       "wrong": [
+        "operand",
+        null,
+        "operand"
+       ],
+       "design": "operand"
+      }
+     }
+    },
+    {
+     "id": "s7o1",
+     "type": "op",
+     "step": 7,
+     "op_index": 1,
+     "n_ops": 1,
+     "last_of_step": true,
+     "expr": "14*3",
+     "subq": "The farmer spends ___ on feed for the chickens.",
+     "kind": "bin",
+     "a": "14",
+     "op": "×",
+     "b": "3",
+     "value": "42",
+     "depends_on": [],
+     "node_depth": 2,
+     "gold_ancestor": true,
+     "gold_step": false,
+     "flags": [],
+     "renderings": {
+      "op": {
+       "question": "What is 14 × 3?",
+       "options": [
+        "17",
+        "11",
+        "42"
+       ],
+       "answer": 2,
+       "wrong": [
+        "operator",
+        "operator",
+        null
+       ]
+      },
+      "qop": {
+       "question": "The farmer spends ___ on feed for the chickens. It is 14 × 3. What is the value?",
+       "options": [
+        "17",
+        "11",
+        "42"
+       ],
+       "answer": 2,
+       "wrong": [
+        "operator",
+        "operator",
+        null
+       ]
+      },
+      "opsel": {
+       "question": "The farmer spends ___ on feed for the chickens. Which computation gives it?",
+       "options": [
+        "14 − 3",
+        "14 ÷ 3",
+        "14 × 3"
+       ],
+       "answer": 2,
+       "wrong": [
+        "operator",
+        "operator",
+        null
+       ],
+       "design": "operator"
+      }
+     }
+    },
+    {
+     "id": "s8o1",
+     "type": "op",
+     "step": 8,
+     "op_index": 1,
+     "n_ops": 2,
+     "last_of_step": false,
+     "expr": "105+40+42",
+     "subq": "In total, the farmer spends ___ on feed for all his animals in a week.",
+     "kind": "bin",
+     "a": "105",
+     "op": "+",
+     "b": "40",
+     "value": "145",
+     "depends_on": [
+      "s5o1",
+      "s6o1"
+     ],
+     "node_depth": 2,
+     "gold_ancestor": true,
+     "gold_step": true,
+     "flags": [],
+     "renderings": {
+      "op": {
+       "question": "What is 105 + 40?",
+       "options": [
+        "145",
+        "146",
+        "155"
+       ],
+       "answer": 0,
+       "wrong": [
+        null,
+        "perturb",
+        "perturb"
+       ]
+      }
+     }
+    }
+   ],
+   "worked_steps": [
+    {
+     "id": "s1o1",
+     "step": 1,
+     "op_index": 1,
+     "kind": "bin",
+     "a": "7",
+     "op": "×",
+     "b": "3",
+     "value": "21",
+     "text": "7 × 3 = 21",
+     "node": "s1o1",
+     "a_from": null,
+     "b_from": null,
+     "wrong": "4",
+     "wrong_tier": "node",
+     "wrong_text": "7 × 3 = 4",
+     "wrong_result_text": "7 × 3 = 4"
+    },
+    {
+     "id": "s2o1",
+     "step": 2,
+     "op_index": 1,
+     "kind": "bin",
+     "a": "4",
+     "op": "×",
+     "b": "2",
+     "value": "8",
+     "text": "4 × 2 = 8",
+     "node": "s2o1",
+     "a_from": null,
+     "b_from": null,
+     "wrong": "42",
+     "wrong_tier": "node",
+     "wrong_text": "4 × 2 = 42",
+     "wrong_result_text": "4 × 2 = 42"
+    },
+    {
+     "id": "s3o1",
+     "step": 3,
+     "op_index": 1,
+     "kind": "bin",
+     "a": "7",
+     "op": "×",
+     "b": "2",
+     "value": "14",
+     "text": "7 × 2 = 14",
+     "node": "s3o1",
+     "a_from": null,
+     "b_from": null,
+     "wrong": "21",
+     "wrong_tier": "node",
+     "wrong_text": "7 × 2 = 21",
+     "wrong_result_text": "7 × 2 = 21"
+    },
+    {
+     "id": "s4o1",
+     "step": 4,
+     "op_index": 1,
+     "kind": "bin",
+     "a": "14",
+     "op": "×",
+     "b": "1",
+     "value": "14",
+     "text": "14 × 1 = 14",
+     "node": null,
+     "a_from": 2,
+     "b_from": null,
+     "wrong": "13",
+     "wrong_tier": "operator",
+     "wrong_text": "21 × 1 = 13",
+     "wrong_result_text": "14 × 1 = 13"
+    },
+    {
+     "id": "s5o1",
+     "step": 5,
+     "op_index": 1,
+     "kind": "bin",
+     "a": "21",
+     "op": "×",
+     "b": "5",
+     "value": "105",
+     "text": "21 × 5 = 105",
+     "node": "s5o1",
+     "a_from": 0,
+     "b_from": null,
+     "wrong": "26",
+     "wrong_tier": "node",
+     "wrong_text": "4 × 5 = 26",
+     "wrong_result_text": "21 × 5 = 26"
+    },
+    {
+     "id": "s6o1",
+     "step": 6,
+     "op_index": 1,
+     "kind": "bin",
+     "a": "8",
+     "op": "×",
+     "b": "5",
+     "value": "40",
+     "text": "8 × 5 = 40",
+     "node": "s6o1",
+     "a_from": 1,
+     "b_from": null,
+     "wrong": "13",
+     "wrong_tier": "node",
+     "wrong_text": "42 × 5 = 13",
+     "wrong_result_text": "8 × 5 = 13"
+    },
+    {
+     "id": "s7o1",
+     "step": 7,
+     "op_index": 1,
+     "kind": "bin",
+     "a": "14",
+     "op": "×",
+     "b": "3",
+     "value": "42",
+     "text": "14 × 3 = 42",
+     "node": "s7o1",
+     "a_from": 3,
+     "b_from": null,
+     "wrong": "11",
+     "wrong_tier": "node",
+     "wrong_text": "13 × 3 = 11",
+     "wrong_result_text": "14 × 3 = 11"
+    },
+    {
+     "id": "s8o1",
+     "step": 8,
+     "op_index": 1,
+     "kind": "bin",
+     "a": "105",
+     "op": "+",
+     "b": "40",
+     "value": "145",
+     "text": "105 + 40 = 145",
+     "node": "s8o1",
+     "a_from": 4,
+     "b_from": 5,
+     "wrong": "146",
+     "wrong_tier": "node",
+     "wrong_text": "26 + 13 = 146",
+     "wrong_result_text": "105 + 40 = 146"
+    },
+    {
+     "id": "s8o2",
+     "step": 8,
+     "op_index": 2,
+     "kind": "bin",
+     "a": "145",
+     "op": "+",
+     "b": "42",
+     "value": "187",
+     "text": "145 + 42 = 187",
+     "node": null,
+     "a_from": 7,
+     "b_from": 6,
+     "wrong": "103",
+     "wrong_tier": "operator",
+     "wrong_text": "146 + 11 = 103",
+     "wrong_result_text": "145 + 42 = 103"
+    }
+   ]
+  },
+  {
+   "item_id": "gsm8kaug-train-35",
+   "source": "gsm8k_tf",
+   "group": "gsm8kaug_tf/s3",
+   "type": "choice",
+   "prompt": "Question: Danny works as a freelance developer and is paid $50 per hour. If he works for 5 hours a day and takes weekends off, how much does he earn in 4 weeks?\nOptions:\nA) 20\nB) 15000\nC) 6000\nD) 16000\nE) 5000",
+   "labels": [
+    "A",
+    "B",
+    "C",
+    "D",
+    "E"
+   ],
+   "gold_label": "E",
+   "teacher": {
+    "A": 0.0,
+    "B": 0.0,
+    "C": 0.0,
+    "D": 0.0,
+    "E": 1.0
+   },
+   "options": [
+    "20",
+    "15000",
+    "6000",
+    "16000",
+    "5000"
+   ],
+   "option_kinds": [
+    "primary",
+    "perturb_gold",
+    "primary",
+    "perturb_p1",
+    "gold"
+   ],
+   "recipe": "slip",
+   "depth": 3,
+   "dep_level": 2,
+   "subqs": [
+    {
+     "id": "s1v",
+     "question": "Is this step correct? Danny earns $50 * 5 = $250 per day.",
+     "opposite": "Is this step wrong? Danny earns $50 * 5 = $250 per day.",
+     "truth": true,
+     "p_cot": 1.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [],
+     "initial": null,
+     "status": "direct",
+     "probe": 250.0,
+     "step": 1,
+     "expr": "50*5",
+     "value": 250.0,
+     "flags": [],
+     "gold_ancestor": true,
+     "node_depth": 0
+    },
+    {
+     "id": "s1n",
+     "question": "Is this step correct? Danny earns $50 * 5 = $245 per day.",
+     "opposite": "Is this step wrong? Danny earns $50 * 5 = $245 per day.",
+     "truth": false,
+     "p_cot": 0.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [],
+     "initial": null,
+     "status": "direct",
+     "probe": 245.0,
+     "step": 1,
+     "expr": "50*5",
+     "value": 250.0,
+     "flags": [],
+     "gold_ancestor": true,
+     "node_depth": 0,
+     "wrong": "slip"
+    },
+    {
+     "id": "s2v",
+     "question": "Is this step correct? He works 5 days in a week for a total of $250 * 5 = $1250 per week.",
+     "opposite": "Is this step wrong? He works 5 days in a week for a total of $250 * 5 = $1250 per week.",
+     "truth": true,
+     "p_cot": 1.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [
+      "s1v"
+     ],
+     "initial": null,
+     "status": "direct",
+     "probe": 1250.0,
+     "step": 2,
+     "expr": "250*5",
+     "value": 1250.0,
+     "flags": [],
+     "gold_ancestor": true,
+     "node_depth": 1
+    },
+    {
+     "id": "s2n",
+     "question": "Is this step correct? He works 5 days in a week for a total of $250 * 5 = $1500 per week.",
+     "opposite": "Is this step wrong? He works 5 days in a week for a total of $250 * 5 = $1500 per week.",
+     "truth": false,
+     "p_cot": 0.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [
+      "s1v"
+     ],
+     "initial": null,
+     "status": "direct",
+     "probe": 1500.0,
+     "step": 2,
+     "expr": "250*5",
+     "value": 1250.0,
+     "flags": [],
+     "gold_ancestor": true,
+     "node_depth": 1,
+     "wrong": "slip"
+    }
+   ],
+   "random_subqs": [],
+   "rationale": "",
+   "augment": null,
+   "has_tree": true,
+   "tree_fix": true,
+   "row_kind": "final",
+   "problem_id": "gsm8kaug-train-35",
+   "node_status": "ok",
+   "licence_class": "UNK",
+   "licence": "unspecified: whynlp/gsm8k-aug and gsm8k-aug-nl state no licence (GPT-4 augmentation of GSM8K train, GSM8K MIT; Deng et al. 2023)",
+   "label_basis": "gold",
+   "node_basis": "program",
+   "pool_rank": 228053,
+   "n_steps": 3,
+   "tree_source": "gsm8kaug_tf",
+   "value_nodes": [
+    {
+     "id": "s1o1",
+     "type": "op",
+     "step": 1,
+     "op_index": 1,
+     "n_ops": 1,
+     "last_of_step": true,
+     "expr": "50*5",
+     "subq": "Danny earns ___ per day.",
+     "kind": "bin",
+     "a": "50",
+     "op": "×",
+     "b": "5",
+     "value": "250",
+     "depends_on": [],
+     "node_depth": 0,
+     "gold_ancestor": true,
+     "gold_step": false,
+     "flags": [],
+     "renderings": {
+      "op": {
+       "question": "What is 50 × 5?",
+       "options": [
+        "45",
+        "250",
+        "55"
+       ],
+       "answer": 1,
+       "wrong": [
+        "operator",
+        null,
+        "operator"
+       ]
+      },
+      "qop": {
+       "question": "Danny earns ___ per day. It is 50 × 5. What is the value?",
+       "options": [
+        "45",
+        "250",
+        "55"
+       ],
+       "answer": 1,
+       "wrong": [
+        "operator",
+        null,
+        "operator"
+       ]
+      },
+      "opsel": {
+       "question": "Danny earns ___ per day. Which computation gives it?",
+       "options": [
+        "50 ÷ 5",
+        "50 × 5",
+        "50 − 5"
+       ],
+       "answer": 1,
+       "wrong": [
+        "operator",
+        null,
+        "operator"
+       ],
+       "design": "operator"
+      }
+     }
+    },
+    {
+     "id": "s2o1",
+     "type": "op",
+     "step": 2,
+     "op_index": 1,
+     "n_ops": 1,
+     "last_of_step": true,
+     "expr": "250*5",
+     "subq": "He works 5 days in a week for a total of ___ per week.",
+     "kind": "bin",
+     "a": "250",
+     "op": "×",
+     "b": "5",
+     "value": "1250",
+     "depends_on": [
+      "s1o1"
+     ],
+     "node_depth": 1,
+     "gold_ancestor": true,
+     "gold_step": false,
+     "flags": [],
+     "renderings": {
+      "op": {
+       "question": "What is 250 × 5?",
+       "options": [
+        "255",
+        "245",
+        "1250"
+       ],
+       "answer": 2,
+       "wrong": [
+        "operator",
+        "operator",
+        null
+       ]
+      },
+      "qop": {
+       "question": "He works 5 days in a week for a total of ___ per week. It is 250 × 5. What is the value?",
+       "options": [
+        "255",
+        "245",
+        "1250"
+       ],
+       "answer": 2,
+       "wrong": [
+        "operator",
+        "operator",
+        null
+       ]
+      },
+      "opsel": {
+       "question": "He works 5 days in a week for a total of ___ per week. Which computation gives it?",
+       "options": [
+        "250 × 4",
+        "250 × 5",
+        "250 × 50"
+       ],
+       "answer": 1,
+       "wrong": [
+        "operand",
+        null,
+        "operand"
+       ],
+       "design": "operand"
+      }
+     }
+    }
+   ],
+   "worked_steps": [
+    {
+     "id": "s1o1",
+     "step": 1,
+     "op_index": 1,
+     "kind": "bin",
+     "a": "50",
+     "op": "×",
+     "b": "5",
+     "value": "250",
+     "text": "50 × 5 = 250",
+     "node": "s1o1",
+     "a_from": null,
+     "b_from": null,
+     "wrong": "45",
+     "wrong_tier": "node",
+     "wrong_text": "50 × 5 = 45",
+     "wrong_result_text": "50 × 5 = 45"
+    },
+    {
+     "id": "s2o1",
+     "step": 2,
+     "op_index": 1,
+     "kind": "bin",
+     "a": "250",
+     "op": "×",
+     "b": "5",
+     "value": "1250",
+     "text": "250 × 5 = 1250",
+     "node": "s2o1",
+     "a_from": 0,
+     "b_from": null,
+     "wrong": "255",
+     "wrong_tier": "node",
+     "wrong_text": "45 × 5 = 255",
+     "wrong_result_text": "250 × 5 = 255"
+    },
+    {
+     "id": "s3o1",
+     "step": 3,
+     "op_index": 1,
+     "kind": "bin",
+     "a": "1250",
+     "op": "×",
+     "b": "4",
+     "value": "5000",
+     "text": "1250 × 4 = 5000",
+     "node": null,
+     "a_from": 1,
+     "b_from": null,
+     "wrong": "1246",
+     "wrong_tier": "operator",
+     "wrong_text": "255 × 4 = 1246",
+     "wrong_result_text": "1250 × 4 = 1246"
+    }
+   ]
+  },
+  {
+   "item_id": "gsm8kaug-train-112",
+   "source": "gsm8k_tf",
+   "group": "gsm8kaug_tf/s2",
+   "type": "choice",
+   "prompt": "Question: Amy baked 66 cookies for a bake sale. She sold 75% of the cookies. How many cookies did Amy have left?\nOptions:\nA) 600\nB) 100\nC) 16\nD) 89\nE) 88",
+   "labels": [
+    "A",
+    "B",
+    "C",
+    "D",
+    "E"
+   ],
+   "gold_label": "C",
+   "teacher": {
+    "A": 0.0,
+    "B": 0.0,
+    "C": 1.0,
+    "D": 0.0,
+    "E": 0.0
+   },
+   "options": [
+    "600",
+    "100",
+    "16",
+    "89",
+    "88"
+   ],
+   "option_kinds": [
+    "perturb_p1",
+    "partial_ab",
+    "gold",
+    "perturb_p2",
+    "partial_ab"
+   ],
+   "recipe": "qo2",
+   "depth": 2,
+   "dep_level": 1,
+   "subqs": [
+    {
+     "id": "s1v",
+     "question": "Is it true that 66 × 75 × 0.01 = 49.5?",
+     "opposite": "Is it false that 66 × 75 × 0.01 = 49.5?",
+     "truth": true,
+     "p_cot": 1.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [],
+     "initial": null,
+     "status": "direct",
+     "probe": 49.5,
+     "step": 1,
+     "expr": "66*75*.01",
+     "value": 49.5,
+     "flags": [],
+     "gold_ancestor": true,
+     "node_depth": 0
+    },
+    {
+     "id": "s1n",
+     "question": "Is it true that 66 × 75 × 0.01 = 50.25?",
+     "opposite": "Is it false that 66 × 75 × 0.01 = 50.25?",
+     "truth": false,
+     "p_cot": 0.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [],
+     "initial": null,
+     "status": "direct",
+     "probe": 50.25,
+     "step": 1,
+     "expr": "66*75*.01",
+     "value": 49.5,
+     "flags": [],
+     "gold_ancestor": true,
+     "node_depth": 0,
+     "wrong": "slip"
+    }
+   ],
+   "random_subqs": [],
+   "rationale": "",
+   "augment": null,
+   "has_tree": true,
+   "tree_fix": true,
+   "row_kind": "final",
+   "problem_id": "gsm8kaug-train-112",
+   "node_status": "ok",
+   "licence_class": "UNK",
+   "licence": "unspecified: whynlp/gsm8k-aug and gsm8k-aug-nl state no licence (GPT-4 augmentation of GSM8K train, GSM8K MIT; Deng et al. 2023)",
+   "label_basis": "gold",
+   "node_basis": "program",
+   "pool_rank": 7042,
+   "n_steps": 2,
+   "tree_source": "gsm8kaug_tf",
+   "value_nodes": [
+    {
+     "id": "s1o1",
+     "type": "op",
+     "step": 1,
+     "op_index": 1,
+     "n_ops": 1,
+     "last_of_step": true,
+     "expr": "66*75*.01",
+     "subq": "Amy sold ___ cookies, round it off to the nearest whole number that's 50 cookies.",
+     "kind": "pct",
+     "a": "75",
+     "op": "% of",
+     "b": "66",
+     "value": "49.5",
+     "depends_on": [],
+     "node_depth": 0,
+     "gold_ancestor": true,
+     "gold_step": false,
+     "flags": [],
+     "renderings": {
+      "op": {
+       "question": "What is 75% of 66?",
+       "options": [
+        "115.5",
+        "49.5",
+        "16.5"
+       ],
+       "answer": 1,
+       "wrong": [
+        "complement",
+        null,
+        "complement"
+       ]
+      },
+      "qop": {
+       "question": "Amy sold ___ cookies, round it off to the nearest whole number that's 50 cookies. It is 75% of 66. What is the value?",
+       "options": [
+        "115.5",
+        "49.5",
+        "16.5"
+       ],
+       "answer": 1,
+       "wrong": [
+        "complement",
+        null,
+        "complement"
+       ]
+      },
+      "opsel": {
+       "question": "Amy sold ___ cookies, round it off to the nearest whole number that's 50 cookies. Which computation gives it?",
+       "options": [
+        "66 × 75",
+        "66 ÷ 75",
+        "75% of 66"
+       ],
+       "answer": 2,
+       "wrong": [
+        "operator",
+        "operator",
+        null
+       ],
+       "design": "operator"
+      }
+     },
+     "percent": {
+      "written_in": "sentence",
+      "form": "compound"
+     }
+    }
+   ],
+   "worked_steps": [
+    {
+     "id": "s1o1",
+     "step": 1,
+     "op_index": 1,
+     "kind": "pct",
+     "a": "75",
+     "op": "% of",
+     "b": "66",
+     "value": "49.5",
+     "text": "75% of 66 = 49.5",
+     "node": "s1o1",
+     "a_from": null,
+     "b_from": null,
+     "wrong": "115.5",
+     "wrong_tier": "node",
+     "wrong_text": "75% of 66 = 115.5",
+     "wrong_result_text": "75% of 66 = 115.5"
+    },
+    {
+     "id": "s2o1",
+     "step": 2,
+     "op_index": 1,
+     "kind": "bin",
+     "a": "66",
+     "op": "−",
+     "b": "50",
+     "value": "16",
+     "text": "66 − 50 = 16",
+     "node": null,
+     "a_from": null,
+     "b_from": 0,
+     "wrong": "116",
+     "wrong_tier": "operator",
+     "wrong_text": "66 − 115.5 = 116",
+     "wrong_result_text": "66 − 50 = 116"
+    }
+   ]
+  },
+  {
+   "item_id": "gsm8kaug-train-368",
+   "source": "gsm8k_tf",
+   "group": "gsm8kaug_tf/s3",
+   "type": "choice",
+   "prompt": "Question: Lily is sorting beads into jars. She has a total of 500 beads. She has blue and green ones. If she has 250 green beads, what percentage of beads are blue?\nOptions:\nA) 2\nB) 100\nC) 60\nD) 250\nE) 50",
+   "labels": [
+    "A",
+    "B",
+    "C",
+    "D",
+    "E"
+   ],
+   "gold_label": "E",
+   "teacher": {
+    "A": 0.0,
+    "B": 0.0,
+    "C": 0.0,
+    "D": 0.0,
+    "E": 1.0
+   },
+   "options": [
+    "2",
+    "100",
+    "60",
+    "250",
+    "50"
+   ],
+   "option_kinds": [
+    "primary",
+    "perturb_gold",
+    "perturb_gold",
+    "primary",
+    "gold"
+   ],
+   "recipe": "inter",
+   "depth": 3,
+   "dep_level": 0,
+   "subqs": [
+    {
+     "id": "s1v",
+     "question": "Is it true that 500 − 250 = 250?",
+     "opposite": "Is it false that 500 − 250 = 250?",
+     "truth": true,
+     "p_cot": 1.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [],
+     "initial": null,
+     "status": "direct",
+     "probe": 250.0,
+     "step": 1,
+     "expr": "500-250",
+     "value": 250.0,
+     "flags": [],
+     "gold_ancestor": false,
+     "node_depth": 0
+    },
+    {
+     "id": "s1n",
+     "question": "Is it true that 500 − 250 = 249?",
+     "opposite": "Is it false that 500 − 250 = 249?",
+     "truth": false,
+     "p_cot": 0.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [],
+     "initial": null,
+     "status": "direct",
+     "probe": 249.0,
+     "step": 1,
+     "expr": "500-250",
+     "value": 250.0,
+     "flags": [],
+     "gold_ancestor": false,
+     "node_depth": 0,
+     "wrong": "slip"
+    },
+    {
+     "id": "s2v",
+     "question": "Is it true that 250 ÷ 500 = 0.5?",
+     "opposite": "Is it false that 250 ÷ 500 = 0.5?",
+     "truth": true,
+     "p_cot": 1.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [],
+     "initial": null,
+     "status": "direct",
+     "probe": 0.5,
+     "step": 2,
+     "expr": "250/500",
+     "value": 0.5,
+     "flags": [
+      "ambiguous_q"
+     ],
+     "gold_ancestor": false,
+     "node_depth": 0
+    },
+    {
+     "id": "s2n",
+     "question": "Is it true that 250 ÷ 500 = 1.5?",
+     "opposite": "Is it false that 250 ÷ 500 = 1.5?",
+     "truth": false,
+     "p_cot": 0.0,
+     "p_fresh": null,
+     "type": "step",
+     "depends_on": [],
+     "initial": null,
+     "status": "direct",
+     "probe": 1.5,
+     "step": 2,
+     "expr": "250/500",
+     "value": 0.5,
+     "flags": [
+      "ambiguous_q"
+     ],
+     "gold_ancestor": false,
+     "node_depth": 0,
+     "wrong": "perturb"
+    }
+   ],
+   "random_subqs": [],
+   "rationale": "",
+   "augment": null,
+   "has_tree": true,
+   "tree_fix": true,
+   "row_kind": "final",
+   "problem_id": "gsm8kaug-train-368",
+   "node_status": "ok",
+   "licence_class": "UNK",
+   "licence": "unspecified: whynlp/gsm8k-aug and gsm8k-aug-nl state no licence (GPT-4 augmentation of GSM8K train, GSM8K MIT; Deng et al. 2023)",
+   "label_basis": "gold",
+   "node_basis": "program",
+   "pool_rank": 9902,
+   "n_steps": 3,
+   "tree_source": "gsm8kaug_tf",
+   "value_nodes": [
+    {
+     "id": "s1o1",
+     "type": "op",
+     "step": 1,
+     "op_index": 1,
+     "n_ops": 1,
+     "last_of_step": true,
+     "expr": "500-250",
+     "subq": "",
+     "kind": "bin",
+     "a": "500",
+     "op": "−",
+     "b": "250",
+     "value": "250",
+     "depends_on": [],
+     "node_depth": 0,
+     "gold_ancestor": false,
+     "gold_step": false,
+     "flags": [],
+     "renderings": {
+      "op": {
+       "question": "What is 500 − 250?",
+       "options": [
+        "240",
+        "250",
+        "750"
+       ],
+       "answer": 1,
+       "wrong": [
+        "perturb",
+        null,
+        "operator"
+       ]
+      }
+     }
+    },
+    {
+     "id": "s2o1",
+     "type": "op",
+     "step": 2,
+     "op_index": 1,
+     "n_ops": 1,
+     "last_of_step": true,
+     "expr": "250/500",
+     "subq": "",
+     "kind": "bin",
+     "a": "250",
+     "op": "÷",
+     "b": "500",
+     "value": "0.5",
+     "depends_on": [],
+     "node_depth": 0,
+     "gold_ancestor": false,
+     "gold_step": false,
+     "flags": [
+      "ambiguous_q"
+     ],
+     "renderings": {
+      "op": {
+       "question": "What is 250 ÷ 500?",
+       "options": [
+        "0.3",
+        "0.4",
+        "0.5"
+       ],
+       "answer": 2,
+       "wrong": [
+        "perturb",
+        "perturb",
+        null
+       ]
+      }
+     }
+    }
+   ],
+   "worked_steps": null
+  },
+  {
+   "item_id": "gsm8kaug-train-122",
+   "source": "gsm8k_tf",
+   "group": "gsm8kaug_tf/s1",
+   "type": "choice",
+   "prompt": "Question: Betty is saving money for a vacation. She already saved $300 and needs a total of $1,200 to go on a vacation. How much money does Betty need to save to go on vacation?\nOptions:\nA) 2600\nB) 1900\nC) 2100\nD) 900\nE) 600",
+   "labels": [
+    "A",
+    "B",
+    "C",
+    "D",
+    "E"
+   ],
+   "gold_label": "D",
+   "teacher": {
+    "A": 0.0,
+    "B": 0.0,
+    "C": 0.0,
+    "D": 1.0,
+    "E": 0.0
+   },
+   "options": [
+    "2600",
+    "1900",
+    "2100",
+    "900",
+    "600"
+   ],
+   "option_kinds": [
+    "perturb_p1",
+    "perturb_p1",
+    "primary",
+    "gold",
+    "primary"
+   ],
+   "recipe": "slip",
+   "depth": 1,
+   "dep_level": 0,
+   "subqs": [],
+   "random_subqs": [],
+   "rationale": "",
+   "augment": null,
+   "has_tree": false,
+   "tree_fix": true,
+   "row_kind": "final",
+   "problem_id": "gsm8kaug-train-122",
+   "node_status": "ok",
+   "licence_class": "UNK",
+   "licence": "unspecified: whynlp/gsm8k-aug and gsm8k-aug-nl state no licence (GPT-4 augmentation of GSM8K train, GSM8K MIT; Deng et al. 2023)",
+   "label_basis": "gold",
+   "node_basis": "program",
+   "pool_rank": 13820,
+   "n_steps": 1,
+   "tree_source": "gsm8kaug_tf",
+   "value_nodes": [],
+   "worked_steps": [
+    {
+     "id": "s1o1",
+     "step": 1,
+     "op_index": 1,
+     "kind": "bin",
+     "a": "1200",
+     "op": "−",
+     "b": "300",
+     "value": "900",
+     "text": "1200 − 300 = 900",
+     "node": null,
+     "a_from": null,
+     "b_from": null,
+     "wrong": "1500",
+     "wrong_tier": "operator",
+     "wrong_text": "1200 − 300 = 1500",
+     "wrong_result_text": "1200 − 300 = 1500"
+    }
+   ]
+  }
+ ],
+ "raw": {
+  "gsm8kaug-train-0": {
+   "row": 0,
+   "question": "Out of 600 employees in a company, 30% got promoted while 10% received bonus. How many employees did not get either a promotion or a bonus?",
+   "steps": [
+    "<<600*30/100=180>>",
+    "<<600*10/100=60>>",
+    "<<180+60=240>>",
+    "<<600-240=360>>"
+   ],
+   "answer": "360",
+   "nl_question": "Out of 600 employees in a company, 30% got promoted while 10% received bonus. How many employees did not get either a promotion or a bonus?",
+   "nl_steps": [
+    "600 x 30/100 = 180 employees were promoted.",
+    "600 x 10/100 = 60 employees received a bonus.",
+    "So a total of 180+60=240 employees received a promotion or a bonus.",
+    "Therefore, 600 - 240 = 360 employees did not get either a promotion or a bonus."
+   ]
+  },
+  "gsm8kaug-train-5": {
+   "row": 5,
+   "question": "John's bike had a flat and he used $5 from his savings to repair it. Before the repair, he bought 2 spare tires. Each tire costs three times the price of the repair fee, and a helmet; which costs twice the price of a tire. After that, he had $340 savings left. How much money did John have saved before his bike had a flat?",
+   "steps": [
+    "<<5*3=15>>",
+    "<<15*2=30>>",
+    "<<5+15*2+30=65>>",
+    "<<340+65=405>>"
+   ],
+   "answer": "405",
+   "nl_question": "John's bike had a flat and he used $5 from his savings to repair it. Before the repair, he bought 2 spare tires. Each tire costs three times the price of the repair fee, and a helmet; which costs twice the price of a tire. After that, he had $340 savings left. How much money did John have saved before his bike had a flat?",
+   "nl_steps": [
+    "Each tire costs $5 x 3 = $15.",
+    "The helmet costs $15x 2 = $30.",
+    "So, he spent $5 + $15 * 2 + $30 = $65 for the repair.",
+    "Therefore, John has saved $340 + 65 = $405 before his bike had a flat."
+   ]
+  },
+  "gsm8kaug-train-35": {
+   "row": 35,
+   "question": "Danny works as a freelance developer and is paid $50 per hour. If he works for 5 hours a day and takes weekends off, how much does he earn in 4 weeks?",
+   "steps": [
+    "<<50*5=250>>",
+    "<<250*5=1250>>",
+    "<<1250*4=5000>>"
+   ],
+   "answer": "5000",
+   "nl_question": "Danny works as a freelance developer and is paid $50 per hour. If he works for 5 hours a day and takes weekends off, how much does he earn in 4 weeks?",
+   "nl_steps": [
+    "Danny earns $50 * 5 = $250 per day.",
+    "He works 5 days in a week for a total of $250 * 5 = $1250 per week.",
+    "So in 4 weeks, he earns $1250 * 4 = $5000."
+   ]
+  },
+  "gsm8kaug-train-57": {
+   "row": 57,
+   "question": "Annie is making a blanket. The blanket is made of 20 rows and each row has 20 squares. Annie has already finished 20% of the blanket. How many squares does she have left to do?",
+   "steps": [
+    "<<20*20=400>>",
+    "<<400*20/100=80>>",
+    "<<400-80=320>>"
+   ],
+   "answer": "320",
+   "nl_question": "Annie is making a blanket. The blanket is made of 20 rows and each row has 20 squares. Annie has already finished 20% of the blanket. How many squares does she have left to do?",
+   "nl_steps": [
+    "The blanket is made up of 20 rows * 20 squares = 400 squares",
+    "The number of squares already done is 400 * 20/100 = 80 squares Annie has 400 - 80 = 320 squares left to do"
+   ]
+  },
+  "gsm8kaug-train-112": {
+   "row": 112,
+   "question": "Amy baked 66 cookies for a bake sale. She sold 75% of the cookies. How many cookies did Amy have left?",
+   "steps": [
+    "<<66*75*.01=49.5>>",
+    "<<66-50=16>>"
+   ],
+   "answer": "16",
+   "nl_question": "Amy baked 66 cookies for a bake sale. She sold 75% of the cookies. How many cookies did Amy have left?",
+   "nl_steps": [
+    "Amy sold 66 * 75% = 49.5 cookies, round it off to the nearest whole number that's 50 cookies.",
+    "So, Amy had 66 - 50 = 16 cookies left."
+   ]
+  },
+  "gsm8kaug-train-122": {
+   "row": 122,
+   "question": "Betty is saving money for a vacation. She already saved $300 and needs a total of $1,200 to go on a vacation. How much money does Betty need to save to go on vacation?",
+   "steps": [
+    "<<1200-300=900>>"
+   ],
+   "answer": "900",
+   "nl_question": "Betty is saving money for a vacation. She already saved $300 and needs a total of $1,200 to go on a vacation. How much money does Betty need to save to go on vacation?",
+   "nl_steps": [
+    "Betty needs to save $1,200 - $300 = $900 more to go on vacation."
+   ]
+  },
+  "gsm8kaug-train-181": {
+   "row": 181,
+   "question": "A farmer has 7 cows and 4 horses. Each cow eats 3 bags of hay a week and each horse eats 2 bags. He also has chickens that eat 1 bag of feed a week and there are twice as many chickens as cows. If hay costs $5 a bag and feed costs $3 a bag, how much does the farmer spend on feed in one week?",
+   "steps": [
+    "<<7*3=21>>",
+    "<<4*2=8>>",
+    "<<7*2=14>>",
+    "<<14*1=14>>",
+    "<<21*5=105>>",
+    "<<8*5=40>>",
+    "<<14*3=42>>",
+    "<<105+40+42=187>>"
+   ],
+   "answer": "187",
+   "nl_question": "A farmer has 7 cows and 4 horses. Each cow eats 3 bags of hay a week and each horse eats 2 bags. He also has chickens that eat 1 bag of feed a week and there are twice as many chickens as cows. If hay costs $5 a bag and feed costs $3 a bag, how much does the farmer spend on feed in one week?",
+   "nl_steps": [
+    "The cows eat a total of 7*3= 21 bags of hay weekly.",
+    "The horses eat a total of 4*2= 8 bags of hay weekly.",
+    "There are 7*2= 14 chicken on the farm.",
+    "Chickens eat a total of 14*1= 14 bags of feed weekly.",
+    "The farmer spends 21*5=$105 on hay for the cows.",
+    "The farmer spends 8*5=$40 on hay for the horses.",
+    "The farmer spends 14*3=$42 on feed for the chickens.",
+    "In total, the farmer spends 105+40+42=$187 on feed for all his animals in a week."
+   ]
+  },
+  "gsm8kaug-train-368": {
+   "row": 368,
+   "question": "Lily is sorting beads into jars. She has a total of 500 beads. She has blue and green ones. If she has 250 green beads, what percentage of beads are blue?",
+   "steps": [
+    "<<500-250=250>>",
+    "<<250/500=0.5>>",
+    "<<50=50>>"
+   ],
+   "answer": "50",
+   "nl_question": "Lily is sorting beads into jars. She has a total of 500 beads. She has blue and green ones. If she has 250 green beads, what percentage of beads are blue?",
+   "nl_steps": [
+    "She has 250 blue beads because 500 - 250 = 250",
+    "The proportion of beads that are blue is .5 because 250 / 500 = .5",
+    "The percentage that are blue is 50 because .5 x 100% = 50%"
+   ]
+  }
+ }
+}
