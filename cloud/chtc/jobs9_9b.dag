@@ -1,0 +1,18 @@
+JOB j232 train5_9b.sub
+VARS j232 envfile="condor/jobs9_9b/232_9b_gsm_GFPQM-c1lr3_s12_fsdp.env" name="232_9b_gsm_GFPQM-c1lr3_s12_fsdp" prio="177" smoke="" ngpu="2" cpus="12" mem="200GB" gpumem="40000"
+SCRIPT POST j232 post_push.sh 232_9b_gsm_GFPQM-c1lr3_s12_fsdp $RETURN
+RETRY j232 1
+PRIORITY j232 177
+
+JOB j233 train5_9b.sub
+VARS j233 envfile="condor/jobs9_9b/233_9b_gsm_GFPQM-c1lr3_s13_fsdp.env" name="233_9b_gsm_GFPQM-c1lr3_s13_fsdp" prio="176" smoke="" ngpu="2" cpus="12" mem="200GB" gpumem="40000"
+SCRIPT POST j233 post_push.sh 233_9b_gsm_GFPQM-c1lr3_s13_fsdp $RETURN
+RETRY j233 1
+PRIORITY j233 176
+
+JOB j234 train5_9b.sub
+VARS j234 envfile="condor/jobs9_9b/234_9b_gsm_GFPQM-c1lr3_s14_fsdp.env" name="234_9b_gsm_GFPQM-c1lr3_s14_fsdp" prio="175" smoke="" ngpu="2" cpus="12" mem="200GB" gpumem="40000"
+SCRIPT POST j234 post_push.sh 234_9b_gsm_GFPQM-c1lr3_s14_fsdp $RETURN
+RETRY j234 1
+PRIORITY j234 175
+
