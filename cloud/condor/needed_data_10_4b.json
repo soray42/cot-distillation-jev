@@ -1,0 +1,49 @@
+{
+ "_comment": "CHTC batch 10 (Qwen3.5-4B): batch 8's data (data/student_gsm8k_tf_si + eval files) plus data/student_gsm8kaug_tf_24k (GSM8K-Aug, 24,000 verified and decontaminated problems, scripts/build_gsm8kaug_tf.py; val = the GSM8K val of student_gsm8k_tf_si). Checked by cloud/pack_chtc_10.sh.",
+ "dirs": [
+  "data/student_gsm8k_tf_si",
+  "data/student_gsm8kaug_tf_24k"
+ ],
+ "files": [
+  "data/eval/bbh_sub500.jsonl",
+  "data/eval/gsm8k_mc.jsonl",
+  "data/eval/gsm8k_mc_v2.jsonl",
+  "data/eval/gsm1k_mc.jsonl",
+  "data/eval/gsm8k_s2.jsonl",
+  "data/eval/gsm8k_s3.jsonl",
+  "data/eval/gsm8k_s4.jsonl",
+  "data/eval/gsm8k_s5.jsonl",
+  "data/eval/gsm8k_s6.jsonl",
+  "data/eval/gsm8k_s7.jsonl",
+  "data/eval/gsm8k_s8.jsonl",
+  "data/eval/gsm8k_s5p.jsonl",
+  "data/eval/kk_heldout.jsonl",
+  "data/eval/jl_heldout.jsonl",
+  "data/eval/jevbench_public.jsonl",
+  "data/eval/typed_decisions_test.jsonl",
+  "data/eval/bbeh.jsonl"
+ ],
+ "md5": {
+  "data/student_gsm8k_tf_si/train.jsonl": "6b52dd5f6803bd4e453a83f3e8e6ac15",
+  "data/student_gsm8k_tf_si/val.jsonl": "8d797797b7fc3938ac03e9532964c594",
+  "data/eval/bbh_sub500.jsonl": "f269ac7895832c720aae59d100b18389",
+  "data/eval/gsm8k_mc.jsonl": "45537cb1d9dfa0f855af0244f599632a",
+  "data/eval/gsm8k_mc_v2.jsonl": "047acac20ec4fa67a2a93f519e3f297e",
+  "data/eval/gsm1k_mc.jsonl": "df2f83837642b96fd6db105dc8ebee22",
+  "data/eval/gsm8k_s2.jsonl": "6ca946e446bd7bf36f313c4fc485fc7e",
+  "data/eval/gsm8k_s3.jsonl": "ae21c870682874c873b550e336b49752",
+  "data/eval/gsm8k_s4.jsonl": "e170b0ec39b446664d48c27b4d712970",
+  "data/eval/gsm8k_s5.jsonl": "4f04f6aa3f967d0fc0185286ff82173d",
+  "data/eval/gsm8k_s6.jsonl": "521adff7fa90f99e54e35bdcb7b09c89",
+  "data/eval/gsm8k_s7.jsonl": "53ca29a076f2a4f1f9f6a69879b02c47",
+  "data/eval/gsm8k_s8.jsonl": "b6ca1a19c473961ff160026ae260309d",
+  "data/eval/gsm8k_s5p.jsonl": "90f7876a2c2db7de0b3dfb61eee56cbd",
+  "data/eval/kk_heldout.jsonl": "76572edb0dc274bc9b78b8801e2de6bb",
+  "data/eval/jl_heldout.jsonl": "5472606bf1e6c0b0b81057e2275c48a8",
+  "data/eval/jevbench_public.jsonl": "41ec3197c3a77074665dc585bb602f9f",
+  "data/eval/typed_decisions_test.jsonl": "b88307e50342af8c840f2b1f61b49379",
+  "data/eval/bbeh.jsonl": "40d9a4d45f497c6edaaa66ed5d02f988",
+  "data/student_gsm8kaug_tf_24k/train.jsonl": "f083dc61b3468967a27486c9d1fc7878",
+  "data/student_gsm8kaug_tf_24k/val.jsonl": "8d797797b7fc3938ac03e9532964c594"
+ }
+}

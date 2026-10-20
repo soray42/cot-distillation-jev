@@ -1,0 +1,7 @@
+condor/jobs10_4b/254_4b_gsmsi_LSY-sc2-c2lr3_s12_fsdp.env, 280, 1
+condor/jobs10_4b/255_4b_gsmsi_LSY-sc2-c2lr3_s15_fsdp.env, 279, 1
+condor/jobs10_4b/256_4b_gsmsi_LSY-sc2-c2lr3_s16_fsdp.env, 278, 1
+condor/jobs10_4b/257_4b_gsmaug24_A2-c1lr3_s12_fsdp.env, 277, 1
+condor/jobs10_4b/258_4b_gsmaug24_A2-c2lr3_s12_fsdp.env, 276, 1
+condor/jobs10_4b/259_4b_gsmaug24_LS-sc2-c1lr3_s12_fsdp.env, 275, 1
+condor/jobs10_4b/260_4b_gsmaug24_LS-sc2-c2lr3_s12_fsdp.env, 274, 1

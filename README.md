@@ -119,6 +119,7 @@ python scripts/ladder_readout.py 'results/hpc/l4b/*' --out results/ladder_readou
 
 The README is updated with every push.
 
+- 2026-10-20: failure-attribution trees v3 (index-free pointers, teacher-written clean nodes) and LOFO training pools (AgenTracer Diagnosis, Who&When Pro text, CORRECT) with a tree post-check and label audit; CHTC batch 10 (slots + yes/no seeds 12 / 15 / 16; GSM8K-Aug 24k answer-only vs slots at 1 and 2 epochs).
 - 2026-10-19 (3): CHTC batch 9 (Qwen3.5-9B, MC nodes at 1 epoch, seeds 12 / 13 / 14) for the 9B best-vs-best comparison.
 - 2026-10-19 (2): Tree Forcing v2 latent node slots (arms LS / LSU / LSR / LSY, cb0e84f); CHTC batch 8 (latent-slot pilot);
   GSM8K-Aug builder (`scripts/build_gsm8kaug_tf.py`, 317,503 verified and decontaminated problems, 24k / 96k subsets).
