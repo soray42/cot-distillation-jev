@@ -119,6 +119,7 @@ python scripts/ladder_readout.py 'results/hpc/l4b/*' --out results/ladder_readou
 
 The README is updated with every push.
 
+- 2026-10-20 (3): batch-11 pilot failed both gates (layer-20 readout 3%, at the shuffled-control level; necessity +0.15); read-only audit found no implementation bug (loss weight, fill and frozen-lens design). Latent-slot diagnostics: --slot-pad-weight, step-1-only K=1, scripts/probe_slots.py (every layer, logistic probes and frozen-head lens), sbatch PROBE / PROBE_ONLY; CHTC batch 12 = probes of LSL / LSLU / the base model and the step-1-only arm at 2 and 6 epochs.
 - 2026-10-20 (2): latent slots v2.1 (arms LSL / LSLU / LSLR / LSLY: middle-layer slot loss, own-head value readout without a second pass, filled tail slots, distinct slot tokens; mean-ablation necessity and a pre-registered pilot gate); scripts/paired_stats.py (seed-level t, shared-index item bootstrap, two-level bootstrap, val-only epoch choice); CHTC batch 11 = the v2.1 pilot (batch 10 on hold).
 - 2026-10-20: failure-attribution trees v3 (index-free pointers, teacher-written clean nodes) and LOFO training pools (AgenTracer Diagnosis, Who&When Pro text, CORRECT) with a tree post-check and label audit; CHTC batch 10 (slots + yes/no seeds 12 / 15 / 16; GSM8K-Aug 24k answer-only vs slots at 1 and 2 epochs).
 - 2026-10-19 (3): CHTC batch 9 (Qwen3.5-9B, MC nodes at 1 epoch, seeds 12 / 13 / 14) for the 9B best-vs-best comparison.
