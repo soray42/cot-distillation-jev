@@ -13,7 +13,9 @@ The predictions and metrics are written as without the flag.
 Latent-slot models (train_student.py --latent-slots, arms LS / LSU / LSR / LSY): a saved model directory holds
 latent_slots.json, and every final question is then built with the same slot line as in training (final_text); the
 --latent-slots / --slot-* flags set or override it. --slot-necessity / --slot-decode run the necessity test and the
-decoding readout as at the end of training.
+decoding readout as at the end of training. v2.1 models (arms LSL / LSLU / LSLR / LSLY) keep their distinct tokens,
+slot layer, lens readout and fill in latent_slots.json: --slot-decode N then gives the lens readout (slot_readout), and
+the necessity mode mean needs --slot-mean-train (training items for the slot means).
 """
 from __future__ import annotations
 
@@ -27,8 +29,8 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from cotdistill.student import (SLOT_SIDECAR, SlotSpec, choose_slot_token, encode_tail, evaluate,  # noqa: E402
-                                evaluate_subq, final_text, load_model, parse_slot_necessity, set_slot_prompt,
+from cotdistill.student import (SLOT_POOL, SLOT_SIDECAR, SlotSpec, choose_slot_token, encode_tail,  # noqa: E402
+                                evaluate, evaluate_subq, final_text, load_model, parse_slot_necessity, set_slot_prompt,
                                 slot_evals, slot_spec, subq_sets, use_chat_template)
 
 
@@ -89,7 +91,11 @@ def main() -> None:
     ap.add_argument("--slot-swap-token", default="auto", help="--slot-necessity swap: the replacement token")
     ap.add_argument("--slot-decode", type=int, default=0, help="decode every slot of the first N items of "
                     "--slot-decode-set greedily: slot_decode_<set>.jsonl")
-    ap.add_argument("--slot-decode-set", default="", help="--slot-decode: the eval set (default: the first --eval set)")
+    ap.add_argument("--slot-decode-set", default="", help="--slot-decode: the eval set (default: the first --eval set; "
+                    "lens models: a comma list)")
+    ap.add_argument("--slot-mean-train", default="", help="--slot-necessity mean: training items (jsonl) whose slot "
+                    "states give the means")
+    ap.add_argument("--slot-mean-n", type=int, default=300, help="--slot-mean-train: the first N items")
     args = ap.parse_args()
 
     import transformers
@@ -111,10 +117,19 @@ def main() -> None:
         try:
             token = choose_slot_token(tok, args.slot_token or sd.get("token", "auto"))
             spec = SlotSpec(k, args.slot_c or sd.get("c", 1), token, args.slot_place or sd.get("place", "before-options"))
+            if any(x in sd for x in ("tokens", "layer", "readout", "fill", "head_grad")):   # v2.1 (lens / distinct)
+                spec = SlotSpec(spec.k, spec.c, spec.token, spec.place, tokens=tuple(sd.get("tokens", ())),
+                                layer=sd.get("layer"), readout=sd.get("readout", "decode"), fill=sd.get("fill", "none"),
+                                head_grad=sd.get("head_grad", False))
             set_slot_prompt(tok, spec)
             modes = parse_slot_necessity(args.slot_necessity)
             if "swap" in modes:
-                swap = choose_slot_token(tok, args.slot_swap_token, avoid=(token,))
+                swap = choose_slot_token(tok, args.slot_swap_token, avoid=spec.tokens or (token,),
+                                         **({"pool": SLOT_POOL} if spec.tokens else {}))
+            if "mean" in modes and spec.layer is None:
+                raise ValueError("--slot-necessity mean: the model has no slot layer (use mean@<layer>)")
+            if any(m.startswith("mean") for m in modes) and not args.slot_mean_train:
+                raise ValueError("--slot-necessity mean: pass --slot-mean-train <train.jsonl>")
         except ValueError as e:
             raise SystemExit(f"latent slots: {e}")
         print(f"latent slots ({'from ' + str(side) if sd else 'flags'}): {spec}", flush=True)
@@ -128,7 +143,7 @@ def main() -> None:
         items = [json.loads(l) for l in open(path) if l.strip()]
         evals[name] = items
         if k and items:
-            if any(spec.token in it["prompt"] or swap and swap in it["prompt"] for it in items):
+            if any(any(t in it["prompt"] for t in spec.slot_tokens()) or swap and swap in it["prompt"] for it in items):
                 raise SystemExit(f"{name}: the slot (or swap) token occurs in a prompt; pick another --slot-token")
             print(name, "final question e.g.", repr(final_text(tok, items[0]["prompt"])), flush=True)
         hid = [] if name in args.dump_hidden.split(",") else None
@@ -151,7 +166,9 @@ def main() -> None:
         slot_evals(model, tok, evals, results, out, modes=parse_slot_necessity(args.slot_necessity),
                    sets=[x for x in args.slot_necessity_sets.split(",") if x], swap_token=swap,
                    decode_n=args.slot_decode, decode_set=args.slot_decode_set, max_len=args.max_len, bs=args.bs,
-                   cache=cache, overflow=args.slot_overflow)
+                   cache=cache, overflow=args.slot_overflow,
+                   mean_items=[json.loads(l) for l in open(args.slot_mean_train) if l.strip()][:args.slot_mean_n]
+                   if args.slot_mean_train else None)
     for sname, spath in subq_sets(args.eval_subq or ""):
         items = [json.loads(l) for l in open(spath) if l.strip()]
         sm, spreds = evaluate_subq(model, tok, items, args.max_len, args.bs, cache)

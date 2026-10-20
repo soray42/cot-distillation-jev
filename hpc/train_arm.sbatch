@@ -134,6 +134,22 @@
 # set (slot_decode_<set>.jsonl). SLOTK/SLOTC/SLOTLAM/SLOTPLACE also name the run dir (-sk<K>-sc<c>-sl<lam>-sp<place>)
 # for these arms; relays must put SLOTK SLOTC SLOTLAM SLOTPLACE SLOTNEC SLOTNECSETS SLOTDEC in their reset list.
 # NGPU=2 / the 1-rank FSDP route work (test_latent_slots TestFSDP); STOPH/CKPTMIN resume works on one GPU.
+# Latent slots v2.1 (lens readout; same DATA / XARGS as LS): LSL = SLOTK (default 6) slots of SLOTC (default 4) tokens,
+# every slot its own reserved token (SLOTTOK=distinct; Qwen3.5: <|box_start|> <|quad_start|> <|object_ref_start|>
+# <|box_end|> <|quad_end|> <|object_ref_end|>, swap token <|fim_pad|>); in training only, slot j's c states at the
+# OUTPUT of decoder layer SLOTL (default 0.67 = round(0.67 n) - 1: layer 20 of 32 on Qwen3.5-4B / 9B, after which come
+# 11 layers, 3 of them full attention, 15 of 24 on 2B) go through the model's own final norm + LM head (no second
+# pass, no new parameters) and position i must give token i of the j-th worked step's VALUE ("6"; Qwen3.5 writes one
+# token per digit, so 4 positions hold 97% of the GSM8K values whole), then "\n"; chains longer than SLOTK keep steps
+# 1..K-1 and the last (answer) step's value, slots after a shorter chain get the last value (SLOTFILL=last; none /
+# answer); loss = letter CE + SLOTLAM x the mean slot CE per problem; final views only · LSLU = the same prompt without
+# any slot loss · LSLR = LSL with every value drawn from other problems' values (same supervised slots) · LSLY = LSL +
+# GFPQ's yes/no node views. After training: SLOTNEC (default swap,drop,mean: one swap token for all slots, no slot
+# line, the layer-SLOTL slot states replaced by their mean over the first 300 training items) and the lens readout of
+# the first SLOTDEC (default 400: all of GSM8K val) items of each set of SLOTDECSET (default: the first eval set) ->
+# metrics slot_readout (exact value match per slot) and slot_pilot (pass: value readout >= 45% and mean-ablation
+# acc_drop >= 2 points). Run dirs: -sk/-sc/-sl/-sp as LS, plus -sL<SLOTL> -sF<SLOTFILL> -sT<SLOTTOK>; relays must put
+# SLOTL SLOTFILL SLOTTOK SLOTDECSET in their reset list too.
 # NODEW=w gives every node view weight w (--tree-node-weight; default: the per-problem split, aux 1.0 / views, about
 # .023 per K&K node); set it to the same value for all arms of a comparison. LOCAL_EVAL=path scores the
 # local-step probe (--eval-local: every K&K node in its local view, eval key local_kk); when unset it is
@@ -203,6 +219,7 @@ arm_config() {           # sets F S T RLM DS DX EPD for arm $1 (EPD: the arm's d
   RLM=; DS=; DX=; EPD=
   local SL="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --latent-slots ${SLOTK:-6} --slot-c ${SLOTC:-1} --slot-lambda ${SLOTLAM:-1.0} --slot-place ${SLOTPLACE:-before-options} --slot-necessity ${SLOTNEC:-swap,drop,noise@mid:1.0} --slot-decode ${SLOTDEC:-32}"
   local NS="${SLOTNECSETS:-${EVALMID:-}}"; SL="$SL${NS:+ --slot-necessity-sets $NS}"
+  local SLL="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --latent-slots ${SLOTK:-6} --slot-c ${SLOTC:-4} --slot-lambda ${SLOTLAM:-1.0} --slot-place ${SLOTPLACE:-before-options} --slot-layer ${SLOTL:-0.67} --slot-readout lens --slot-fill ${SLOTFILL:-last} --slot-tokens ${SLOTTOK:-distinct} --slot-necessity ${SLOTNEC:-swap,drop,mean} --slot-decode ${SLOTDEC:-400}${SLOTDECSET:+ --slot-decode-set $SLOTDECSET}${NS:+ --slot-necessity-sets $NS}"
   case "$1" in
     A1) F=gold;    S=none;   T=cot ;;
     A2) F=teacher; S=none;   T=cot ;;
@@ -273,6 +290,10 @@ arm_config() {           # sets F S T RLM DS DX EPD for arm $1 (EPD: the arm's d
     LSU) F=teacher; S=cot; T=cot; DX="$SL --slot-final-only --slot-target none" ;;   # the same slots, no slot loss (pause-token control)
     LSR) F=teacher; S=cot; T=cot; DX="$SL --slot-final-only --slot-target shuffled" ;;   # slot targets from other problems (wrong-content control)
     LSY) F=teacher; S=cot; T=cot; DX="$SL" ;;   # LS + GFPQ's yes/no node views
+    LSL) F=teacher; S=cot; T=cot; DX="$SLL --slot-final-only" ;;   # v2.1: layer-L slot states read by the final norm + head, value targets
+    LSLU) F=teacher; S=cot; T=cot; DX="$SLL --slot-final-only --slot-target none" ;;   # the same prompt, no slot loss
+    LSLR) F=teacher; S=cot; T=cot; DX="$SLL --slot-final-only --slot-target shuffled" ;;   # values from other problems
+    LSLY) F=teacher; S=cot; T=cot; DX="$SLL" ;;   # LSL + GFPQ's yes/no node views
     *) echo "unknown ARM $1"; return 1 ;;
   esac
 }
@@ -365,7 +386,8 @@ if [ -n "${EVAL_BASE:-}" ]; then          # untrained backbone control (Jeff nee
 fi
 for ARM in $ARMS; do
   SF=$(sed -n 's/.*--subq-filter[ =]\([a-z]*\).*/\1/p' <<< "${XARGS:-}")               # XARGS chain filter -> -sf<f>
-  SLD=; case "$ARM" in LS|LSU|LSR|LSY) SLD="${SLOTK:+-sk$SLOTK}${SLOTC:+-sc$SLOTC}${SLOTLAM:+-sl$SLOTLAM}${SLOTPLACE:+-sp${SLOTPLACE%%-*}}" ;; esac
+  SLD=; case "$ARM" in LS|LSU|LSR|LSY|LSL|LSLU|LSLR|LSLY) SLD="${SLOTK:+-sk$SLOTK}${SLOTC:+-sc$SLOTC}${SLOTLAM:+-sl$SLOTLAM}${SLOTPLACE:+-sp${SLOTPLACE%%-*}}" ;; esac
+  case "$ARM" in LSL|LSLU|LSLR|LSLY) SLD="$SLD${SLOTL:+-sL$SLOTL}${SLOTFILL:+-sF$SLOTFILL}${SLOTTOK:+-sT$SLOTTOK}" ;; esac   # v2.1 knobs
   OUT="runs/${ARM}${SF:+-sf$SF}${NODEW:+-nw$NODEW}${SLD}${TAG:+-$TAG}-$(basename "$MODEL")-$(basename "$DATA")-s${SEED}"   # TAG names recipe variants; NODEW -> -nw<w>; slot knobs -> -sk/-sc/-sl/-sp
   if [ -n "${STOPH:-}${CKPTMIN:-}" ] && [ -f "$OUT/metrics.json" ] && [ ! -d "$OUT/ckpt" ]; then
     echo "=== $ARM: $OUT finished in an earlier job, skipped"; continue

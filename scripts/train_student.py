@@ -41,7 +41,7 @@ from cotdistill.student import (Example, brier_loss, build_examples, build_fact_
 RESUME_FREE = {"stop_after_h", "ckpt_every_min", "ckpt_single", "stop_at_step", "code_commit", "eval", "eval_subq", "eval_bs",
                "eval_max_len", "dump_hidden", "dump_layers", "log_every", "save", "eval_local", "eval_local_view",
                "log_update_loss", "eval_mid_preds", "slot_necessity", "slot_necessity_sets", "slot_swap_token",
-               "slot_decode", "slot_decode_set"}
+               "slot_decode", "slot_decode_set", "slot_mean_n"}
 
 # Training arguments added after checkpoints may have been written: a checkpoint without the key had this value.
 NEW_ARG_DEFAULTS = {"tree_view": "problem", "tree_sources": "", "tree_node_weight": 0.0, "attn_impl": "", "fsdp": False,
@@ -51,7 +51,8 @@ NEW_ARG_DEFAULTS = {"tree_view": "problem", "tree_sources": "", "tree_node_weigh
                     "si_schedule": "global", "si_keep_optim": False, "si_remove": "front", "curriculum_steps": 0,
                     "curriculum_mode": "cumulative", "curriculum_final_nodes": False, "latent_slots": 0, "slot_c": 1,
                     "slot_token": "auto", "slot_place": "before-options", "slot_lambda": 1.0, "slot_target": "tree",
-                    "slot_overflow": "merge", "slot_final_only": False}
+                    "slot_overflow": "merge", "slot_final_only": False, "slot_layer": "final", "slot_readout": "decode",
+                    "slot_fill": "none", "slot_tokens": "same", "slot_head_grad": False}
 
 LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj",
                 "in_proj_qkv", "in_proj_z", "in_proj_a", "in_proj_b", "out_proj"]
@@ -281,7 +282,32 @@ def main() -> None:
                     help="--latent-slots, after training: decode every slot of the first N items of --slot-decode-set "
                          "back to text greedily (same separate-sequence path): slot_decode_<set>.jsonl and "
                          "metrics slot_decode (exact / value match by slot)")
-    ap.add_argument("--slot-decode-set", default="", help="--slot-decode: the eval set (default: the first --eval set)")
+    ap.add_argument("--slot-decode-set", default="", help="--slot-decode: the eval set (default: the first --eval set); "
+                    "--slot-readout lens: a comma list of sets, each read out on its first --slot-decode items")
+    # v2.1 (arms LSL / LSLU / LSLR / LSLY): the slot state at an intermediate layer, read by the model's own final norm
+    # and LM head, value targets; defaults = v2 (every v2 arm unchanged)
+    ap.add_argument("--slot-layer", default="final",
+                    help="--latent-slots: the decoder layer whose OUTPUT holds the supervised slot states: final (v2: the "
+                         "final normed states, read by no later position), a 0-based layer index (negative from the "
+                         "end) or a fraction of the depth (0.67 -> layer round(0.67 n) - 1: 20 of 32 on Qwen3.5-4B / 9B, "
+                         "15 of 24 on 2B); an intermediate layer for --slot-readout lens")
+    ap.add_argument("--slot-readout", default="decode", choices=["decode", "lens"],
+                    help="--latent-slots: decode (v2) = the final slot states start a separate decoding pass of the "
+                         "worked step's text; lens (v2.1) = slot j's c states at --slot-layer through the model's own "
+                         "final norm + LM head (no second pass, no new parameters), position i predicting token i of "
+                         "the step's VALUE ('6'), then '\\n' up to c")
+    ap.add_argument("--slot-fill", default="none", choices=["none", "last", "answer"],
+                    help="--slot-readout lens: slots after a shorter chain get no target (none), the chain's last value "
+                         "(last: the answer's step) or the gold option's text (answer)")
+    ap.add_argument("--slot-tokens", default="same", choices=["same", "distinct"],
+                    help="--latent-slots: one slot token for every slot (same, v2) or K different tokens, slot j's c "
+                         "positions all slot j's (distinct; auto on Qwen3.5: the six grounding tokens, then "
+                         "<|fim_pad|> ...; else --slot-token t1,t2,...)")
+    ap.add_argument("--slot-head-grad", action="store_true",
+                    help="--slot-readout lens: let the slot loss train the LM head (the tied input embedding on "
+                         "Qwen3.5-2B / 4B); default off: the head is read detached, a fixed readout")
+    ap.add_argument("--slot-mean-n", type=int, default=300,
+                    help="--slot-necessity mean: the slot means come from the first N training items")
     ap.add_argument("--aux-total", type=float, default=1.0,
                     help="full-tree groups: auxiliary weight per problem, split evenly over its node views")
     ap.add_argument("--aux-sources", default="", help="grouped training: comma list of item sources whose auxiliary "
@@ -486,7 +512,9 @@ def main() -> None:
     slot_flags = (args.slot_c != 1 or args.slot_token != "auto" or args.slot_place != "before-options" or
                   args.slot_lambda != 1.0 or args.slot_target != "tree" or args.slot_overflow != "merge" or
                   args.slot_final_only or args.slot_necessity or args.slot_necessity_sets or
-                  args.slot_swap_token != "auto" or args.slot_decode or args.slot_decode_set)
+                  args.slot_swap_token != "auto" or args.slot_decode or args.slot_decode_set or
+                  args.slot_layer != "final" or args.slot_readout != "decode" or args.slot_fill != "none" or
+                  args.slot_tokens != "same" or args.slot_mean_n != 300 or args.slot_head_grad)
     if args.latent_slots < 0 or slot_flags and not args.latent_slots:
         raise SystemExit("--slot-* options need --latent-slots K >= 1")
     if args.latent_slots and (args.tree_full != "plain" or args.node_format != "yesno" or
@@ -506,6 +534,16 @@ def main() -> None:
             parse_slot_necessity(args.slot_necessity)
         except ValueError as e:
             raise SystemExit(str(e))
+        if args.slot_readout == "lens" and args.slot_layer == "final":
+            raise SystemExit("--slot-readout lens needs an intermediate --slot-layer (e.g. 0.67)")
+        if args.slot_readout == "decode" and (args.slot_layer != "final" or args.slot_fill != "none" or
+                                              args.slot_head_grad):
+            raise SystemExit("--slot-layer / --slot-fill / --slot-head-grad are for --slot-readout lens (decode reads "
+                             "the final states)")
+        if args.slot_mean_n < 1:
+            raise SystemExit("--slot-mean-n >= 1")
+        if "mean" in parse_slot_necessity(args.slot_necessity) and args.slot_layer == "final":
+            raise SystemExit("--slot-necessity mean ablates the slot states at --slot-layer: set it, or use mean@<layer>")
     if args.ckpt_single and not resumable:
         raise SystemExit("--ckpt-single needs --stop-after-h, --ckpt-every-min or --stop-at-step")
     if args.chat_template and args.rationale_lm:
@@ -589,28 +627,49 @@ def main() -> None:
     slot_loss_on = False             # a decoding pass (LSU and --slot-lambda 0: none)
     slot_stats: dict = {}
     swap_token = None
+    slot_info: dict = {}             # v2.1 (lens): the resolved layer and the value coverage, in metrics latent_slots
     if args.latent_slots:
-        from cotdistill.student import (SlotSpec, choose_slot_token, final_text, set_slot_prompt, shuffled_slot_targets,
-                                        slot_targets, slot_token_id)
+        from cotdistill.student import (SLOT_POOL, SlotSpec, choose_slot_token, choose_slot_tokens, final_text,
+                                        lens_target_ids, resolve_slot_layer, set_slot_prompt, shuffled_slot_targets,
+                                        shuffled_value_targets, slot_targets, slot_token_id, spec_slot_targets)
         try:
-            token = choose_slot_token(tok, args.slot_token)
+            if args.slot_tokens == "distinct":
+                tokens = choose_slot_tokens(tok, args.latent_slots, args.slot_token)
+                token = tokens[0]
+            else:
+                tokens, token = (), choose_slot_token(tok, args.slot_token)
             if "swap" in parse_slot_necessity(args.slot_necessity):
-                swap_token = choose_slot_token(tok, args.slot_swap_token, avoid=(token,))
-                if swap_token == token:
-                    raise ValueError(f"--slot-swap-token {swap_token!r} is the slot token")
+                swap_token = choose_slot_token(tok, args.slot_swap_token, avoid=tokens or (token,),
+                                               **({"pool": SLOT_POOL} if tokens else {}))
+                if swap_token == token or swap_token in tokens:
+                    raise ValueError(f"--slot-swap-token {swap_token!r} is a slot token")
+            layer, slot_info = resolve_slot_layer(model, args.slot_layer)
         except ValueError as e:
             raise SystemExit(f"--latent-slots: {e}")
         for name, items in [("train", train_items)] + list(evals.items()):
-            bad = [it["item_id"] for it in items if token in it["prompt"] or swap_token and swap_token in it["prompt"]]
+            bad = [it["item_id"] for it in items if any(t in it["prompt"] for t in tokens or (token,)) or
+                   swap_token and swap_token in it["prompt"]]
             if bad:
                 raise SystemExit(f"--latent-slots: the slot (or swap) token occurs in {len(bad)} {name} prompts, e.g. "
                                  f"{bad[0]}: pick another --slot-token / --slot-swap-token")
-        slot = SlotSpec(args.latent_slots, args.slot_c, token, args.slot_place)
-        set_slot_prompt(tok, slot)
+        if args.slot_readout == "decode" and not tokens:
+            slot = SlotSpec(args.latent_slots, args.slot_c, token, args.slot_place)
+        else:
+            slot = SlotSpec(args.latent_slots, args.slot_c, token, args.slot_place, tokens=tokens, layer=layer,
+                            readout=args.slot_readout, fill=args.slot_fill, head_grad=args.slot_head_grad)
+        try:
+            set_slot_prompt(tok, slot)
+        except ValueError as e:
+            raise SystemExit(f"--latent-slots: {e}")
         srcs = {x for x in args.tree_sources.split(",") if x} or None     # supervision: the --tree-sources items
         sup_items = [it for it in train_items if srcs is None or it.get("source") in srcs]
-        if args.slot_target == "shuffled":
+        if args.slot_target == "shuffled" and slot.readout == "lens":
+            slot_tg = shuffled_value_targets(sup_items, k=slot.k, overflow=args.slot_overflow, fill=slot.fill,
+                                             seed=args.seed)
+        elif args.slot_target == "shuffled":
             slot_tg = shuffled_slot_targets(sup_items, k=slot.k, overflow=args.slot_overflow, seed=args.seed)
+        elif args.slot_target == "tree" and slot.readout == "lens":
+            slot_tg = {it["item_id"]: spec_slot_targets(it, slot, args.slot_overflow) for it in sup_items}
         elif args.slot_target == "tree":
             slot_tg = {it["item_id"]: slot_targets(it, slot.k, args.slot_overflow) for it in sup_items}
         n_sup = sum(t is not None for ts in slot_tg.values() for t in ts)
@@ -624,6 +683,17 @@ def main() -> None:
               f"{sum(any(t is not None for t in ts) for ts in slot_tg.values())} items; decoding pass "
               f"{'on' if slot_loss_on else 'off'}; final question e.g. {final_text(tok, train_items[0]['prompt'])!r}",
               flush=True)
+        if slot.readout == "lens" or slot.tokens:     # v2.1: the layer, the tokens and the value coverage
+            if slot.readout == "lens":
+                real = [t for it in sup_items for t in spec_slot_targets(it, slot, args.slot_overflow) if t is not None]
+                fits = [lens_target_ids(tok, t, slot.c)[1] for t in real]
+                slot_info.update(value_targets=len(real), value_fit=sum(fits) / max(1, len(fits)),
+                                 lens_example=[tok.convert_ids_to_tokens(lens_target_ids(tok, t, slot.c)[0])
+                                               for t in spec_slot_targets(sup_items[0], slot, args.slot_overflow)
+                                               if t is not None] if sup_items else [])
+            print(f"latent slots v2.1: readout {slot.readout} at layer {slot.layer} {json.dumps(slot_info)}, fill "
+                  f"{slot.fill}, tokens {list(slot.slot_tokens())} (ids {[slot_token_id(tok, t) for t in slot.slot_tokens()]})"
+                  f", swap {swap_token!r}", flush=True)
 
     def epoch_examples() -> list[Example]:
         ex = []
@@ -1354,11 +1424,13 @@ def main() -> None:
         from cotdistill.student import SLOT_SIDECAR, slot_evals
         results["latent_slots"] = {**slot.as_dict(), "target": args.slot_target, "lambda": args.slot_lambda,
                                    "overflow": args.slot_overflow, "final_only": args.slot_final_only,
-                                   "swap_token": swap_token, "views": slot_stats}
+                                   "swap_token": swap_token, "views": slot_stats,
+                                   **({"info": slot_info} if slot_info else {})}
         slot_evals(model, tok, evals, results, out, modes=parse_slot_necessity(args.slot_necessity),
                    sets=[x for x in args.slot_necessity_sets.split(",") if x], swap_token=swap_token,
                    decode_n=args.slot_decode, decode_set=args.slot_decode_set, max_len=args.eval_max_len,
-                   bs=args.eval_bs, cache=cache, seed=args.seed, overflow=args.slot_overflow, write=is_main)
+                   bs=args.eval_bs, cache=cache, seed=args.seed, overflow=args.slot_overflow, write=is_main,
+                   mean_items=train_items[:args.slot_mean_n])
         if is_main:
             (out / SLOT_SIDECAR).write_text(json.dumps(slot.as_dict(), indent=1))
     for sname, spath in subq_sets(args.eval_subq or ""):
