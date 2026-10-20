@@ -1,0 +1,4 @@
+condor/jobs11_4b/261_4b_gsmsi_LSL-c2lr3_s12_fsdp.env, 300, 1
+condor/jobs11_4b/262_4b_gsmsi_LSLU-c2lr3_s12_fsdp.env, 299, 1
+condor/jobs11_4b/263_4b_gsmsi_LSLR-c2lr3_s12_fsdp.env, 298, 1
+condor/jobs11_4b/264_4b_gsmsi_LSLY-c2lr3_s12_fsdp.env, 297, 1
