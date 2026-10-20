@@ -119,6 +119,7 @@ python scripts/ladder_readout.py 'results/hpc/l4b/*' --out results/ladder_readou
 
 The README is updated with every push.
 
+- 2026-10-20 (2): latent slots v2.1 (arms LSL / LSLU / LSLR / LSLY: middle-layer slot loss, own-head value readout without a second pass, filled tail slots, distinct slot tokens; mean-ablation necessity and a pre-registered pilot gate); scripts/paired_stats.py (seed-level t, shared-index item bootstrap, two-level bootstrap, val-only epoch choice); CHTC batch 11 = the v2.1 pilot (batch 10 on hold).
 - 2026-10-20: failure-attribution trees v3 (index-free pointers, teacher-written clean nodes) and LOFO training pools (AgenTracer Diagnosis, Who&When Pro text, CORRECT) with a tree post-check and label audit; CHTC batch 10 (slots + yes/no seeds 12 / 15 / 16; GSM8K-Aug 24k answer-only vs slots at 1 and 2 epochs).
 - 2026-10-19 (3): CHTC batch 9 (Qwen3.5-9B, MC nodes at 1 epoch, seeds 12 / 13 / 14) for the 9B best-vs-best comparison.
 - 2026-10-19 (2): Tree Forcing v2 latent node slots (arms LS / LSU / LSR / LSY, cb0e84f); CHTC batch 8 (latent-slot pilot);
