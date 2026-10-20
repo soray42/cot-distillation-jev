@@ -150,6 +150,22 @@
 # metrics slot_readout (exact value match per slot) and slot_pilot (pass: value readout >= 45% and mean-ablation
 # acc_drop >= 2 points). Run dirs: -sk/-sc/-sl/-sp as LS, plus -sL<SLOTL> -sF<SLOTFILL> -sT<SLOTTOK>; relays must put
 # SLOTL SLOTFILL SLOTTOK SLOTDECSET in their reset list too.
+# Batch 12 diagnostics (notes/latent_slots_v21_audit_2026-10-20.md), v2.1 arms: SLOTPADW=W (--slot-pad-weight: weight
+# of a slot's "\n" padding positions in its lens CE, 0 = the value's own tokens only, renormalised over the counted
+# positions) and SLOTOV=truncate (--slot-overflow: a chain longer than SLOTK keeps its FIRST SLOTK steps; SLOTK=1
+# SLOTOV=truncate SLOTFILL=none supervises only the first worked step's value); run dirs -sW<W> -sO<ov>.
+# PROBE=1: after training the model is written to a job-local dir (PROBE_TMP, default $_CONDOR_SCRATCH_DIR, else
+# $TMPDIR, else /tmp; never in the run dir, never uploaded, SAVE stays off), scripts/probe_slots.py probes it (linear
+# probes of every layer at the slot / problem / "Answer:" positions, the frozen-head lens at every layer; fit on
+# PROBE_N, default 3000, items of $DATA/train.jsonl; held-out PROBE_HELDOUT, default "val=$DATA/val.jsonl
+# gsm8kv2=data/eval/gsm8k_mc_v2_steps.jsonl"), the probe outputs go to $OUT/probe/ and the weights are deleted (an
+# EXIT trap deletes them too). With SAVE=1 as well, $OUT/model is probed and kept. The run dir gets -pr before the TAG
+# (a probed rerun never shares a dir with the run it repeats, e.g. batch 11's LSL). PROBE_ONLY=1 with MODEL: no
+# training; the untrained MODEL is probed with the slot line of each v2.1 arm in ARMS (its SLOTK / SLOTC / SLOTTOK /
+# SLOTPLACE / SLOTL / SLOTFILL / SLOTOV / SLOTPADW knobs, defaults as LSL; PROBE_SPEC=<run dir | json>: that run's
+# latent_slots.json instead) into runs/PROBE-<arm><knobs>-<model>-<data> (logged as "=== PROBE -> <dir>"). PROBE_ARGS:
+# more probe_slots.py options. The smoke stage probes the smoke model (PROBE_ONLY: MODEL) on 16 + 4 items. Relays must
+# put SLOTPADW SLOTOV PROBE PROBE_ONLY PROBE_N PROBE_HELDOUT PROBE_SPEC PROBE_TMP PROBE_ARGS in their reset list.
 # NODEW=w gives every node view weight w (--tree-node-weight; default: the per-problem split, aux 1.0 / views, about
 # .023 per K&K node); set it to the same value for all arms of a comparison. LOCAL_EVAL=path scores the
 # local-step probe (--eval-local: every K&K node in its local view, eval key local_kk); when unset it is
@@ -214,12 +230,21 @@ nvidia-smi -L 2>/dev/null || echo "no nvidia-smi here"
 [ -f "$DATA/train.jsonl" ] || { echo "missing $DATA/train.jsonl"; exit 1; }
 EVALS="val=$DATA/val.jsonl kk=data/eval/kk_heldout.jsonl jl=data/eval/jl_heldout.jsonl jevbench=data/eval/jevbench_public.jsonl td=data/eval/typed_decisions_test.jsonl bbeh=data/eval/bbeh.jsonl ${EXTRA_EVALS:-}"
 for f in $EVALS; do [ -f "${f#*=}" ] || { echo "missing eval file ${f#*=}"; exit 1; }; done
+PT=                                     # PROBE=1: the job-local model dir of the arm being probed (deleted on exit)
+trap '[ -z "$PT" ] || rm -rf "$PT"' EXIT
+PH=                                     # PROBE / PROBE_ONLY: the probe's held-out sets
+if [ -n "${PROBE:-}${PROBE_ONLY:-}" ]; then
+  [ -z "${PROBE:-}" ] || [ -z "${PROBE_ONLY:-}" ] || { echo "PROBE and PROBE_ONLY exclude each other"; exit 1; }
+  [ -f "$REPO/scripts/probe_slots.py" ] || { echo "missing $REPO/scripts/probe_slots.py"; exit 1; }
+  PH="${PROBE_HELDOUT:-val=$DATA/val.jsonl gsm8kv2=data/eval/gsm8k_mc_v2_steps.jsonl}"
+  for f in $PH; do [ -f "${f#*=}" ] || { echo "missing probe held-out file ${f#*=}"; exit 1; }; done
+fi
 
 arm_config() {           # sets F S T RLM DS DX EPD for arm $1 (EPD: the arm's default EPOCHS, empty = 2)
   RLM=; DS=; DX=; EPD=
   local SL="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --latent-slots ${SLOTK:-6} --slot-c ${SLOTC:-1} --slot-lambda ${SLOTLAM:-1.0} --slot-place ${SLOTPLACE:-before-options} --slot-necessity ${SLOTNEC:-swap,drop,noise@mid:1.0} --slot-decode ${SLOTDEC:-32}"
   local NS="${SLOTNECSETS:-${EVALMID:-}}"; SL="$SL${NS:+ --slot-necessity-sets $NS}"
-  local SLL="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --latent-slots ${SLOTK:-6} --slot-c ${SLOTC:-4} --slot-lambda ${SLOTLAM:-1.0} --slot-place ${SLOTPLACE:-before-options} --slot-layer ${SLOTL:-0.67} --slot-readout lens --slot-fill ${SLOTFILL:-last} --slot-tokens ${SLOTTOK:-distinct} --slot-necessity ${SLOTNEC:-swap,drop,mean} --slot-decode ${SLOTDEC:-400}${SLOTDECSET:+ --slot-decode-set $SLOTDECSET}${NS:+ --slot-necessity-sets $NS}"
+  local SLL="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --latent-slots ${SLOTK:-6} --slot-c ${SLOTC:-4} --slot-lambda ${SLOTLAM:-1.0} --slot-place ${SLOTPLACE:-before-options} --slot-layer ${SLOTL:-0.67} --slot-readout lens --slot-fill ${SLOTFILL:-last}${SLOTPADW:+ --slot-pad-weight $SLOTPADW}${SLOTOV:+ --slot-overflow $SLOTOV} --slot-tokens ${SLOTTOK:-distinct} --slot-necessity ${SLOTNEC:-swap,drop,mean} --slot-decode ${SLOTDEC:-400}${SLOTDECSET:+ --slot-decode-set $SLOTDECSET}${NS:+ --slot-necessity-sets $NS}"
   case "$1" in
     A1) F=gold;    S=none;   T=cot ;;
     A2) F=teacher; S=none;   T=cot ;;
@@ -312,6 +337,16 @@ train() {                # train <arm> <train.jsonl> <evals> <out> [extra args..
     ${LSMOOTH:+--label-smoothing "$LSMOOTH"} ${TOKBUDGET:+--token-budget "$TOKBUDGET"} ${NODEW:+--tree-node-weight "$NODEW"} \
     ${le:+--eval-local "$le"} --code-commit "$COMMIT" "$@"
 }
+probe() {                # probe <model dir> <out dir> <train.jsonl> [more probe_slots.py args...]
+  local m=$1 o=$2 trn=$3; shift 3
+  $PY $REPO/scripts/probe_slots.py --model "$m" --out "$o" --train "$trn" --train-n "${PROBE_N:-3000}" \
+    --heldout $PH --max-len 1536 --png ${PROBE_ARGS:-} "$@"
+}
+probe_spec() {           # PROBE_ONLY: the slot line of v2.1 arm $1 as probe_slots.py flags (PROBE_SPEC: from that run)
+  if [ -n "${PROBE_SPEC:-}" ]; then echo "--slot-spec-from $PROBE_SPEC"; return 0; fi
+  case "$1" in LSL|LSLU|LSLR|LSLY) ;; *) echo "PROBE_ONLY: $1 is not a v2.1 slot arm (LSL / LSLU / LSLR / LSLY); set PROBE_SPEC" >&2; return 1 ;; esac
+  echo "--latent-slots ${SLOTK:-6} --slot-c ${SLOTC:-4} --slot-tokens ${SLOTTOK:-distinct} --slot-place ${SLOTPLACE:-before-options} --slot-layer ${SLOTL:-0.67} --slot-fill ${SLOTFILL:-last} --slot-overflow ${SLOTOV:-merge}${SLOTPADW:+ --slot-pad-weight $SLOTPADW}"
+}
 stop_h() {               # hours left until STOPH hours after the job start (at least 0.01)
   awk -v h="$STOPH" -v e="$(( $(date +%s) - JOB_T0 ))" 'BEGIN { r = h - e / 3600; printf "%.3f", (r < 0.01 ? 0.01 : r) }'
 }
@@ -330,19 +365,36 @@ head -n 16 "$DATA/train.jsonl" > "$SM/train.jsonl"
 head -n 20 data/eval/kk_heldout.jsonl > "$SM/eval.jsonl"
 [ -z "$LOCAL_EVAL" ] || grep -m 2 '"local_preamble"' "$LOCAL_EVAL" > "$SM/local.jsonl" || true   # no local fields: empty probe
 [ -z "${CKPTONE:-}" ] || [ -n "${STOPH:-}${CKPTMIN:-}" ] || { echo "CKPTONE needs STOPH or CKPTMIN"; exit 1; }
-for ARM in $ARMS; do
+sa=$ARMS; [ -z "${PROBE_ONLY:-}" ] || sa=     # PROBE_ONLY trains nothing (lower case: internal)
+for ARM in $sa; do
   if [ -n "${STOPH:-}${CKPTMIN:-}" ]; then   # resume needs a full-tree arm (one-slice token budgets work for every arm
     arm_config "$ARM"                         # since e0ca874)
     [[ " $DX ${XARGS:-} " == *" --tree-full "* ]] || { echo "SMOKE FAILED $ARM: STOPH/CKPTMIN need a full-tree arm"; exit 1; }
     [[ " $DX ${XARGS:-} " != *" --si-stages "* ]] || { echo "SMOKE FAILED $ARM: SI arms (multi-stage) do not resume: no STOPH/CKPTMIN"; exit 1; }
   fi
   SUBQ_EXTRA= le=${LOCAL_EVAL:+$SM/local.jsonl} train "$ARM" "$SM/train.jsonl" "smoke=$SM/eval.jsonl" "$SM/out-$ARM" --epochs 0.5 --micro-bs 2 --grad-accum 2 \
-    > "$SM/$ARM.log" 2>&1 || { echo "SMOKE FAILED $ARM"; tail -n 30 "$SM/$ARM.log"; exit 1; }
+    ${PROBE:+--save --save-dir $SM/pm-$ARM} > "$SM/$ARM.log" 2>&1 || { echo "SMOKE FAILED $ARM"; tail -n 30 "$SM/$ARM.log"; exit 1; }
   [ -n "${DRY_RUN:-}" ] || grep -q '^smoke {' "$SM/$ARM.log" || { echo "SMOKE FAILED $ARM (no eval line)"; tail -n 30 "$SM/$ARM.log"; exit 1; }
   [ -n "${DRY_RUN:-}" ] || [ ! -s "$SM/local.jsonl" ] || grep -q '^local_kk' "$SM/$ARM.log" || { echo "SMOKE FAILED $ARM (no local_kk line)"; tail -n 30 "$SM/$ARM.log"; exit 1; }
   echo "smoke ok $ARM"
+  if [ -n "${PROBE:-}" ]; then          # the probe of the smoke model (16 train + 4 held-out items per set)
+    probe "$SM/pm-$ARM" "$SM/probe-$ARM" "$SM/train.jsonl" --train-n 16 --heldout-n 4 --fit-steps 5 --layer-chunk 0 \
+      > "$SM/probe-$ARM.log" 2>&1 || { echo "SMOKE FAILED probe $ARM"; tail -n 30 "$SM/probe-$ARM.log"; exit 1; }
+    [ -n "${DRY_RUN:-}" ] || [ -f "$SM/probe-$ARM/probe_results.json" ] || { echo "SMOKE FAILED probe $ARM (no probe_results.json)"; tail -n 30 "$SM/probe-$ARM.log"; exit 1; }
+    rm -rf "$SM/pm-$ARM"
+    echo "smoke ok probe $ARM"
+  fi
 done
-if [ -n "${STOPH:-}${CKPTMIN:-}" ]; then   # checkpoint round trip on the first arm: planned stop after update 1, resume
+if [ -n "${PROBE_ONLY:-}" ]; then        # the probe of the untrained MODEL with each arm's slot line
+  for ARM in $ARMS; do
+    ps=$(probe_spec "$ARM") || exit 1
+    probe "$MODEL" "$SM/probe-$ARM" "$SM/train.jsonl" $ps --train-n 16 --heldout-n 4 --fit-steps 5 --layer-chunk 0 \
+      > "$SM/probe-$ARM.log" 2>&1 || { echo "SMOKE FAILED probe $ARM"; tail -n 30 "$SM/probe-$ARM.log"; exit 1; }
+    [ -n "${DRY_RUN:-}" ] || [ -f "$SM/probe-$ARM/probe_results.json" ] || { echo "SMOKE FAILED probe $ARM (no probe_results.json)"; tail -n 30 "$SM/probe-$ARM.log"; exit 1; }
+    echo "smoke ok probe $ARM ($MODEL)"
+  done
+fi
+if [ -n "${STOPH:-}${CKPTMIN:-}" ] && [ -z "${PROBE_ONLY:-}" ]; then   # checkpoint round trip on the first arm: planned stop after update 1, resume
   a=${ARMS%% *}; rc=0                    # (lower case: internal, so relay reset lists need not know them)
   SUBQ_EXTRA= train "$a" "$SM/train.jsonl" "smoke=$SM/eval.jsonl" "$SM/res-$a" --epochs 1 --items-per-update 4 \
     ${CKPTONE:+--ckpt-single} --stop-at-step 1 > "$SM/res1.log" 2>&1 || rc=$?
@@ -387,21 +439,43 @@ fi
 for ARM in $ARMS; do
   SF=$(sed -n 's/.*--subq-filter[ =]\([a-z]*\).*/\1/p' <<< "${XARGS:-}")               # XARGS chain filter -> -sf<f>
   SLD=; case "$ARM" in LS|LSU|LSR|LSY|LSL|LSLU|LSLR|LSLY) SLD="${SLOTK:+-sk$SLOTK}${SLOTC:+-sc$SLOTC}${SLOTLAM:+-sl$SLOTLAM}${SLOTPLACE:+-sp${SLOTPLACE%%-*}}" ;; esac
-  case "$ARM" in LSL|LSLU|LSLR|LSLY) SLD="$SLD${SLOTL:+-sL$SLOTL}${SLOTFILL:+-sF$SLOTFILL}${SLOTTOK:+-sT$SLOTTOK}" ;; esac   # v2.1 knobs
-  OUT="runs/${ARM}${SF:+-sf$SF}${NODEW:+-nw$NODEW}${SLD}${TAG:+-$TAG}-$(basename "$MODEL")-$(basename "$DATA")-s${SEED}"   # TAG names recipe variants; NODEW -> -nw<w>; slot knobs -> -sk/-sc/-sl/-sp
+  case "$ARM" in LSL|LSLU|LSLR|LSLY) SLD="$SLD${SLOTL:+-sL$SLOTL}${SLOTFILL:+-sF$SLOTFILL}${SLOTTOK:+-sT$SLOTTOK}${SLOTPADW:+-sW$SLOTPADW}${SLOTOV:+-sO$SLOTOV}" ;; esac   # v2.1 knobs
+  if [ -n "${PROBE_ONLY:-}" ]; then     # no training: the untrained MODEL with this arm's slot line
+    po="runs/PROBE-${ARM}${SLD}-$(basename "$MODEL")-$(basename "$DATA")"
+    ps=$(probe_spec "$ARM") || exit 1
+    echo "=== PROBE -> $po  $(date +%T)"
+    probe "$MODEL" "$po" "$DATA/train.jsonl" $ps || echo "probe failed $ARM"
+    echo "done $po  $(date +%T)"
+    continue
+  fi
+  OUT="runs/${ARM}${SF:+-sf$SF}${NODEW:+-nw$NODEW}${SLD}${PROBE:+-pr}${TAG:+-$TAG}-$(basename "$MODEL")-$(basename "$DATA")-s${SEED}"   # TAG names recipe variants; NODEW -> -nw<w>; slot knobs -> -sk/-sc/-sl/-sp
   if [ -n "${STOPH:-}${CKPTMIN:-}" ] && [ -f "$OUT/metrics.json" ] && [ ! -d "$OUT/ckpt" ]; then
     echo "=== $ARM: $OUT finished in an earlier job, skipped"; continue
   fi
   echo "=== $ARM -> $OUT  $(date +%T)"
   rc=0
   arm_config "$ARM" || true             # EPD: the arm's default epochs (SI arms: SISTAGES + 1)
+  sv=${SAVE:+--save}; pm=               # PROBE: the model to probe (job-local unless SAVE; lower case: internal)
+  if [ -n "${PROBE:-}" ]; then
+    if [ -n "${SAVE:-}" ]; then pm="$OUT/model"
+    else PT="${PROBE_TMP:-${_CONDOR_SCRATCH_DIR:-${TMPDIR:-/tmp}}}/probe-model-${SLURM_JOB_ID:-$$}-$ARM"; pm="$PT/model"; sv="--save --save-dir $pm"
+    fi
+  fi
   le=$LOCAL_EVAL train "$ARM" "$DATA/train.jsonl" "$EVALS" "$OUT" --epochs "${EPOCHS:-${EPD:-2}}" --micro-bs "${MBS:-2}" \
-    --grad-accum "${GA:-16}" ${SAVE:+--save} ${STOPH:+--stop-after-h "$(stop_h)"} ${CKPTMIN:+--ckpt-every-min "$CKPTMIN"} \
+    --grad-accum "${GA:-16}" $sv ${STOPH:+--stop-after-h "$(stop_h)"} ${CKPTMIN:+--ckpt-every-min "$CKPTMIN"} \
     ${CKPTONE:+--ckpt-single} || rc=$?
   if [ "$rc" = 3 ] || { [ "$rc" != 0 ] && [ -f "$OUT/planned_stop" ]; }; then   # (torchrun: exit 1 + marker)
     echo "PLANNED STOP $ARM: checkpoint in $OUT/ckpt; resubmit the same job to resume  $(date +%T)"; exit 3
   fi
   [ "$rc" = 0 ] || echo "arm $ARM failed"
+  if [ -n "${PROBE:-}" ]; then          # the probe outputs into $OUT/probe, then the job-local weights go
+    if [ "$rc" = 0 ]; then
+      echo "=== probe of $ARM: $pm into $OUT/probe  $(date +%T)"
+      probe "$pm" "$OUT/probe" "$DATA/train.jsonl" || echo "probe failed $ARM"
+    fi
+    [ -z "$PT" ] || rm -rf "$PT"
+    PT=
+  fi
   echo "done $OUT  $(date +%T)"
 done
 echo "all done $(date +%T)"

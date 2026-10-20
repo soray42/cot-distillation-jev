@@ -41,7 +41,7 @@ from cotdistill.student import (Example, brier_loss, build_examples, build_fact_
 RESUME_FREE = {"stop_after_h", "ckpt_every_min", "ckpt_single", "stop_at_step", "code_commit", "eval", "eval_subq", "eval_bs",
                "eval_max_len", "dump_hidden", "dump_layers", "log_every", "save", "eval_local", "eval_local_view",
                "log_update_loss", "eval_mid_preds", "slot_necessity", "slot_necessity_sets", "slot_swap_token",
-               "slot_decode", "slot_decode_set", "slot_mean_n"}
+               "slot_decode", "slot_decode_set", "slot_mean_n", "save_dir"}
 
 # Training arguments added after checkpoints may have been written: a checkpoint without the key had this value.
 NEW_ARG_DEFAULTS = {"tree_view": "problem", "tree_sources": "", "tree_node_weight": 0.0, "attn_impl": "", "fsdp": False,
@@ -52,7 +52,7 @@ NEW_ARG_DEFAULTS = {"tree_view": "problem", "tree_sources": "", "tree_node_weigh
                     "curriculum_mode": "cumulative", "curriculum_final_nodes": False, "latent_slots": 0, "slot_c": 1,
                     "slot_token": "auto", "slot_place": "before-options", "slot_lambda": 1.0, "slot_target": "tree",
                     "slot_overflow": "merge", "slot_final_only": False, "slot_layer": "final", "slot_readout": "decode",
-                    "slot_fill": "none", "slot_tokens": "same", "slot_head_grad": False}
+                    "slot_fill": "none", "slot_tokens": "same", "slot_head_grad": False, "slot_pad_weight": 1.0}
 
 LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj",
                 "in_proj_qkv", "in_proj_z", "in_proj_a", "in_proj_b", "out_proj"]
@@ -306,6 +306,10 @@ def main() -> None:
     ap.add_argument("--slot-head-grad", action="store_true",
                     help="--slot-readout lens: let the slot loss train the LM head (the tied input embedding on "
                          "Qwen3.5-2B / 4B); default off: the head is read detached, a fixed readout")
+    ap.add_argument("--slot-pad-weight", type=float, default=1.0,
+                    help="--slot-readout lens: weight of the SLOT_END padding positions of a slot in its lens CE, "
+                         "relative to the value's own tokens (1 = the plain mean over the c positions, as before; 0 = "
+                         "only the value's tokens count), the CE renormalised over the weights")
     ap.add_argument("--slot-mean-n", type=int, default=300,
                     help="--slot-necessity mean: the slot means come from the first N training items")
     ap.add_argument("--aux-total", type=float, default=1.0,
@@ -370,6 +374,8 @@ def main() -> None:
     ap.add_argument("--eval-bs", type=int, default=8)
     ap.add_argument("--eval-max-len", type=int, default=6144, help="long eval states (JevBench hard) need more room")
     ap.add_argument("--save", action="store_true", help="save the final weights (bf16) to <out>/model")
+    ap.add_argument("--save-dir", default="", help="--save: write the model (and latent_slots.json) to this directory "
+                    "instead of <out>/model, e.g. a job-local dir for a probe that is not uploaded (hpc PROBE=1)")
     ap.add_argument("--eval-at", default="", help="training-length curve: comma list of points, in epochs, at which "
                     "the --eval-mid sets are evaluated during training (e.g. 0.5,1,2,4); stored as metrics.json trajectory")
     ap.add_argument("--eval-mid", default="", help="comma list of --eval set names for the --eval-at points (default all)")
@@ -514,7 +520,8 @@ def main() -> None:
                   args.slot_final_only or args.slot_necessity or args.slot_necessity_sets or
                   args.slot_swap_token != "auto" or args.slot_decode or args.slot_decode_set or
                   args.slot_layer != "final" or args.slot_readout != "decode" or args.slot_fill != "none" or
-                  args.slot_tokens != "same" or args.slot_mean_n != 300 or args.slot_head_grad)
+                  args.slot_tokens != "same" or args.slot_mean_n != 300 or args.slot_head_grad or
+                  args.slot_pad_weight != 1.0)
     if args.latent_slots < 0 or slot_flags and not args.latent_slots:
         raise SystemExit("--slot-* options need --latent-slots K >= 1")
     if args.latent_slots and (args.tree_full != "plain" or args.node_format != "yesno" or
@@ -537,9 +544,11 @@ def main() -> None:
         if args.slot_readout == "lens" and args.slot_layer == "final":
             raise SystemExit("--slot-readout lens needs an intermediate --slot-layer (e.g. 0.67)")
         if args.slot_readout == "decode" and (args.slot_layer != "final" or args.slot_fill != "none" or
-                                              args.slot_head_grad):
-            raise SystemExit("--slot-layer / --slot-fill / --slot-head-grad are for --slot-readout lens (decode reads "
-                             "the final states)")
+                                              args.slot_head_grad or args.slot_pad_weight != 1.0):
+            raise SystemExit("--slot-layer / --slot-fill / --slot-head-grad / --slot-pad-weight are for --slot-readout "
+                             "lens (decode reads the final states)")
+        if not (args.slot_pad_weight >= 0.0 and math.isfinite(args.slot_pad_weight)):
+            raise SystemExit("--slot-pad-weight >= 0")
         if args.slot_mean_n < 1:
             raise SystemExit("--slot-mean-n >= 1")
         if "mean" in parse_slot_necessity(args.slot_necessity) and args.slot_layer == "final":
@@ -556,8 +565,11 @@ def main() -> None:
     # sees the same problems in the same updates in every epoch (common random numbers for paired comparisons);
     # sampling inside a group still uses rng.
     order_rng = random.Random(f"order-{args.seed if args.order_seed is None else args.order_seed}")
+    if args.save_dir and not args.save:
+        raise SystemExit("--save-dir needs --save")
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
+    save_to = Path(args.save_dir) if args.save_dir else out / "model"    # --save (--save-dir: a job-local dir)
     fs = None                        # --fsdp: rank, world, device and mesh (cotdistill.fsdp.Dist)
     if args.fsdp:
         import torch.distributed as dist
@@ -656,7 +668,8 @@ def main() -> None:
             slot = SlotSpec(args.latent_slots, args.slot_c, token, args.slot_place)
         else:
             slot = SlotSpec(args.latent_slots, args.slot_c, token, args.slot_place, tokens=tokens, layer=layer,
-                            readout=args.slot_readout, fill=args.slot_fill, head_grad=args.slot_head_grad)
+                            readout=args.slot_readout, fill=args.slot_fill, head_grad=args.slot_head_grad,
+                            pad_weight=args.slot_pad_weight, overflow=args.slot_overflow)
         try:
             set_slot_prompt(tok, slot)
         except ValueError as e:
@@ -693,7 +706,8 @@ def main() -> None:
                                                if t is not None] if sup_items else [])
             print(f"latent slots v2.1: readout {slot.readout} at layer {slot.layer} {json.dumps(slot_info)}, fill "
                   f"{slot.fill}, tokens {list(slot.slot_tokens())} (ids {[slot_token_id(tok, t) for t in slot.slot_tokens()]})"
-                  f", swap {swap_token!r}", flush=True)
+                  f", swap {swap_token!r}" + (f", pad weight {slot.pad_weight}" if slot.pad_weight != 1.0 else ""),
+                  flush=True)
 
     def epoch_examples() -> list[Example]:
         ex = []
@@ -1460,10 +1474,10 @@ def main() -> None:
         if args.save:                    # full bf16 state dict gathered on rank 0's CPU (collective), rank 0 writes it
             sd = fsdp_lib.full_state_dict(model)
             if is_main:
-                model.model.save_pretrained(out / "model", state_dict=sd, safe_serialization=True)
-                tok.save_pretrained(out / "model")
+                model.model.save_pretrained(save_to, state_dict=sd, safe_serialization=True)
+                tok.save_pretrained(save_to)
                 if slot is not None:     # eval_student rebuilds the slot line from it
-                    shutil.copy(out / SLOT_SIDECAR, out / "model" / SLOT_SIDECAR)
+                    shutil.copy(out / SLOT_SIDECAR, save_to / SLOT_SIDECAR)
             del sd
         fs.barrier()
         dist.destroy_process_group()
@@ -1473,10 +1487,10 @@ def main() -> None:
         if args.lora_r:                  # adapter for reuse, merged weights so <out>/model loads like a full checkpoint
             model.save_pretrained(out / "adapter")
             model = model.merge_and_unload()
-        model.to(torch.bfloat16).save_pretrained(out / "model", safe_serialization=True)
-        tok.save_pretrained(out / "model")
+        model.to(torch.bfloat16).save_pretrained(save_to, safe_serialization=True)
+        tok.save_pretrained(save_to)
         if slot is not None:             # eval_student rebuilds the slot line from it
-            shutil.copy(out / SLOT_SIDECAR, out / "model" / SLOT_SIDECAR)
+            shutil.copy(out / SLOT_SIDECAR, save_to / SLOT_SIDECAR)
     if resumable:                        # finished: metrics (and weights) are written, the checkpoint goes
         shutil.rmtree(ck_dir, ignore_errors=True)
 

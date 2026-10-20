@@ -24,6 +24,15 @@ v2.1 (lens readout; arms LSL / LSLU / LSLR / LSLY):
   a 100% lens readout;
 - mean-ablation (own means = intact, other means change the readout), the lens readout and the pilot summary; LSL /
   LSLU / LSLR / LSLY end to end with eval_student on the saved LSL; LSL under --fsdp (2 and 1 ranks) = single process.
+Batch 12 (--slot-pad-weight, K = 1 with --slot-overflow truncate, --save-dir):
+- the position weights (value tokens 1, pads W, renormalised; W = 1 the plain mean), the lens loss = a manual
+  weighted computation at W = 0 and 0.5, W -> 1 continuous with the W = 1 path, no gradient on a pad position's
+  state at W = 0;
+- K = 1, truncate, fill none supervises the FIRST worked step's value (gsm8k-train-660: 6; merge would give the answer
+  step's 20); end to end (pad weight 0, lambda 4): the slot targets, the readout's value_prefix / first and the pilot
+  on them, the sidecar with pad_weight / overflow, --save-dir, eval_student taking the overflow from the sidecar;
+- the v2.1 arms LSL / LSLU / LSLR / LSLY at the default flags and eval_student on the saved LSL: LS22_BASE_REF's
+  files (byte-identical); the new argument checks; the K = 1 pad-0 LSL under --fsdp on one rank = single process.
 CPU only (CUDA_VISIBLE_DEVICES="")."""
 import dataclasses
 import glob
@@ -49,6 +58,8 @@ GSM = {it["item_id"]: it for it in ITEMS}
 LS_BASE_REF = os.environ.get("LS_BASE_REF", "c0b31c6")
 # The last commit before latent slots v2.1: the v2 slot arms are compared with it.
 LS21_BASE_REF = os.environ.get("LS21_BASE_REF", "693ca28")
+# The last commit before --slot-pad-weight / --save-dir (batch 12): the v2.1 arms are compared with it.
+LS22_BASE_REF = os.environ.get("LS22_BASE_REF", "6b8ac87")
 VALUES_660 = ["6", "8", "2", "10", "18", "20"]
 DIST = ("§", "©", "®", "°", "±", "¢")      # GPT-2: single tokens, runs and neighbours do not merge, absent from prompts
 LINES_660 = ["4 + 2 = 6", "4 × 2 = 8", "4 ÷ 2 = 2", "4 + 6 = 10", "10 + 8 = 18", "18 + 2 = 20"]
@@ -1180,6 +1191,276 @@ class TestV21FSDP(unittest.TestCase):
                     rb = [json.loads(l) for l in open(f"{d}/{arm}-{tag}/slot_readout_v.jsonl")]
                     self.assertEqual(ra, rb, (arm, tag))
                     self.assertEqual(a["slot_pilot"], b["slot_pilot"], (arm, tag))
+
+
+# ----------------------------------------------------------------------------------------- batch 12 (pad weight, K = 1)
+@unittest.skipUnless(HAVE, "needs torch + transformers")
+class TestPadWeight(unittest.TestCase):
+    def setUp(self):
+        from cotdistill.student import set_slot_prompt
+        self.tok = gpt2()
+        self.spec = lens_spec()
+        self.addCleanup(set_slot_prompt, self.tok, None)
+
+    def test_position_weights(self):
+        from cotdistill.student import lens_position_weights
+        self.assertEqual(lens_position_weights(1, 4, 1.0), [0.25] * 4)
+        self.assertEqual(lens_position_weights(1, 4, 0.0), [1.0, 0.0, 0.0, 0.0])
+        for a, b in zip(lens_position_weights(2, 4, 0.5), [1 / 3, 1 / 3, 1 / 6, 1 / 6]):
+            self.assertAlmostEqual(a, b)
+        self.assertEqual(lens_position_weights(6, 4, 0.0), [0.25] * 4)     # a value of more than c tokens
+        self.assertEqual(lens_position_weights(0, 4, 0.0), [0.25] * 4)     # the weight-0 FSDP stand-in
+
+    def manual(self, m, b, W):
+        """Sum over supervised slots of weight x lambda x (sum_i w_i CE_i / sum_i w_i), w = 1 on the value's tokens,
+        W on the pads; and the per-slot CEs."""
+        from cotdistill.student import collate
+        sids = [self.tok.encode(t)[0] for t in DIST]
+        tot, ces = 0.0, []
+        with torch.no_grad():
+            c = collate(self.tok, b, 640, "cpu")
+            hs = m.model(input_ids=c["input_ids"], attention_mask=c["attention_mask"],
+                         output_hidden_states=True).hidden_states[1]
+            for i, e in enumerate(b):
+                row = c["input_ids"][i].tolist()
+                for j, t in enumerate(e.slot_targets):
+                    pos = [q for q, x in enumerate(row) if x == sids[j]]
+                    ids = self.tok.encode(t)
+                    y = (ids + [198, 198])[:2]
+                    n = min(len(ids), 2)
+                    w = torch.tensor([1.0] * n + [W] * (2 - n))
+                    ce = torch.nn.functional.cross_entropy(m.lm_head(m.model.norm(hs[i, pos])), torch.tensor(y),
+                                                           reduction="none")
+                    v = float((w * ce).sum() / w.sum())
+                    ces.append(v)
+                    tot += e.weight * e.slot_lambda * v
+        return tot, ces
+
+    def test_loss_manual(self):
+        from cotdistill.student import set_slot_prompt, slot_forward
+        m = tiny_untied(self.tok).eval()
+        b = lens_batch(self.spec)
+        self.assertTrue(any(len(self.tok.encode(t)) == 1 for e in b for t in e.slot_targets if t))   # pads exist
+        out = {}
+        for W in (0.0, 0.5, 1.0, 1.0 - 1e-7):
+            set_slot_prompt(self.tok, dataclasses.replace(self.spec, pad_weight=W))
+            _, loss, st = slot_forward(m, self.tok, b, 640, {})
+            tot, ces = self.manual(m, b, W)
+            self.assertAlmostEqual(loss.item(), tot, places=5, msg=W)
+            self.assertAlmostEqual(st["slot_ce_sum"], sum(ces), places=4, msg=W)
+            self.assertEqual(st["slot_n"], 12)
+            out[W] = loss.item()
+        self.assertNotAlmostEqual(out[0.0], out[1.0], places=3)
+        self.assertAlmostEqual(out[1.0 - 1e-7], out[1.0], places=5)        # the W != 1 path -> the old one
+        set_slot_prompt(self.tok, self.spec)                                # W = 1 is the default spec, unchanged
+        self.assertEqual(slot_forward(m, self.tok, b, 640, {})[1].item(), out[1.0])
+
+    def test_no_gradient_on_pads(self):
+        """W = 0: a pad position's layer-0 state gets no gradient from the slot loss; the value's own position does."""
+        from cotdistill.fsdp import decoder_layers
+        from cotdistill.student import collate, set_slot_prompt, slot_forward
+        b = lens_batch(self.spec, ids=("gsm8k-train-660",))                 # 6, 8, 2, 10, 18, 20: 1-token values
+        self.assertTrue(all(len(self.tok.encode(t)) == 1 for t in b[0].slot_targets))
+        for W, pad_zero in ((0.0, True), (1.0, False)):
+            set_slot_prompt(self.tok, dataclasses.replace(self.spec, pad_weight=W))
+            m = tiny_untied(self.tok)
+            seen = []
+
+            def keep(mod, args, kwargs):
+                h = args[0] if args else kwargs["hidden_states"]
+                h.retain_grad()
+                seen.append(h)
+            hd = decoder_layers(m.model)[1].register_forward_pre_hook(keep, with_kwargs=True)
+            _, sl, _ = slot_forward(m, self.tok, b, 640, {})
+            hd.remove()
+            sl.backward()
+            row = collate(self.tok, b, 640, "cpu")["input_ids"][0].tolist()
+            for j, t in enumerate(DIST):
+                pos = [q for q, x in enumerate(row) if x == self.tok.encode(t)[0]]
+                g = seen[0].grad[0]
+                self.assertGreater(float(g[pos[0]].abs().sum()), 0, (W, j))
+                self.assertEqual(float(g[pos[1]].abs().sum()) == 0.0, pad_zero, (W, j))
+
+
+class TestK1Truncate(unittest.TestCase):
+    def test_first_step(self):
+        """K = 1, --slot-overflow truncate, --slot-fill none: slot 1's target is the FIRST worked step's value
+        (gsm8k-train-660: 6); merge would put the last (answer) step's value there (20); every fixture chain."""
+        from cotdistill.student import SlotSpec, shuffled_value_targets, slot_value_targets, spec_slot_targets
+        it = GSM["gsm8k-train-660"]
+        self.assertEqual(slot_value_targets(it, 1, "truncate", "none"), ["6"])
+        self.assertEqual(slot_value_targets(it, 1, "merge", "none"), ["20"])
+        self.assertEqual(slot_value_targets(it, 1, "truncate", "last"), ["6"])
+        spec = SlotSpec(1, 4, DIST[0], tokens=(DIST[0],), layer=0, readout="lens", fill="none", pad_weight=0.0,
+                        overflow="truncate")
+        self.assertEqual(spec_slot_targets(it, spec, "truncate"), ["6"])
+        for x in ITEMS:
+            vals = [s["value"] for s in x.get("worked_steps") or []]
+            self.assertEqual(spec_slot_targets(x, spec, "truncate"), [vals[0]] if vals else [None], x["item_id"])
+        sh = shuffled_value_targets(ITEMS, k=1, overflow="truncate", fill="none", seed=0)
+        self.assertNotEqual(sh["gsm8k-train-660"], ["6"])
+        self.assertEqual(spec.as_dict()["overflow"], "truncate")
+        self.assertEqual(spec.as_dict()["pad_weight"], 0.0)
+        d = lens_spec().as_dict()                                           # defaults stay out of the sidecar
+        self.assertNotIn("pad_weight", d)
+        self.assertNotIn("overflow", d)
+
+
+@unittest.skipUnless(HAVE, "needs torch + transformers")
+class TestV22Train(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from test_tree_forcing import tiny
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.d = d = cls.tmp.name
+        tiny(d)
+        Path(d + "/t.jsonl").write_text("\n".join(json.dumps(x) for x in ITEMS))
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def ok(self, r):
+        self.assertEqual(r.returncode, 0, r.stderr[-3000:])
+
+    def test_k1_truncate_end_to_end(self):
+        """LSL with K = 1, truncate, fill none, pad weight 0, lambda 4: one supervised slot per chain (the first
+        value), the readout target 6 for 660 with value_prefix / first, the pilot on value_prefix, --save-dir with the
+        sidecar (pad_weight, overflow), eval_student rebuilding the same targets from it."""
+        from test_tree_forcing import ENV
+        d = self.d
+        k1 = ["--latent-slots", "1", "--slot-c", "2", "--slot-tokens", "distinct", "--slot-token", DIST[0],
+              "--slot-layer", "0", "--slot-readout", "lens", "--slot-fill", "none", "--slot-overflow", "truncate",
+              "--slot-pad-weight", "0", "--slot-lambda", "4", "--slot-final-only"]
+        nec = ["--slot-necessity", "swap,mean", "--slot-swap-token", SWAP, "--slot-decode", "6"]
+        r = run(common(d) + GFPQ, f"{d}/k1", *k1, *nec, "--epochs", "2", "--save", "--save-dir", f"{d}/k1model")
+        self.ok(r)
+        self.assertIn("pad weight 0.0", r.stdout)
+        m = metrics(f"{d}/k1")
+        ls = m["latent_slots"]
+        self.assertEqual((ls["k"], ls.get("fill", "none"), ls["overflow"], ls["pad_weight"], ls["lambda"]),
+                         (1, "none", "truncate", 0.0, 4.0))                 # fill none: the default, left out
+        self.assertEqual(ls["views"]["slot_supervised"], 5)                 # 5 chains, 1 slot each
+        self.assertEqual(ls["info"]["value_targets"], 5)
+        self.assertEqual(ls["info"]["lens_example"], [["6", "\u010a"]])    # "6", then the pad "\n"
+        self.assertEqual(sum(x["slot_n"] for x in m["history"]), 2 * 5)
+        rows = [json.loads(l) for l in open(f"{d}/k1/slot_readout_v.jsonl")]
+        self.assertEqual(rows[0]["slots"][0]["target"], "6")
+        self.assertEqual({k for k in rows[0]["slots"][0]} >= {"value_read", "value_ok", "first_ok"}, True)
+        firsts = {x["item_id"]: [s["value"] for s in x["worked_steps"]][0] for x in ITEMS if x.get("worked_steps")}
+        self.assertEqual({r_["item_id"]: r_["slots"][0]["target"] for r_ in rows if r_["slots"][0]["target"]}, firsts)
+        ro = m["slot_readout"]["v"]["all"]
+        self.assertEqual(ro["n"], 5)
+        self.assertIn("value_prefix", ro)
+        self.assertIn("first", ro)
+        self.assertEqual((m["slot_pilot"]["readout_metric"], m["slot_pilot"]["readout_value"]),
+                         ("value_prefix", ro["value_prefix"]))
+        self.assertFalse(Path(f"{d}/k1/model").exists())                     # --save-dir: not in the run dir
+        side = json.loads(Path(f"{d}/k1model/latent_slots.json").read_text())
+        self.assertEqual((side["overflow"], side["pad_weight"], side["k"]), ("truncate", 0.0, 1))
+        self.assertTrue(Path(f"{d}/k1model/config.json").exists())
+        r = subprocess.run([sys.executable, str(ROOT / "scripts/eval_student.py"), "--model", f"{d}/k1model",
+                            "--eval", f"v={d}/t.jsonl", "--max-len", "640", "--out", f"{d}/k1ev", "--slot-decode", "6"],
+                           capture_output=True, text=True, timeout=900, env=ENV)
+        self.ok(r)
+        em = metrics(f"{d}/k1ev")
+        self.assertEqual(em["latent_slots"], side)
+        self.assertEqual(em["args"]["slot_overflow"], "truncate")
+        ev = [json.loads(l) for l in open(f"{d}/k1ev/slot_readout_v.jsonl")]
+        self.assertEqual([x["slots"][0]["target"] for x in ev], [x["slots"][0]["target"] for x in rows])
+
+    def test_v22_argument_checks(self):
+        d = self.d
+        bad = [GFPQ + SLOTS + ["--slot-pad-weight", "0"],                    # decode readout
+               GFPQ + ["--slot-pad-weight", "0"],                            # no --latent-slots
+               GFPQ + SLOTS21 + ["--slot-final-only", "--slot-pad-weight", "-1"],
+               GFPQ + SLOTS21 + ["--slot-final-only", "--save-dir", f"{d}/x"]]   # --save-dir without --save
+        for argv in bad:
+            r = run(common(d) + argv, f"{d}/bad22", "--epochs", "1")
+            self.assertNotEqual(r.returncode, 0, argv)
+
+    def test_v21_arms_match_ref(self):
+        """LSL / LSLU / LSLR / LSLY at the default flags (necessity swap / drop / mean, lens readout; LSL saved) and
+        eval_student on the saved LSL: LS22_BASE_REF's files, byte for byte."""
+        from test_tree_forcing import ENV
+        d = self.d
+        h = ref_tree(d + "/h22", LS22_BASE_REF)
+        if h is None:
+            self.skipTest("not a git checkout")
+        nec = ["--slot-necessity", "swap,drop,mean", "--slot-swap-token", SWAP, "--slot-decode", "6"]
+        drop = re.compile(r"s_per_step|approx_tok_per_s")
+        strip = lambda hh: [{k: v for k, v in row.items() if not drop.match(k)} for row in hh]
+        for arm, extra in ARMS21.items():
+            outs = []
+            for name, script in (("ref", str(h / "scripts/train_student.py")), ("now", None)):
+                o = f"{d}/v22{name}-{arm}"
+                self.ok(run(common(d) + GFPQ, o, *extra, "--epochs", "2", *nec, *(["--save"] if arm == "LSL" else []),
+                            script=script))
+                outs.append(Path(o))
+            a, b = metrics(outs[0]), metrics(outs[1])
+            self.assertEqual(strip(a["history"]), strip(b["history"]), arm)
+            for key in ("eval", "latent_slots", "slot_necessity", "slot_readout", "slot_pilot", "tree_view_stats",
+                        "trajectory"):
+                self.assertEqual(a.get(key), b.get(key), (arm, key))
+            self.assertEqual(sorted(set(a) - {"args"}), sorted(set(b) - {"args"}), arm)
+            self.assertEqual({k: v for k, v in a["args"].items() if k != "out"},
+                             {k: v for k, v in b["args"].items() if k not in ("out", "slot_pad_weight", "save_dir")})
+            self.assertEqual((b["args"]["slot_pad_weight"], b["args"]["save_dir"]), (1.0, ""))
+            self.assertEqual(sorted(p.name for p in outs[0].iterdir()), sorted(p.name for p in outs[1].iterdir()))
+            for f in sorted(p.name for p in outs[0].glob("*.jsonl")) + ["latent_slots.json"]:
+                self.assertEqual((outs[0] / f).read_text(), (outs[1] / f).read_text(), (arm, f))
+        self.assertEqual(Path(f"{d}/v22ref-LSL/model/latent_slots.json").read_text(),
+                         Path(f"{d}/v22now-LSL/model/latent_slots.json").read_text())
+        for name, script in (("ref", str(h / "scripts/eval_student.py")), ("now", str(ROOT / "scripts/eval_student.py"))):
+            r = subprocess.run([sys.executable, script, "--model", f"{d}/v22now-LSL/model", "--eval", f"v={d}/t.jsonl",
+                                "--max-len", "640", "--out", f"{d}/v22ev-{name}", "--slot-necessity", "swap,mean",
+                                "--slot-swap-token", SWAP, "--slot-mean-train", f"{d}/t.jsonl", "--slot-decode", "6"],
+                               capture_output=True, text=True, timeout=900, env=ENV)
+            self.ok(r)
+        for f in ("preds_v.jsonl", "preds_v@swap.jsonl", "preds_v@mean.jsonl", "slot_readout_v.jsonl"):
+            self.assertEqual(Path(f"{d}/v22ev-ref/{f}").read_text(), Path(f"{d}/v22ev-now/{f}").read_text(), f)
+        ea, eb = metrics(f"{d}/v22ev-ref"), metrics(f"{d}/v22ev-now")
+        self.assertEqual({k: v for k, v in ea.items() if k != "args"}, {k: v for k, v in eb.items() if k != "args"})
+        self.assertEqual({k: v for k, v in ea["args"].items() if k != "out"},
+                         {k: v for k, v in eb["args"].items() if k != "out"})
+
+
+@unittest.skipUnless(HAVE, "needs torch + transformers")
+class TestV22FSDP(unittest.TestCase):
+    """Batch 12's K = 1 / truncate / fill none / pad weight 0 / lambda 4 LSL under --fsdp on one rank (the 4B
+    single-GPU route of jobs 268 / 269) = the single-process run: updates, slot loss, predictions, lens readout."""
+
+    def test_k1_pad0_fsdp1_equal_single(self):
+        import test_fsdp as tf
+        with tempfile.TemporaryDirectory() as d:
+            tf.tiny_model(d)
+            Path(d + "/t.jsonl").write_text("\n".join(json.dumps(x) for x in ITEMS))
+            base = ["--model", d + "/m", "--train", d + "/t.jsonl", "--eval", f"v={d}/t.jsonl", *GFPQ,
+                    "--items-per-update", "3", "--micro-bs", "2", "--max-len", "1024", "--eval-max-len", "1024",
+                    "--log-every", "1", "--lr", "1e-3", "--seed", "0", "--epochs", "2", "--precision", "fp32master",
+                    "--latent-slots", "1", "--slot-c", "2", "--slot-tokens", "distinct", "--slot-token", "~",
+                    "--slot-layer", "0", "--slot-readout", "lens", "--slot-fill", "none", "--slot-overflow", "truncate",
+                    "--slot-pad-weight", "0", "--slot-lambda", "4", "--slot-final-only", "--slot-necessity", "swap,mean",
+                    "--slot-swap-token", "}", "--slot-decode", "6"]
+            a_run = tf.single(d, *base, "--out", f"{d}/s")
+            b_run = tf.fsdp(d, *base, "--fsdp-optim", "cpu-adamw", "--out", f"{d}/f1", nproc=1)
+            for r in (a_run, b_run):
+                self.assertEqual(r.returncode, 0, r.stderr[-3000:])
+            a, b = tf.metrics(f"{d}/s"), tf.metrics(f"{d}/f1")
+            self.assertEqual(sum(x["slot_n"] for x in a["history"]), 2 * 5)
+            self.assertEqual(len(a["history"]), len(b["history"]))
+            for x, y in zip(a["history"], b["history"]):
+                self.assertAlmostEqual(x["loss"], y["upd_loss"], delta=1e-5)
+                self.assertAlmostEqual(x["loss_slot"], y["loss_slot"], delta=1e-5)
+                self.assertEqual(x["slot_n"], y["slot_n"])
+            for p, q in zip(tf.preds(f"{d}/s"), tf.preds(f"{d}/f1")):
+                self.assertLess(max(abs(u - v) for u, v in zip(p["probs"], q["probs"])), 1e-4)
+            ra = [json.loads(l) for l in open(f"{d}/s/slot_readout_v.jsonl")]
+            rb = [json.loads(l) for l in open(f"{d}/f1/slot_readout_v.jsonl")]
+            self.assertEqual(ra, rb)
+            self.assertEqual(ra[0]["slots"][0]["target"], "6")
+            self.assertEqual(a["slot_pilot"], b["slot_pilot"])
+            self.assertEqual(a["latent_slots"], b["latent_slots"])
 
 
 if __name__ == "__main__":

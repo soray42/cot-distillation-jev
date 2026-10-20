@@ -15,7 +15,9 @@ latent_slots.json, and every final question is then built with the same slot lin
 --latent-slots / --slot-* flags set or override it. --slot-necessity / --slot-decode run the necessity test and the
 decoding readout as at the end of training. v2.1 models (arms LSL / LSLU / LSLR / LSLY) keep their distinct tokens,
 slot layer, lens readout and fill in latent_slots.json: --slot-decode N then gives the lens readout (slot_readout), and
-the necessity mode mean needs --slot-mean-train (training items for the slot means).
+the necessity mode mean needs --slot-mean-train (training items for the slot means). A model trained with
+--slot-overflow truncate / --slot-pad-weight W != 1 records them there too (overflow, pad_weight), so --slot-decode
+rebuilds its targets (truncate: the FIRST K steps) without --slot-overflow.
 """
 from __future__ import annotations
 
@@ -83,8 +85,9 @@ def main() -> None:
     ap.add_argument("--slot-token", default=None, help="the slot token (default: latent_slots.json, else auto)")
     ap.add_argument("--slot-place", default=None, choices=["before-options", "after-options"],
                     help="slot line placement (default: latent_slots.json, else before-options)")
-    ap.add_argument("--slot-overflow", default="merge", choices=["merge", "truncate"],
-                    help="--slot-decode: how the targets of chains longer than K are shown (as in training)")
+    ap.add_argument("--slot-overflow", default=None, choices=["merge", "truncate"],
+                    help="--slot-decode: how the targets of chains longer than K are shown (as in training; default: "
+                         "the overflow in latent_slots.json, else merge)")
     ap.add_argument("--slot-necessity", default="", help="necessity test modes (swap, drop, noise@<layer|mid>:<sigma>; "
                     "train_student.py --slot-necessity)")
     ap.add_argument("--slot-necessity-sets", default="", help="--slot-necessity: comma list of eval sets (default all)")
@@ -110,6 +113,8 @@ def main() -> None:
     side = Path(args.model) / SLOT_SIDECAR
     sd = json.loads(side.read_text()) if side.exists() else {}
     k = args.latent_slots if args.latent_slots is not None else sd.get("k", 0)
+    if args.slot_overflow is None:       # a v2.1 model trained with --slot-overflow truncate records it
+        args.slot_overflow = sd.get("overflow", "merge")
     swap = None
     if k:
         if args.chat_template:
@@ -117,10 +122,11 @@ def main() -> None:
         try:
             token = choose_slot_token(tok, args.slot_token or sd.get("token", "auto"))
             spec = SlotSpec(k, args.slot_c or sd.get("c", 1), token, args.slot_place or sd.get("place", "before-options"))
-            if any(x in sd for x in ("tokens", "layer", "readout", "fill", "head_grad")):   # v2.1 (lens / distinct)
-                spec = SlotSpec(spec.k, spec.c, spec.token, spec.place, tokens=tuple(sd.get("tokens", ())),
+            if any(x in sd for x in ("tokens", "layer", "readout", "fill", "head_grad", "pad_weight", "overflow")):
+                spec = SlotSpec(spec.k, spec.c, spec.token, spec.place, tokens=tuple(sd.get("tokens", ())),  # v2.1
                                 layer=sd.get("layer"), readout=sd.get("readout", "decode"), fill=sd.get("fill", "none"),
-                                head_grad=sd.get("head_grad", False))
+                                head_grad=sd.get("head_grad", False), pad_weight=sd.get("pad_weight", 1.0),
+                                overflow=sd.get("overflow", "merge"))
             set_slot_prompt(tok, spec)
             modes = parse_slot_necessity(args.slot_necessity)
             if "swap" in modes:

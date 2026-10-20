@@ -2237,8 +2237,11 @@ class SlotSpec:
     decoder layer (0-based) whose OUTPUT holds the supervised slot states (None: the final, normed states, v2);
     readout / fill: how they are supervised (SLOT_READOUTS / SLOT_FILLS); head_grad: the lens slot loss also trains the
     LM head (= the tied input embedding on 2B / 4B; default off: the lens is a fixed readout, its gradient reaches the
-    body and the slot states only). as_dict leaves the v2.1 fields out at their defaults, so a v2 spec (and its
-    latent_slots.json) is unchanged."""
+    body and the slot states only). pad_weight (--slot-pad-weight, lens only): the weight of a slot's SLOT_END padding
+    positions in its lens CE relative to the value's own tokens (1: the plain mean over the c positions; 0: the value's
+    tokens only), the CE renormalised over the weights. overflow: the --slot-overflow of training (recorded so that
+    eval_student / probe_slots rebuild the same targets). as_dict leaves the v2.1 fields out at their defaults, so a v2
+    spec (and its latent_slots.json) is unchanged, and so is a v2.1 spec at pad_weight 1 and overflow merge."""
     k: int
     c: int
     token: str
@@ -2248,11 +2251,13 @@ class SlotSpec:
     readout: str = "decode"
     fill: str = "none"
     head_grad: bool = False
+    pad_weight: float = 1.0
+    overflow: str = "merge"
 
     def as_dict(self) -> dict:
         d = dataclasses.asdict(self)
         for key, default in (("tokens", ()), ("layer", None), ("readout", "decode"), ("fill", "none"),
-                             ("head_grad", False)):
+                             ("head_grad", False), ("pad_weight", 1.0), ("overflow", "merge")):
             if d[key] == default:
                 d.pop(key)
         if "tokens" in d:
@@ -2500,6 +2505,17 @@ def lens_target_ids(tokenizer, value: str, c: int) -> tuple[list[int], bool]:
     ids = tokenizer.encode(value, add_special_tokens=False)
     end = slot_end_id(tokenizer)
     return (ids + [end] * (c - len(ids)))[:c], len(ids) <= c
+
+
+def lens_position_weights(n_value: int, c: int, pad_weight: float) -> list[float]:
+    """--slot-pad-weight W: the weights of one slot's c lens positions, 1 for each of the value's own tokens (the first
+    min(n_value, c)) and W for each SLOT_END padding position after them, normalised to sum 1 (W = 1: 1/c each, the
+    plain mean). Positions with no value token at all (the weight-0 FSDP stand-in, n_value 0) and W = 0: uniform 1/c,
+    so the normaliser is never 0."""
+    n = min(max(n_value, 0), c)
+    raw = [1.0] * n + [float(pad_weight)] * (c - n)
+    tot = sum(raw)
+    return [x / tot for x in raw] if tot > 0 else [1.0 / c] * c
 
 
 def shuffled_slot_targets(items: list[dict], *, k: int, overflow: str = "merge", seed: int = 0) -> dict:
@@ -2761,7 +2777,8 @@ def _slot_forward_lens(model, tokenizer, batch: list, max_len: int, cache: dict,
     label_logits gives them, and for every supervised slot j of a SlotExample its c layer-L states through the model's
     own final norm and LM head (soft-capped like the model's logits): position i predicts token i of
     lens_target_ids (the value's tokens, then SLOT_END), the slot's CE = the mean over its c positions. Loss = sum over
-    supervised slots of weight x slot_lambda x CE (slot_lambda = lambda / supervised slots of the problem). No second
+    supervised slots of weight x slot_lambda x CE (slot_lambda = lambda / supervised slots of the problem; with
+    spec.pad_weight != 1 the slot's CE is the weighted mean of lens_position_weights: value tokens 1, pads W). No second
     pass, no new parameter. The head weight is read detached (spec.head_grad False, the default): the slot loss trains
     the body (and the final norm), never the LM head / tied embedding; the letter CE reads it as before. Under FSDP (_always) a micro-batch without a supervised slot adds the lens CE of c states
     at weight 0 (the same graph on every rank). stats: slot_n, slot_ce_sum as slot_forward's."""
@@ -2777,7 +2794,7 @@ def _slot_forward_lens(model, tokenizer, batch: list, max_len: int, cache: dict,
     hl = cap.h
     rows = torch.arange(hidden.shape[0], device=dev)
     out = _letters(model, tokenizer, head, hidden[rows, b["last"]], batch, cache)
-    vecs, ys, wts = [], [], []
+    vecs, ys, wts, nv = [], [], [], []
     for i, e in enumerate(batch):
         tg = getattr(e, "slot_targets", ())
         if not any(t is not None for t in tg):
@@ -2790,21 +2807,31 @@ def _slot_forward_lens(model, tokenizer, batch: list, max_len: int, cache: dict,
             vecs.append(v.detach() if _detach else v)
             ys.append(lens_target_ids(tokenizer, t, spec.c)[0])
             wts.append(e.weight * e.slot_lambda)
+            if spec.pad_weight != 1.0:       # --slot-pad-weight: the value's own token count
+                nv.append(len(tokenizer.encode(t, add_special_tokens=False)))
     zero = hidden.new_zeros((), dtype=torch.float32)
     n_real = len(vecs)
     if not vecs and not _always:
         return out, zero, {"slot_n": 0, "slot_ce_sum": 0.0}
     if not vecs:                             # FSDP: a weight-0 lens term keeps the ranks' graphs equal
-        vecs, ys, wts = [hl[0, :spec.c]], [[slot_end_id(tokenizer)] * spec.c], [0.0]
+        vecs, ys, wts, nv = [hl[0, :spec.c]], [[slot_end_id(tokenizer)] * spec.c], [0.0], [0]
     hs = _final_norm(body)(torch.cat(vecs))
     yt = torch.tensor([t for y in ys for t in y], device=dev)
-    wrow = torch.tensor([w / spec.c for w in wts for _ in range(spec.c)], device=dev, dtype=torch.float32)
+    if spec.pad_weight == 1.0:               # the plain mean over the c positions (v2.1 as before)
+        wrow = torch.tensor([w / spec.c for w in wts for _ in range(spec.c)], device=dev, dtype=torch.float32)
+        pw = None
+    else:                                    # value tokens 1, SLOT_END pads W, renormalised per slot
+        pw = [lens_position_weights(n, spec.c, spec.pad_weight) for n in nv]
+        wrow = torch.tensor([w * q for w, ps in zip(wts, pw) for q in ps], device=dev, dtype=torch.float32)
     cap_ = logit_softcap(model)
     w = head.weight if spec.head_grad else head.weight.detach()          # the lens: a fixed readout by default
     ce = torch.cat([torch.utils.checkpoint.checkpoint(_ce_rows, hs[j:j + 512], w, yt[j:j + 512], cap_,
                                                       use_reentrant=False) for j in range(0, len(yt), 512)])
     with torch.no_grad():
-        per = ce.detach().float().view(-1, spec.c).mean(-1)
+        if pw is None:
+            per = ce.detach().float().view(-1, spec.c).mean(-1)
+        else:                                # the slot CE as trained: the weighted mean over its positions
+            per = (ce.detach().float().view(-1, spec.c) * torch.tensor(pw, device=dev, dtype=torch.float32)).sum(-1)
     return out, zero + (wrow * ce).sum(), {"slot_n": n_real, "slot_ce_sum": float(per[:n_real].sum())}
 
 
@@ -2856,6 +2883,11 @@ def _slot_lens_readout(model, tokenizer, items, max_len, bs, overflow) -> list[d
                 ids, fit = lens_target_ids(tokenizer, t, spec.c) if t is not None else (None, None)
                 slots.append({"slot": j + 1, "target": t, "read": d, "exact": None if t is None else d == t,
                               "fit": fit, "tok_ok": None if t is None else sum(a == b for a, b in zip(p, ids)) / spec.c})
+                if spec.pad_weight != 1.0:   # pads at W != 1: SLOT_END after the value is not (fully) trained, so the
+                    n = min(len(tokenizer.encode(t, add_special_tokens=False)), spec.c) if t is not None else 0
+                    slots[-1].update(value_read=tokenizer.decode(p[:n]).strip() if t is not None else None,  # value's
+                                     value_ok=None if t is None else bool(fit) and p[:n] == ids[:n],         # own n
+                                     first_ok=None if t is None else p[0] == ids[0])                         # positions
             rows.append({"item_id": it["item_id"], "n_steps": len(worked_steps(it) or []), "slots": slots})
     if was_training:
         model.train()
@@ -2864,13 +2896,17 @@ def _slot_lens_readout(model, tokenizer, items, max_len, bs, overflow) -> list[d
 
 def slot_readout_summary(rows: list[dict]) -> dict:
     """Exact value match (value), position accuracy (token) and the share of targets that fit c positions (fit) of
-    slot_lens_readout rows, overall and per slot (slots with a target only)."""
+    slot_lens_readout rows, overall and per slot (slots with a target only); rows of a pad_weight != 1 spec add
+    value_prefix (the value's own positions all right, whatever follows) and first (its first token right)."""
     out: dict = {}
     for key in ["all"] + sorted({f"slot{s['slot']}" for r in rows for s in r["slots"]}, key=lambda x: int(x[4:])):
         xs = [s for r in rows for s in r["slots"] if s["target"] is not None and (key == "all" or f"slot{s['slot']}" == key)]
         if xs:
             out[key] = {"n": len(xs), "value": sum(bool(s["exact"]) for s in xs) / len(xs),
                         "token": sum(s["tok_ok"] for s in xs) / len(xs), "fit": sum(bool(s["fit"]) for s in xs) / len(xs)}
+            if "value_ok" in xs[0]:          # --slot-pad-weight != 1: the value's own tokens, whatever follows them
+                out[key].update(value_prefix=sum(bool(s["value_ok"]) for s in xs) / len(xs),
+                                first=sum(bool(s["first_ok"]) for s in xs) / len(xs))
     return out
 
 
@@ -3226,6 +3262,8 @@ def slot_evals(model, tok, evals: dict, results: dict, out, *, modes: list[str],
             first = next(iter(results["slot_readout"].values()))
             pil["readout_set"] = next(iter(results["slot_readout"]))
             pil["readout_value"] = first.get("all", {}).get("value")
+            if "value_prefix" in first.get("all", {}):   # --slot-pad-weight != 1: no trained SLOT_END after the value
+                pil.update(readout_metric="value_prefix", readout_value=first["all"]["value_prefix"])
             pil["readout_ok"] = pil["readout_value"] is not None and pil["readout_value"] >= 0.45
         if results.get("slot_necessity"):
             nset, nm = next(iter(results["slot_necessity"].items()))
