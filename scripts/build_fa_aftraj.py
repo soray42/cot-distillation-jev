@@ -18,6 +18,8 @@ Writes
                                                                  the rest
   data/student_fa_aftraj_t2/train.jsonl, val.jsonl               with --trees: the MC reasoning-tree nodes (traj_id
                                                                  "aftraj/<uid>"), converted and checked as build_fa_sf
+  data/student_fa_aftraj_t3/                                     v3 (opt-in): --trees-addon <add-on lines> and / or
+                                                                 --pointer-render free, as build_fa_sf (summary.json)
 With --export-sf (and nothing else): the pool (train + val) in StepFinder's file format for the tree teachers,
 data/raw/aftraj_sf/AFTraj/train/<uid>.json (mistake_reason from the parquet), plus data/raw/aftraj_trees/all_ids.json
 and --shards work lists with balanced length-rank targets (scripts/extract_fa_trees.py render / assemble --raw
@@ -133,6 +135,7 @@ def main(argv=None) -> dict:
     ap.add_argument("--tokenizer", default=bfp.TOKENIZER)
     ap.add_argument("--trees", default="")
     ap.add_argument("--trees-keep-failed", action="store_true")
+    sf.add_v3_args(ap, pattern=False)
     ap.add_argument("--drop-groups", action="store_true", help="also drop clean v1's groups from train / val")
     ap.add_argument("--export-sf", action="store_true", help="only export the pool for the tree teachers")
     ap.add_argument("--shards", type=int, default=14)
@@ -199,15 +202,18 @@ def main(argv=None) -> dict:
                   "refused": collections.Counter(), "types": collections.Counter(), "n_options": collections.Counter(),
                   "answer_pos": collections.Counter(), "depth": collections.Counter(),
                   "answer_step_is_decisive": collections.Counter(), "facts": collections.Counter()}
-        t_tr = sf.tree_items(tr, by_uid, tl, args.trees_keep_failed, tstats)
-        t_va = sf.tree_items(va, by_uid, tl, args.trees_keep_failed, tstats)
+        addons, suffix = sf.v3_setup(args, tstats, SUBSET)
+        t_tr = sf.tree_items(tr, by_uid, tl, args.trees_keep_failed, tstats, addons, args.pointer_render)
+        t_va = sf.tree_items(va, by_uid, tl, args.trees_keep_failed, tstats, addons, args.pointer_render)
         for it in t_tr + t_va:
             sf.statement_block(it)
-        sf.write(ROOT / f"{args.out}_t2" / "train.jsonl", t_tr, files)
-        sf.write(ROOT / f"{args.out}_t2" / "val.jsonl", t_va, files)
+        sf.write(ROOT / f"{args.out}{suffix}" / "train.jsonl", t_tr, files)
+        sf.write(ROOT / f"{args.out}{suffix}" / "val.jsonl", t_va, files)
         trees = {k: (dict(sorted(v.items(), key=lambda kv: str(kv[0]))) if isinstance(v, collections.Counter) else v)
                  for k, v in tstats.items()}
         trees["tokens_train"] = sf.token_report(t_tr, tok, args.budget)
+        if "v3" in tstats:
+            sf.v3_summary(ROOT / f"{args.out}{suffix}", args, trees, files)
 
     summary = {"args": vars(args), "counts": dict(sorted(counts.items())), "published_hit1": PUBLISHED,
                "train": len(tr), "val": len(va), "val_tasks": len(vg), "test": len(te), "test_all": len(test_all),

@@ -40,6 +40,7 @@ survives (quote_min_cap).
 from __future__ import annotations
 
 import collections
+import copy
 import hashlib
 import json
 import random
@@ -48,7 +49,8 @@ import unicodedata
 from pathlib import Path
 
 SUBSET_DIRS = {"alg": "Algorithm-Generated", "hc": "Hand-Crafted", "aftraj": "AFTraj",   # aftraj, real: exports of
-               "real": "REAL"}                                     # build_fa_aftraj.py / build_fa_real.py --export-sf
+               "real": "REAL",                                     # build_fa_aftraj.py / build_fa_real.py --export-sf
+               "agtr": "AGTR", "wwpro": "WWPRO", "ce": "CE"}      # build_fa_new_sources.py (LOFO training pools)
 STEP_CAP = 1500
 TASK_CAP = 1500
 NODE_TYPES = ("answer_step", "provenance", "content", "conflict", "agent")
@@ -623,3 +625,436 @@ def output_record(traj: dict, src: dict, seed: int = 20261010, extra_meta: dict 
     meta.update(extra_meta or {})
     return {"traj_id": traj["traj_id"], "subset": traj["subset"], "teacher": src.get("teacher", ""),
             "nodes": nodes, "checks": checks, "meta": meta}
+
+
+# ================================================================ v3 (2026-10-19): index-free render and clean nodes
+# Why: pointer nodes (answer_step / provenance, options "Step k [Agent]") carry the training position prior, while
+# content / conflict / agent nodes transfer across frameworks (results/fa_pool/abl_*_vsA2.md). v3 (teacher brief:
+# data/raw/stepfinder_trees/BRIEF_v3_addon.md)
+#   1. renders every node without step numbers (free_render): a pointer option is "<Agent>: “<excerpt>”", a step
+#      reference in a question or text option becomes "the <Agent> step “<excerpt>”". ONE excerpt rule for the correct
+#      option and the distractors alike: the first W whitespace-separated words of the step's visible text (the head
+#      of cut(text, cap) without a possibly partial last word; at most EXCERPT_MAX_CHARS characters), "…" when the
+#      step is longer, where W is the smallest
+#      width >= EXCERPT_MIN_WORDS (at most EXCERPT_MAX_WORDS) at which (agent, first W words) identifies the step among
+#      ALL steps of the log; a pointer node uses one W for all its options (the largest any option needs), a reference
+#      in free text the W of its step. A node whose steps cannot be told apart (an exact duplicate of the same agent,
+#      a longer common opening, no words), whose excerpt contains a step index, whose question quotes its own answer
+#      step, or whose rewritten text option changes the correct option's length rank / adds a length or form tell is
+#      dropped; its children are re-attached to its parents. Kept nodes carry render = "free" and the steps they
+#      quote (free_steps); types stay answer_step / provenance / ... so --tree-node-types selects them as before;
+#   2. adds teacher-written "clean" nodes: for 1-2 steps strictly before the decisive step (chosen by code, biased to
+#      the absolute positions where the source's decisive errors are most common, plus one random earlier step;
+#      clean_targets), "Which
+#      statement about <step> is supported by the task and the log?" with four statements of the content node's form
+#      (one true, three false by the log), no evaluative wording. Add-on source per trajectory:
+#        {"traj_id", "teacher", "nodes": [{"id": "c1", "type": "clean", "cite_step": k, "correct": "...",
+#          "distractors": [3 x "..."], "quote": "<verbatim from step k>"},
+#         {"id": "c2", "type": "clean", "cite_step": j, "skip": "<why step j is itself wrong>"}]}
+#      assemble_addon() renders the fixed question (index form; free_render rewrites it) and shuffles the options with
+#      the v2 seeded RNG; check_addon() runs the clean-node checks against the work-list entry (targets).
+# Every v2 function above is unchanged; nothing here runs unless called.
+EXCERPT_MIN_WORDS, EXCERPT_MAX_WORDS = 6, 40
+EXCERPT_MAX_CHARS = 160                    # a longer W-word opening (JSON, URLs) is cut here, then "…" (0.24% of them)
+ELLIPSIS = "…"
+OPEN_Q, CLOSE_Q = "“", "”"
+INDEX_WORD = re.compile(r"(?i)\bsteps?\s*(?:#|no\.?\s*|number\s*)?\d")          # "Step 3", "steps 2", "step #4"
+FREE_REF = re.compile(r"(?i)\bstep\s+(\d+)(?:\s*\[([^\]\n]*)\])?")
+CLEAN_QUESTION = "Which statement about {ref} is supported by the task and the log?"
+CLEAN_NON_AGENTS = {"Computer_terminal", "user", "environment", "tool", "system", "human"}
+CLEAN_ID = re.compile(r"^c\d+$")
+CLEAN_OPTIONS = 4
+EVALUATIVE = re.compile(
+    r"(?i)\b(correct(ly)?|incorrect(ly)?|fine|valid(ly)?|invalid(ly)?|proper(ly)?|improper(ly)?|accurate(ly)?|"
+    r"inaccurate(ly)?|wrong(ly)?|mistak\w*|erroneous(ly)?|flawed|faulty|appropriate(ly)?|inappropriate(ly)?|"
+    r"sound(ly)?|reasonabl[ey]|justified|unjustified|legitimate(ly)?|sensibl[ey]|rightly|decisive|"
+    r"(no|without( any| an)?)\s+(errors?|issues?|problems?|flaws?))\b")
+STEM_MATCH_MARGIN = 0.25
+PRIOR_POWER = 4                            # clean_targets: weight P_abs(k) ** 4 (when a top-3 position is eligible, the
+                                           # pick lands there 57-95% of the time by source, 38-88% with P_abs ** 1)
+
+
+def step_words(text: str, cap: int = STEP_CAP) -> tuple[list[str], bool]:
+    """Words of a step's visible opening and whether the step goes on after them: the whole text when it fits the
+    cap, else the head of cut(text, cap) (2/3 of the cap) without its last word when that word is cut."""
+    t = str(text).strip()
+    if len(t) <= cap:
+        return t.split(), False
+    h = cap * 2 // 3
+    w = t[:h].split()
+    if w and not t[h - 1].isspace() and not t[h].isspace():          # the head ends inside a word
+        w = w[:-1]
+    return w, True
+
+
+def _step_table(traj: dict, cap: int) -> tuple[list[str], list[list[str]], list[bool]]:
+    agents = [s["agent"] for s in traj["steps"]]
+    sw = [step_words(s["text"], cap) for s in traj["steps"]]
+    return agents, [w for w, _ in sw], [tr for _, tr in sw]
+
+
+def excerpt_text(words: list[str], truncated: bool, w: int) -> str:
+    """The first w words, cut at EXCERPT_MAX_CHARS characters; "…" when the step goes on."""
+    s = " ".join(words[:w])
+    if len(s) > EXCERPT_MAX_CHARS:
+        return s[:EXCERPT_MAX_CHARS].rstrip() + ELLIPSIS
+    return s + (ELLIPSIS if truncated or len(words) > w else "")
+
+
+def excerpt_width(agents: list[str], words: list[list[str]], trunc: list[bool], ks: list[int],
+                  wmin: int = EXCERPT_MIN_WORDS, wmax: int = EXCERPT_MAX_WORDS) -> int | None:
+    """Smallest W in [wmin, wmax] at which (agent, excerpt at W without its "…", case / whitespace normalized) of
+    every step in ks differs from that of every other step of the log; None when some step of ks cannot be
+    identified that way (an exact duplicate, a longer common opening, a common first EXCERPT_MAX_CHARS characters,
+    no words)."""
+    if any(not words[k] for k in ks):
+        return None
+    for w in range(wmin, wmax + 1):
+        key = [(agents[j], _norm_text(excerpt_text(words[j], trunc[j], w).rstrip(ELLIPSIS)))
+               for j in range(len(words))]
+        if all(not any(j != k and key[j] == key[k] for j in range(len(words))) for k in ks):
+            return w
+    return None
+
+
+def free_option(agent: str, ex: str) -> str:
+    return f"{agent}: {OPEN_Q}{ex}{CLOSE_Q}"
+
+
+def free_ref(agent: str, ex: str) -> str:
+    return f"the {agent} step {OPEN_Q}{ex}{CLOSE_Q}"
+
+
+def _free_rewrite(text: str, agents, words, trunc) -> tuple[str | None, str, list[int]]:
+    """Every step reference in text ("Step k [Agent]", "Step k", any case) -> free_ref; (None, reason, []) when a
+    reference is out of range / names another agent / cannot be identified / quotes a step index, or an index word
+    is left outside the inserted excerpts."""
+    out, plain, refs, pos = [], [], [], 0
+    for m in FREE_REF.finditer(text):
+        k = int(m.group(1))
+        if k >= len(agents):
+            return None, "free_ref_range", []
+        if m.group(2) is not None and m.group(2).strip() != agents[k]:
+            return None, "free_ref_agent", []
+        w = excerpt_width(agents, words, trunc, [k])
+        if w is None:
+            return None, "free_ambiguous", []
+        ex = excerpt_text(words[k], trunc[k], w)
+        if INDEX_WORD.search(ex):
+            return None, "free_excerpt_index", []
+        rep = free_ref(agents[k], ex)
+        before = "".join(out) + text[pos:m.start()]
+        if not before.strip() or before.rstrip()[-1] in ".?!":
+            rep = rep[0].upper() + rep[1:]
+        out += [text[pos:m.start()], rep]
+        plain += [text[pos:m.start()], "the step"]
+        refs.append(k)
+        pos = m.end()
+    out.append(text[pos:])
+    plain.append(text[pos:])
+    if INDEX_WORD.search("".join(plain)):
+        return None, "free_index_left", []
+    return "".join(out), "", refs
+
+
+def _len_rank(options: list[str], answer: int) -> int:
+    c = len(options[answer])
+    return 1 + sum(len(o) > c for i, o in enumerate(options) if i != answer)
+
+
+def _length_tell(options: list[str], answer: int) -> bool:
+    others = [len(o) for i, o in enumerate(options) if i != answer]
+    return bool(others) and len(options[answer]) > LENGTH_TELL_RATIO * max(others)
+
+
+def _form_tell(options: list[str]) -> bool:
+    if len(options) < 3:
+        return False
+    cnt = collections.Counter(option_form(o) for o in options)
+    return len(cnt) == 2 and min(cnt.values()) == 1
+
+
+def free_render(traj: dict, nodes: list[dict], *, cap: int = STEP_CAP, parent_key: str = "parents",
+                stats: collections.Counter | None = None) -> list[dict]:
+    """Index-free copy of assembled nodes (see the v3 notes above); stats counts kept nodes, dropped nodes by reason
+    (free_drop/<reason>) and the excerpt widths of pointer nodes (free_width/<W>)."""
+    st = stats if stats is not None else collections.Counter()
+    agents, words, trunc = _step_table(traj, cap)
+    out, dropped = [], {}
+    for nd in nodes:
+        new = copy.deepcopy(nd)
+        why = ""
+        refs: list[int] = []
+        q, why, qrefs = _free_rewrite(nd["question"], agents, words, trunc)
+        refs += qrefs
+        if not why and nd["type"] in POINTER_TYPES:
+            ks = list(nd["option_steps"])
+            w = excerpt_width(agents, words, trunc, ks)
+            if w is None:
+                why = "free_ambiguous"
+            else:
+                exs = [excerpt_text(words[k], trunc[k], w) for k in ks]
+                opts = [free_option(agents[k], ex) for k, ex in zip(ks, exs)]
+                if any(INDEX_WORD.search(ex) for ex in exs):
+                    why = "free_excerpt_index"
+                elif len({_norm_text(o) for o in opts}) != len(opts):
+                    why = "free_options_dup"
+                elif _norm_text(exs[nd["answer"]].rstrip(ELLIPSIS)) in _norm_text(q):
+                    why = "free_self_leak"
+                else:
+                    new["options"] = opts
+                    refs += ks
+                    st[f"free_width/{w}"] += 1
+        elif not why and nd["type"] in TEXT_TYPES + ("clean",):
+            opts = []
+            for o in nd["options"]:
+                o2, why, orefs = _free_rewrite(o, agents, words, trunc)
+                if why:
+                    break
+                opts.append(o2)
+                refs += orefs
+            if not why and opts != nd["options"]:
+                st["free_text_options_rewritten"] += 1
+                if (_len_rank(opts, nd["answer"]) != _len_rank(nd["options"], nd["answer"])
+                        or _length_tell(opts, nd["answer"])):
+                    why = "free_option_rank"
+                elif _form_tell(opts) and not _form_tell(nd["options"]):
+                    why = "free_option_form"
+                else:
+                    new["options"] = opts
+        if why:
+            st[f"free_drop/{why}"] += 1
+            st[f"free_drop_type/{nd['type']}"] += 1
+            dropped[nd["id"]] = list(nd.get(parent_key) or [])
+            continue
+        new["question"] = q
+        new["render"] = "free"
+        new["free_steps"] = sorted(set(refs))
+        st["free_kept"] += 1
+        st[f"free_kept_type/{nd['type']}"] += 1
+        out.append(new)
+
+    def lift(ps: list[str], seen: frozenset = frozenset()) -> list[str]:
+        res: list[str] = []
+        for p in ps:
+            for x in (lift(dropped[p], seen | {p}) if p in dropped and p not in seen else [p]):
+                if x not in res and x not in dropped:
+                    res.append(x)
+        return res
+    for nd in out:
+        nd[parent_key] = lift(list(nd.get(parent_key) or []))
+    return out
+
+
+def node_text_index_free(nd: dict) -> bool:
+    """Whether a node's student-visible text (question and options) has no step index outside the quoted excerpts."""
+    strip = lambda s: re.sub(OPEN_Q + "[^" + CLOSE_Q + "]*" + CLOSE_Q, " ", s)     # noqa: E731
+    return not any(INDEX_WORD.search(strip(t)) for t in [nd["question"]] + list(nd["options"]))
+
+
+# ---------------------------------------------------------------- v3 clean nodes: targets, assembly, checks
+
+def position_prior(trajs: list[dict]) -> dict:
+    """The source's decisive-position histograms: absolute step index and steps from the end."""
+    ab, en = collections.Counter(), collections.Counter()
+    for t in trajs:
+        ab[t["mistake_step"]] += 1
+        en[len(t["steps"]) - 1 - t["mistake_step"]] += 1
+    n = max(1, len(trajs))
+    return {"abs": {k: v / n for k, v in sorted(ab.items())}, "end": {k: v / n for k, v in sorted(en.items())},
+            "n": len(trajs)}
+
+
+def clean_speakers(trajs: list[dict]) -> set[str]:
+    """Speakers a clean node may target: those that are the decisive speaker of some label of the source, except tool
+    output / environment / user / system speakers (CLEAN_NON_AGENTS)."""
+    return {t["steps"][t["mistake_step"]]["agent"] for t in trajs} - CLEAN_NON_AGENTS
+
+
+def clean_targets(traj: dict, prior: dict, speakers: set[str], seed: int = 20261019) -> list[dict]:
+    """Up to two clean-node targets strictly before the decisive step, among the steps of eligible speakers that have
+    an index-free reference (free_ref_for): one drawn with weight P_abs(k) ** PRIOR_POWER (the source's decisive-
+    position histogram over absolute step indices, the indices the final question's options carry, sharpened so that
+    the pick lands on the most common error positions: show correct steps where the prior expects an error; with a
+    plain P_abs weight the flat Who&When-style histograms made the pick nearly uniform), one uniform among the
+    remaining eligible earlier steps. Seeded per trajectory."""
+    ms = traj["mistake_step"]
+    elig = [k for k in range(ms) if traj["steps"][k]["agent"] in speakers and free_ref_for(traj, k) is not None]
+    if not elig:
+        return []
+    rng = seeded_rng(seed, traj["traj_id"], "clean")
+    wts = [prior["abs"].get(k, 0.0) ** PRIOR_POWER + 1e-12 for k in elig]
+    first = rng.choices(elig, weights=wts)[0]
+    out = [{"step": first, "why": "prior", "prior_p_abs": round(prior["abs"].get(first, 0.0), 4)}]
+    rest = [k for k in elig if k != first]
+    if rest:
+        out.append({"step": rng.choice(rest), "why": "random"})
+    for x in out:
+        x["agent"] = traj["steps"][x["step"]]["agent"]
+    return sorted(out, key=lambda x: x["step"])
+
+
+def free_ref_for(traj: dict, k: int, cap: int = STEP_CAP) -> str | None:
+    """The index-free reference of step k ("the <Agent> step “<excerpt>”"), None when it cannot be identified."""
+    agents, words, trunc = _step_table(traj, cap)
+    w = excerpt_width(agents, words, trunc, [k])
+    if w is None:
+        return None
+    ex = excerpt_text(words[k], trunc[k], w)
+    return None if INDEX_WORD.search(ex) else free_ref(agents[k], ex)
+
+
+def assemble_addon(traj: dict, src: dict, seed: int = 20261010) -> tuple[list[dict], list[dict]]:
+    """Add-on source -> (assembled clean nodes, skips). Raises TreeError on schema problems."""
+    _need(isinstance(src, dict), "schema: not an object")
+    _need(isinstance(src.get("nodes"), list), "schema: no node list")
+    n = len(traj["steps"])
+    nodes, skips = [], []
+    for i, sn in enumerate(src["nodes"]):
+        _need(isinstance(sn, dict), f"schema: node {i} is not an object")
+        nid = sn.get("id")
+        _need(isinstance(nid, str) and bool(CLEAN_ID.match(nid)), f"schema: node {i} id {nid!r} (c1, c2, ...)")
+        _need(sn.get("type") == "clean", f"schema: {nid} type {sn.get('type')!r}")
+        k = sn.get("cite_step")
+        _need(isinstance(k, int) and not isinstance(k, bool) and 0 <= k < n, f"schema: {nid} cite_step")
+        if "skip" in sn:
+            _need(isinstance(sn["skip"], str) and sn["skip"].strip() != "", f"schema: {nid} skip reason")
+            skips.append({"id": nid, "cite_step": k, "reason": sn["skip"].strip()})
+            continue
+        c, ds = sn.get("correct"), sn.get("distractors")
+        _need(isinstance(c, str) and c.strip() != "" and isinstance(ds, list)
+              and all(isinstance(x, str) and x.strip() for x in ds), f"schema: {nid} options")
+        opts = [" ".join(c.split())] + [" ".join(x.split()) for x in ds]
+        order = opts[:]
+        seeded_rng(seed, traj["traj_id"], nid).shuffle(order)
+        nodes.append({"id": nid, "type": "clean", "question": CLEAN_QUESTION.format(ref=step_label(traj, k)),
+                      "options": order, "answer": order.index(opts[0]), "parents": [], "cite_step": k,
+                      "quote": str(sn.get("quote", "")).strip()})
+    return nodes, skips
+
+
+def check_addon(traj: dict, src: dict, entry: dict, seed: int = 20261010) -> dict:
+    """Assemble + every clean-node check against the work-list entry (its "targets": [{"step", "target_len_rank"}]).
+    Returns {"pass", "failures", "nodes", "skips", ...stats}."""
+    fails: list[str] = []
+    res: dict = {"pass": False, "failures": fails, "nodes": [], "skips": []}
+    if isinstance(src, dict) and src.get("drop"):
+        fails.append(f"teacher_drop: {src['drop']}")
+        return res
+    try:
+        nodes, skips = assemble_addon(traj, src, seed)
+    except TreeError as e:
+        fails.append(str(e))
+        return res
+    res["nodes"], res["skips"] = nodes, skips
+    n, ms, gt = len(traj["steps"]), traj["mistake_step"], traj["ground_truth"]
+    targets = {int(t["step"]): t for t in entry.get("targets") or []}
+    ids = [x["id"] for x in nodes] + [x["id"] for x in skips]
+    if len(set(ids)) != len(ids):
+        fails.append("ids_dup")
+    steps = [x["cite_step"] for x in nodes] + [x["cite_step"] for x in skips]
+    if sorted(steps) != sorted(targets):
+        fails.append(f"addon_targets: wrote {sorted(steps)}, targets {sorted(targets)}")
+    log_tok: set[str] = set()
+    for s in traj["steps"]:
+        if s["agent"] != "user":
+            log_tok |= content_tokens(kept_step(traj, s["k"]))
+    res.update(length_rank={}, overlap_rank={}, stem_recall={}, best_step={})
+    for nd in nodes:
+        nid, k, opts, a = nd["id"], nd["cite_step"], nd["options"], nd["answer"]
+        if k >= ms:
+            fails.append(f"clean_not_before_decisive: {nid} step {k}, decisive {ms}")
+        if len(opts) != CLEAN_OPTIONS:
+            fails.append(f"option_count: {nid} {len(opts)}")
+        if len({_norm_text(o) for o in opts}) != len(opts):
+            fails.append(f"options_dup: {nid}")
+        kept, orig = kept_step(traj, k), traj["steps"][k]["text"]
+        quote = nd["quote"]
+        if len(norm_ws(quote)) < MIN_QUOTE_CHARS and norm_ws(quote) != norm_ws(orig):
+            fails.append(f"quote_short: {nid}")
+        elif "[...]" in quote or find_quote(kept, quote) is None or find_quote(orig, quote) is None:
+            fails.append(f"quote_not_found: {nid}")
+        if any(gt_leak(gt, t) for t in [nd["question"]] + opts):
+            fails.append(f"gt_leak: {nid}")
+        if any(META_LEAK.search(t) for t in opts + [quote]):
+            fails.append(f"meta_leak: {nid}")
+        ev = [m.group(0) for o in opts for m in [EVALUATIVE.search(o)] if m]
+        if ev:
+            fails.append(f"evaluative_word: {nid} {ev[0]!r}")
+        if any(INDEX_WORD.search(o) for o in opts):
+            fails.append(f"clean_index: {nid} an option names a step number")
+        if _norm_text(opts[a]) in _norm_text(nd["question"]):
+            fails.append(f"self_leak: {nid}")
+        # length: 0 = shortest .. 3 = longest among the four, ties either way; the target comes from the work list
+        lens = [len(o) for o in opts]
+        lo, hi = sum(x < lens[a] for x in lens), sum(x <= lens[a] for x in lens) - 1
+        res["length_rank"][nid] = lo
+        want = (targets.get(k) or {}).get("target_len_rank")
+        if want is not None and not lo <= int(want) <= hi:
+            fails.append(f"length_rank_miss: {nid} rank {lo}{'-' + str(hi) if hi != lo else ''}, target {want} "
+                         f"(characters: true {lens[a]}, others {sorted(x for i, x in enumerate(lens) if i != a)})")
+        if _length_tell(opts, a):
+            fails.append(f"length_tell: {nid}")
+        if _form_tell(opts):
+            fm = [option_form(o) for o in opts]
+            cnt = collections.Counter(fm)
+            odd = next(i for i, f in enumerate(fm) if cnt[f] == 1)
+            fails.append(f"form_tell: {nid} option {odd} {fm[odd]}")
+        # stem match (index-free question): the true statement must not be the one that reuses the excerpt's words
+        ref = free_ref_for(traj, k)
+        if ref is None:
+            fails.append(f"clean_unreferable: {nid} step {k} has no unique excerpt")
+        else:
+            et = content_tokens(ref.split(OPEN_Q, 1)[1])
+            rc = [recall(content_tokens(o), et) for o in opts]
+            res["stem_recall"][nid] = round(rc[a], 3)
+            others = [x for i, x in enumerate(rc) if i != a]
+            if rc[a] > 0 and rc[a] >= max(others) + STEM_MATCH_MARGIN:
+                fails.append(f"stem_match_tell: {nid} recall {rc[a]:.2f} vs {max(others):.2f}")
+        # soft: log-overlap rank (1 = most of its words in the log) and the best-matching step of the true option
+        rec_ = [recall(content_tokens(o), log_tok) for o in opts]
+        res["overlap_rank"][nid] = 1 + sum(x > rec_[a] for i, x in enumerate(rec_) if i != a)
+        step_tok = [content_tokens(kept_step(traj, s["k"])) for s in traj["steps"]]
+        t = content_tokens(opts[a])
+        res["best_step"][nid] = max(range(n), key=lambda i: (recall(t, step_tok[i]), -abs(i - k))) == k
+    res["pass"] = not fails
+    return res
+
+
+def addon_record(traj: dict, src: dict, entry: dict, seed: int = 20261010) -> dict:
+    """One add-on output line: {"traj_id", "subset", "teacher", "nodes" (clean), "skips", "checks", "meta"}."""
+    chk = check_addon(traj, src, entry, seed)
+    nodes, skips = chk.pop("nodes"), chk.pop("skips")
+    meta = {"n_steps": len(traj["steps"]), "mistake_step": traj["mistake_step"], "seed": seed,
+            "targets": entry.get("targets") or []}
+    return {"traj_id": traj["traj_id"], "subset": traj["subset"], "teacher": (src or {}).get("teacher", ""),
+            "nodes": nodes, "skips": skips, "checks": chk, "meta": meta}
+
+
+def merge_v3(traj: dict, line: dict, addon: dict | None, *, render: str = "free", cap: int = STEP_CAP,
+             stats: collections.Counter | None = None) -> dict:
+    """A v2 tree line (output_record) + its add-on line (addon_record; used only when its checks passed) -> the v3
+    line: the v2 nodes, then the clean nodes; render "free" applies free_render to all of them at this cap (the
+    student's per-step cap in the builders). The v2 line is not modified."""
+    st = stats if stats is not None else collections.Counter()
+    if render not in ("index", "free"):
+        raise ValueError(f"render {render!r}: index or free")
+    nodes = copy.deepcopy(line.get("nodes") or [])
+    if addon is not None:
+        if (addon.get("checks") or {}).get("pass"):
+            have = {x["id"] for x in nodes}
+            add = [x for x in addon.get("nodes") or [] if x["id"] not in have]
+            nodes += copy.deepcopy(add)
+            st["addon_merged"] += 1
+            st["clean_nodes"] += len(add)
+            st["clean_skips"] += len(addon.get("skips") or [])
+        else:
+            st["addon_failed"] += 1
+    else:
+        st["addon_missing"] += 1
+    if render == "free":
+        nodes = free_render(traj, nodes, cap=cap, stats=st)
+    out = dict(line, nodes=nodes)
+    out["v3"] = {"render": render, "addon": addon is not None and bool((addon.get("checks") or {}).get("pass")),
+                 "cap": cap}
+    return out

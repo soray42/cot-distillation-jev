@@ -11,6 +11,17 @@
   python3 scripts/extract_fa_trees.py assemble --ids data/raw/stepfinder_trees/pilot_ids.json \
       --src-dir data/raw/stepfinder_trees/pilot_src --prefix data/raw/stepfinder_trees/pilot_
 
+v3 (index-free pointers + clean nodes; teacher brief data/raw/stepfinder_trees/BRIEF_v3_addon.md):
+  v3-targets  clean-node targets for every passing v2 tree (prior-biased + one random earlier step, length-rank
+              targets), the add-on teacher views, the work list and --shards mixed shards (data/raw/fa_trees_v3/)
+  v3-check    assemble + check add-on sources (src_v3/<subset>__<id>.json): <prefix>{subset}.jsonl, rejected, summary
+  v3-merge    a v2 trees file + its add-on file -> v3 lines (index-free render at the teacher cap) and a summary
+
+  python3 scripts/extract_fa_trees.py v3-targets
+  python3 scripts/extract_fa_trees.py v3-check --ids <entries.json> --prefix <scratch>/chk_KK_ --teacher claude-opus
+  python3 scripts/extract_fa_trees.py v3-merge --trees data/raw/aftraj_trees/aftraj.jsonl \
+      --addon data/raw/aftraj_trees/v3add_aftraj.jsonl --out <scratch>/aftraj_v3.jsonl
+
 No network: the teacher's trees are files on disk.
 """
 from __future__ import annotations
@@ -33,6 +44,12 @@ from cotdistill import fa_trees as ft  # noqa: E402
 RAW = ROOT / "data/raw/stepfinder/repo/data"
 POOL_FILES = [ROOT / f"data/{d}/{s}.jsonl" for d in ("student_fa1", "student_fa1d") for s in ("train", "val")]
 UID_PREFIX = {"alg": "alg-", "hc": "han-"}           # fa_public's StepFinder uids
+# v3: one check command over mixed shards needs the raw export, the v2 trees and the add-on sources of every subset
+RAW_BY_SUBSET = {"alg": RAW, "hc": RAW, "aftraj": ROOT / "data/raw/aftraj_sf", "real": ROOT / "data/raw/real_sf"}
+TREES_DIR = {"alg": ROOT / "data/raw/stepfinder_trees", "hc": ROOT / "data/raw/stepfinder_trees",
+             "aftraj": ROOT / "data/raw/aftraj_trees", "real": ROOT / "data/raw/real_trees"}
+V2_TREES = {sub: TREES_DIR[sub] / f"{sub}.jsonl" for sub in TREES_DIR}
+V3_DIR = ROOT / "data/raw/fa_trees_v3"
 
 
 def src_name(traj_id: str) -> str:
@@ -106,6 +123,233 @@ def sample(raw: Path, n_by_subset: dict, seed: int, pool: set[str]) -> list[dict
 def load_by_id(raw: Path, traj_id: str) -> dict:
     subset, stem = traj_id.split("/")
     return ft.load_traj(raw / ft.SUBSET_DIRS[subset] / "train" / f"{stem}.json", subset)
+
+
+# ---------------------------------------------------------------- v3: clean-node add-on pass
+
+def rel(p: Path) -> str:
+    p = Path(p)
+    return str(p.relative_to(ROOT)) if p.is_absolute() and p.is_relative_to(ROOT) else str(p)
+
+
+def src_v3_path(traj_id: str) -> Path:
+    return TREES_DIR[traj_id.split("/")[0]] / "src_v3" / src_name(traj_id)
+
+
+def addon_view(traj: dict, entry: dict, line: dict) -> str:
+    """The add-on teacher view: the targets with their index-free question, the decisive step's v2 content node as the
+    form example, then the v2 teacher view (task, ground truth, decisive step, reason, log)."""
+    out = [f"v3 ADD-ON (clean nodes) for {traj['traj_id']}  ({len(traj['steps'])} steps; source {traj['subset']})",
+           f"Write: {entry['src']}", "Targets (one node per target: a clean node, or a skip if the step is itself wrong):"]
+    for i, t in enumerate(entry["targets"], 1):
+        out += [f"  c{i}  cite_step {t['step']}  {ft.step_label(traj, t['step'])}  target_len_rank {t['target_len_rank']}"
+                f"  ({t['why']})",
+                f"      student question: {ft.CLEAN_QUESTION.format(ref=t['ref'])}"]
+    ms = traj["mistake_step"]
+    out.append(f"[teacher only] Decisive step: {ft.step_label(traj, ms)} (every target is strictly before it)")
+    cn = next((nd for nd in line.get("nodes") or [] if nd["type"] == "content"), None)
+    if cn:
+        out += ["Form example (the decisive step's content node in the v2 tree; write clean options of the same kind):",
+                f"  Q: {cn['question']}", f"  true:  {cn['options'][cn['answer']]}"]
+        out += [f"  false: {o}" for i, o in enumerate(cn["options"]) if i != cn["answer"]]
+    return "\n".join(out) + "\n\n" + "-" * 100 + "\n" + ft.render_view(traj) + "\n"
+
+
+def v3_targets(args) -> None:
+    """Targets, views, work list and shards for the add-on pass over every passing v2 tree."""
+    out = Path(args.out_dir)
+    (out / "views").mkdir(parents=True, exist_ok=True)
+    (out / "shards").mkdir(exist_ok=True)
+    lines_by_sub = {}
+    for sub in V2_TREES:
+        p = Path(args.trees.format(subset=sub)) if args.trees else V2_TREES[sub]
+        with open(p) as f:
+            lines_by_sub[sub] = [json.loads(x) for x in f if x.strip()]
+    old_path = out / "all_entries.json"          # resumable: an entry whose add-on source exists keeps its targets
+    old = {e["traj_id"]: e for e in json.loads(old_path.read_text())} if old_path.exists() else {}
+    kept = {t: e for t, e in old.items() if (ROOT / e["src"]).exists()}
+    priors, speakers, entries, zero = {}, {}, [], collections.Counter()
+    for sub, lines in lines_by_sub.items():
+        pool = [ft.load_traj(p, sub) for p in ft.traj_paths(RAW_BY_SUBSET[sub], sub)]
+        priors[sub] = ft.position_prior(pool)
+        speakers[sub] = sorted(ft.clean_speakers(pool))
+        for line in lines:
+            t = load_by_id(RAW_BY_SUBSET[sub], line["traj_id"])
+            tg = ft.clean_targets(t, priors[sub], set(speakers[sub]), args.seed)
+            if not tg:
+                zero[sub] += line["traj_id"] not in kept
+                continue
+            for x in tg:
+                x["ref"] = ft.free_ref_for(t, x["step"])
+            entries.append({"traj_id": t["traj_id"], "subset": sub, "n_steps": len(t["steps"]),
+                            "mistake_step": t["mistake_step"], "targets": tg,
+                            "view": rel(out / "views" / (src_name(t["traj_id"])[:-5] + ".txt")),
+                            "src": rel(src_v3_path(t["traj_id"]))})
+    entries.sort(key=lambda e: e["traj_id"])
+    random.Random(f"v3-addon|{args.seed}").shuffle(entries)
+    i = 0
+    for e in entries:          # balanced length-rank targets, consecutive within a tree; assigned over the fresh
+        for x in e["targets"]:  # targets of every entry, then the kept entries are put back, so a written entry
+            x["target_len_rank"] = i % 4                 # never shifts the ranks of the others (stable re-runs)
+            i += 1
+    fresh = {e["traj_id"] for e in entries}
+    entries = [dict(kept[e["traj_id"]]) if e["traj_id"] in kept else e for e in entries]
+    entries += [dict(e) for t, e in sorted(kept.items()) if t not in fresh]   # kept, but no target under the rule
+    by_id = {}
+    for sub, lines in lines_by_sub.items():
+        for line in lines:
+            by_id[line["traj_id"]] = line
+    for e in entries:
+        t = load_by_id(RAW_BY_SUBSET[e["subset"]], e["traj_id"])
+        for x in e["targets"]:                          # the reference at the current excerpt rule
+            x["ref"] = ft.free_ref_for(t, x["step"])
+        (ROOT / e["view"]).write_text(addon_view(t, e, by_id[e["traj_id"]]))
+    (out / "all_entries.json").write_text(json.dumps(entries, indent=0, ensure_ascii=False) + "\n")
+    for k in range(args.shards):
+        (out / "shards" / f"shard_{k:02d}.json").write_text(json.dumps(entries[k::args.shards], indent=0,
+                                                                       ensure_ascii=False) + "\n")
+    for sub in TREES_DIR:
+        (TREES_DIR[sub] / "src_v3").mkdir(exist_ok=True)
+    nt = collections.Counter(len(e["targets"]) for e in entries)
+    why = collections.Counter(x["why"] for e in entries for x in e["targets"])
+    lr = collections.Counter(x["target_len_rank"] for e in entries for x in e["targets"])
+    rel_pos = collections.Counter(round(x["step"] / max(1, e["n_steps"] - 1), 1) for e in entries for x in e["targets"])
+    summ = {"seed": args.seed, "trees": {s: len(v) for s, v in lines_by_sub.items()},
+            "entries": len(entries), "kept_with_source": len(kept),
+            "by_subset": dict(collections.Counter(e["subset"] for e in entries)),
+            "no_target": dict(zero), "targets_per_entry": dict(sorted(nt.items())), "targets": sum(why.values()),
+            "why": dict(why), "target_len_rank": dict(sorted(lr.items())),
+            "target_relative_position": dict(sorted(rel_pos.items())), "shards": args.shards,
+            "shard_sizes": [len(entries[k::args.shards]) for k in range(args.shards)],
+            "speakers": speakers,
+            "prior_top": {s: {"abs": sorted(p["abs"].items(), key=lambda kv: -kv[1])[:6],
+                              "end": sorted(p["end"].items(), key=lambda kv: -kv[1])[:6], "n": p["n"]}
+                          for s, p in priors.items()}}
+    (out / "summary.json").write_text(json.dumps(summ, indent=1) + "\n")
+    print(json.dumps({k: summ[k] for k in ("trees", "entries", "kept_with_source", "by_subset", "no_target",
+                                           "targets_per_entry", "why",
+                                           "target_len_rank", "shard_sizes")}, indent=1))
+
+
+def v3_summary(records: list[dict], mtimes: dict, start: float | None) -> dict:
+    s: dict = {"n": len(records), "passed": sum(r["checks"]["pass"] for r in records)}
+    s["pass_rate"] = round(s["passed"] / max(1, s["n"]), 4)
+    s["by_subset"] = {sub: {"n": sum(r["subset"] == sub for r in records),
+                            "passed": sum(r["subset"] == sub and r["checks"]["pass"] for r in records)}
+                      for sub in sorted({r["subset"] for r in records})}
+    s["failures_by_code"] = dict(collections.Counter(f.split(":")[0] for r in records
+                                                     for f in r["checks"]["failures"]).most_common())
+    nodes = [nd for r in records for nd in r["nodes"]]
+    skips = [x for r in records for x in r["skips"]]
+    tg = sum(len(r["meta"]["targets"]) for r in records)
+    s["targets"], s["clean_nodes"], s["skips"] = tg, len(nodes), len(skips)
+    s["skip_rate"] = round(len(skips) / max(1, tg), 3)
+    s["skip_reasons"] = [f"{r['traj_id']} c{x['id'][1:]} step {x['cite_step']}: {x['reason']}" for r in records
+                         for x in r["skips"]]
+    lr = collections.Counter(v for r in records for v in r["checks"].get("length_rank", {}).values())
+    s["length_rank_hist (0 = shortest)"] = dict(sorted(lr.items()))
+    s["answer_index_hist"] = dict(sorted(collections.Counter(nd["answer"] for nd in nodes).items()))
+    orank = collections.Counter(v for r in records for v in r["checks"].get("overlap_rank", {}).values())
+    s["overlap_rank_hist (1 = most log words)"] = dict(sorted(orank.items()))
+    sr = [v for r in records for v in r["checks"].get("stem_recall", {}).values()]
+    s["stem_recall_of_true_mean"] = round(statistics.mean(sr), 3) if sr else None
+    bs = [v for r in records for v in r["checks"].get("best_step", {}).values()]
+    s["true_option_best_matches_its_step"] = f"{sum(bs)} / {len(bs)}"
+    ts = sorted(mtimes.values())
+    if ts:
+        first = start if start is not None else ts[0]
+        s["authoring_wall"] = {"span_s": round(ts[-1] - first, 1), "per_tree_s": round((ts[-1] - first) / len(ts), 1),
+                               "note": "source-file mtimes; includes reading the views and fixing"}
+    return s
+
+
+def v3_check(args) -> None:
+    ids = json.loads(Path(args.ids).read_text())
+    known = {}
+    if any("targets" not in e for e in ids):
+        known = {e["traj_id"]: e for e in json.loads(Path(args.entries).read_text())}
+    records, mtimes = [], {}
+    for e in ids:
+        e = e if "targets" in e else known[e["traj_id"]]
+        sub = e["traj_id"].split("/")[0]
+        t = load_by_id(RAW_BY_SUBSET[sub], e["traj_id"])
+        p = ROOT / e["src"] if e.get("src") else src_v3_path(e["traj_id"])
+        if not p.exists():
+            records.append({"traj_id": t["traj_id"], "subset": sub, "teacher": "", "nodes": [], "skips": [],
+                            "checks": {"pass": False, "failures": ["missing: no add-on source"]},
+                            "meta": {"targets": e["targets"]}})
+            continue
+        mtimes[t["traj_id"]] = os.path.getmtime(p)
+        try:
+            src = json.loads(p.read_text())
+        except json.JSONDecodeError as ex:
+            records.append({"traj_id": t["traj_id"], "subset": sub, "teacher": "", "nodes": [], "skips": [],
+                            "checks": {"pass": False, "failures": [f"schema: invalid JSON ({ex})"]},
+                            "meta": {"targets": e["targets"]}})
+            continue
+        rec = ft.addon_record(t, src, e, args.seed)
+        if src.get("traj_id") != t["traj_id"]:
+            rec["checks"]["failures"].append("schema: traj_id mismatch")
+            rec["checks"]["pass"] = False
+        if args.teacher and src.get("teacher") != args.teacher:
+            rec["checks"]["failures"].append(f"schema: teacher {src.get('teacher')!r}")
+            rec["checks"]["pass"] = False
+        records.append(rec)
+    prefix = args.prefix
+    Path(prefix).parent.mkdir(parents=True, exist_ok=True)
+    outs = {}
+    for sub in sorted({r["subset"] for r in records}):
+        path = Path(f"{prefix}{sub}.jsonl")
+        with open(path, "w") as f:
+            for r in records:
+                if r["subset"] == sub and r["checks"]["pass"]:
+                    f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        outs[path.name] = path
+    rej = Path(f"{prefix}rejected.jsonl")
+    with open(rej, "w") as f:
+        for r in records:
+            if not r["checks"]["pass"]:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    outs[rej.name] = rej
+    summ = v3_summary(records, mtimes, args.start_time)
+    summ["teacher"] = sorted({r["teacher"] for r in records if r["teacher"]})
+    summ["seed"] = args.seed
+    summ["md5"] = {k: md5(v) for k, v in outs.items()}
+    Path(f"{prefix}summary.json").write_text(json.dumps(summ, indent=1, ensure_ascii=False) + "\n")
+    print(json.dumps({k: summ[k] for k in ("n", "passed", "pass_rate", "failures_by_code", "skips",
+                                           "length_rank_hist (0 = shortest)")}, indent=1))
+    for r in records:
+        if not r["checks"]["pass"]:
+            print(r["traj_id"], r["checks"]["failures"])
+
+
+def v3_merge(args) -> None:
+    """v2 trees + add-on lines -> v3 lines at the teacher cap (the builders do the same per item at the student cap)."""
+    addons = {}
+    if args.addon:
+        with open(args.addon) as f:
+            for x in f:
+                if x.strip():
+                    a = json.loads(x)
+                    addons[a["traj_id"]] = a
+    st: collections.Counter = collections.Counter()
+    n_lines = not_free = 0
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+    with open(args.trees) as f, open(args.out, "w") as g:
+        for x in f:
+            if not x.strip():
+                continue
+            line = json.loads(x)
+            sub = line["traj_id"].split("/")[0]
+            t = load_by_id(RAW_BY_SUBSET[sub], line["traj_id"])
+            v3 = ft.merge_v3(t, line, addons.get(line["traj_id"]), render=args.render, stats=st)
+            not_free += sum(not ft.node_text_index_free(nd) for nd in v3["nodes"]) if args.render == "free" else 0
+            n_lines += 1
+            g.write(json.dumps(v3, ensure_ascii=False) + "\n")
+    summ = {"lines": n_lines, "render": args.render, "nodes_with_a_step_index": not_free,
+            "stats": dict(sorted(st.items())), "md5": md5(Path(args.out))}
+    Path(args.out).with_suffix(".summary.json").write_text(json.dumps(summ, indent=1) + "\n")
+    print(json.dumps(summ, indent=1))
 
 
 def md5(path: Path) -> str:
@@ -200,7 +444,26 @@ def main() -> None:
     c.add_argument("--seed", type=int, default=20261010)
     c.add_argument("--start-time", type=float, default=None, help="epoch seconds when authoring started")
     c.add_argument("--teacher", default=None, help="require this teacher name in every source tree")
+    d = sub.add_parser("v3-targets")
+    d.add_argument("--trees", default="", help="v2 trees per subset, a path with {subset} (default: the four files)")
+    d.add_argument("--out-dir", default=str(V3_DIR))
+    d.add_argument("--shards", type=int, default=12)
+    d.add_argument("--seed", type=int, default=20261019)
+    e = sub.add_parser("v3-check")
+    e.add_argument("--ids", required=True, help="JSON list of work-list entries (or {traj_id} looked up in --entries)")
+    e.add_argument("--entries", default=str(V3_DIR / "all_entries.json"))
+    e.add_argument("--prefix", required=True)
+    e.add_argument("--seed", type=int, default=20261010)
+    e.add_argument("--start-time", type=float, default=None)
+    e.add_argument("--teacher", default=None)
+    m = sub.add_parser("v3-merge")
+    m.add_argument("--trees", required=True)
+    m.add_argument("--addon", default="")
+    m.add_argument("--render", choices=("index", "free"), default="free")
+    m.add_argument("--out", required=True)
     args = ap.parse_args()
+    if args.cmd in ("v3-targets", "v3-check", "v3-merge"):
+        return {"v3-targets": v3_targets, "v3-check": v3_check, "v3-merge": v3_merge}[args.cmd](args)
     raw = Path(args.raw)
 
     if args.cmd == "sample":

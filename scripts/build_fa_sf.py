@@ -38,6 +38,12 @@ With --trees (the MC reasoning trees of another agent, schema of src/cotdistill/
                                                        options exactly "Step k [Agent]" of the trajectory, ids, parents,
                                                        a DAG, 2-62 distinct options, no metadata leak, no copy of the
                                                        final question) are left out and the item keeps no nodes
+  v3 (opt-in; without these flags every output above is byte-identical): --trees-addon <add-on lines with {subset},
+  fa_trees.addon_record: the teacher's "clean" nodes, merged with the v2 tree by traj_id when their checks passed>
+  and / or --pointer-render free (fa_trees.free_render at the item's step cap: no step number in any question or
+  option, pointer options "<Agent>: “<excerpt>”", step references "the <Agent> step “<excerpt>”", nodes that cannot be
+  rendered dropped) write data/student_fa_sf_<s>_t3/ and _disj_t3/ (--trees-suffix) with a summary.json; node types
+  stay answer_step / provenance / content / conflict / agent (+ clean), so --tree-node-types selects them as before
 
 Splits: val = about --val-frac of the subset's trajectories, whole question groups (fa_public.norm_task of the task;
 StepFinder has about 18 trajectories per question), drawn by a seeded hash among the questions that overlap no Who&When
@@ -67,6 +73,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = ""
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from cotdistill import fa_public as fp  # noqa: E402
+from cotdistill import fa_trees as ft  # noqa: E402
 from cotdistill.treeplan import MC_SYMBOLS, mc_check, node_depths, statement_block  # noqa: E402
 
 
@@ -84,7 +91,7 @@ UID_PREFIX = {"alg": "alg", "hc": "han"}            # fa_public.read_stepfinder:
 PUBLISHED = {   # StepFinder (KDD'26) Table: mean +- sd over seeds, test-selected checkpoints (main.py)
     "alg": {"acc": 29.63, "acc_sd": 1.50, "acc1": 28.84, "acc2": 45.24, "acc3": 60.31, "s_per_traj": 0.61},
     "hc": {"acc": 22.99, "acc_sd": 2.15, "acc1": 21.26, "acc2": 25.29, "acc3": 30.46, "s_per_traj": 3.56}}
-TREE_TYPES = ("answer_step", "provenance", "content", "conflict", "agent")
+TREE_TYPES = ("answer_step", "provenance", "content", "conflict", "agent", "clean")   # clean: v3 add-on nodes
 POINTER = re.compile(r"^Step (\d+) \[(.*)\]$")
 STEP_WORD = re.compile(r"^\s*step\s*\d+", re.I)
 
@@ -316,6 +323,7 @@ def token_report(items: list[dict], tok, max_len: int, pack: int = 8) -> dict:
 
 # ------------------------------------------------------------------------------------------------- trees (_t2)
 LEAK = re.compile(r"\b(is_mistake|mistake_step|mistake_agent|mistake_reason|ground[ _-]?truth)\b", re.I)
+EXCERPT = re.compile(ft.OPEN_Q + "[^" + ft.CLOSE_Q + "]*" + ft.CLOSE_Q)    # a quoted log excerpt (fa_trees.free_render)
 
 
 def convert_tree(line: dict, rec: dict, item: dict) -> tuple[list[dict], list[str], dict]:
@@ -324,7 +332,9 @@ def convert_tree(line: dict, rec: dict, item: dict) -> tuple[list[dict], list[st
     every node a valid MC node (treeplan.mc_check: 2-62 distinct one-line options, an answer index); a pointer option
     (one that starts with "Step <n>") is exactly "Step k [Agent]" of this trajectory (fa_public.step_ref, the item's
     option text), option_steps (when given) agree; a pointer node's options are all pointers; no question or option
-    names a label field; no node repeats the final question; cite_step within the trajectory."""
+    names a label field and no question holds "Answer:" (an index-free node: outside its quoted log excerpts, which
+    are verbatim log text the prompt already shows, e.g. the step reference the Lead step “Answer: 3”); no node
+    repeats the final question; cite_step within the trajectory."""
     bad = []
     n = len(rec["steps"])
     refs = [fp.step_ref(rec, k) for k in range(n)]
@@ -346,6 +356,12 @@ def convert_tree(line: dict, rec: dict, item: dict) -> tuple[list[dict], list[st
         node = {"id": nid, "type": typ, "question": q, "options": opts, "answer": x.get("answer"),
                 "depends_on": list(x.get("parents") or []), "cite_step": x.get("cite_step"),
                 "quote": str(x.get("quote") or ""), "status": "teacher"}
+        if x.get("render") == "free":       # v3 index-free node (fa_trees.free_render): its steps by excerpt only
+            node["render"] = "free"
+            if x.get("option_steps") is not None:
+                node["option_steps"] = list(x["option_steps"])
+            if not ft.node_text_index_free(node):
+                bad.append(f"free_index:{nid}")
         try:
             mc_check(node)
         except ValueError:
@@ -370,7 +386,8 @@ def convert_tree(line: dict, rec: dict, item: dict) -> tuple[list[dict], list[st
         cs = node["cite_step"]
         if cs is not None and (not isinstance(cs, int) or isinstance(cs, bool) or not 0 <= cs < n):
             bad.append(f"cite_step:{nid}")
-        if LEAK.search(q) or any(LEAK.search(o) for o in opts) or "Answer:" in q:
+        q_own = EXCERPT.sub(" ", q) if node.get("render") == "free" else q       # the teacher's own wording
+        if LEAK.search(q) or any(LEAK.search(o) for o in opts) or "Answer:" in q_own:
             bad.append(f"leak:{nid}")
         if fp.norm_task(q) == final_q:
             bad.append(f"final_question:{nid}")
@@ -399,10 +416,21 @@ def convert_tree(line: dict, rec: dict, item: dict) -> tuple[list[dict], list[st
     return (out if not bad else []), bad, facts
 
 
-def tree_items(items: list[dict], recs: dict, trees: dict, keep_failed: bool, stats: dict) -> list[dict]:
+def traj_of(rec: dict) -> dict:
+    """A fa_public record in the shape fa_trees.free_render / merge_v3 read (the steps as the student sees them)."""
+    return {"traj_id": rec["uid"], "subset": rec.get("subset", ""), "mistake_step": rec["dec"],
+            "ground_truth": str(rec.get("answer") or ""),
+            "steps": [{"k": i, "agent": s["agent"], "text": s["text"]} for i, s in enumerate(rec["steps"])]}
+
+
+def tree_items(items: list[dict], recs: dict, trees: dict, keep_failed: bool, stats: dict,
+               addons: dict | None = None, render: str = "index") -> list[dict]:
     """The items with their label-derived nodes replaced by the tree's MC nodes (no tree, or a refused one: no nodes,
-    final question only). stats collects coverage, refusals, node types, option counts, answer positions."""
+    final question only). stats collects coverage, refusals, node types, option counts, answer positions.
+    v3 (addons given or render "free"): each tree is first merged with its add-on line and / or rendered index-free
+    at the item's step cap (fa_trees.merge_v3); stats["v3"] counts merges, clean nodes and dropped nodes."""
     out = []
+    v3 = addons is not None or render != "index"
     for it in items:
         uid = it["fa"]["uid"]
         line = trees.get(uid)
@@ -412,6 +440,10 @@ def tree_items(items: list[dict], recs: dict, trees: dict, keep_failed: bool, st
                 why = ["tree_checks_failed"]
             else:
                 nodes, why, facts = convert_tree(line, recs[uid], it)
+                if v3 and not why:          # the v2 tree is accepted as it is; then merged / rendered and re-checked
+                    line = ft.merge_v3(traj_of(recs[uid]), line, (addons or {}).get(uid), render=render,
+                                       cap=it["fa"]["step_cap"], stats=stats["v3"])
+                    nodes, why, facts = convert_tree(line, recs[uid], it)
                 if not why:
                     stats["facts"].update(facts)
         if why:
@@ -446,6 +478,53 @@ def read_trees(path: Path, subset: str) -> dict:
                 raise SystemExit(f"{path}: traj_id {x.get('traj_id')!r} is not {subset}/<file stem>")
             out[f"{UID_PREFIX[subset]}-{stem}"] = x
     return out
+
+
+def v3_setup(args, tstats: dict, subset: str | None = None) -> tuple[dict | None, str]:
+    """The add-on lines (--trees-addon, {subset} filled in) and the output suffix (--trees-suffix, default _t2 for a
+    v2 build, _t3 with --trees-addon or --pointer-render free); adds the v3 counters to tstats in v3 mode only."""
+    addons = None
+    v3 = bool(args.trees_addon) or args.pointer_render != "index"
+    if args.trees_addon:
+        apath = ROOT / args.trees_addon.format(subset=subset)
+        addons = read_trees(apath, subset) if subset in SUBSETS else read_lines_by_tail(apath, subset)
+        tstats["addon_file"] = str(apath.relative_to(ROOT)) if apath.is_relative_to(ROOT) else str(apath)
+        tstats["addon_lines"] = len(addons)
+    if v3:
+        tstats["v3"] = collections.Counter()
+        tstats["pointer_render"] = args.pointer_render
+    return addons, args.trees_suffix or ("_t3" if v3 else "_t2")
+
+
+def read_lines_by_tail(path: Path, subset: str) -> dict:
+    """uid -> line for the aftraj / real files (traj_id "<subset>/<uid>"); a later line replaces an earlier."""
+    out = {}
+    with open(path) as f:
+        for line in f:
+            if line.strip():
+                x = json.loads(line)
+                sub, _, uid = str(x.get("traj_id", "")).partition("/")
+                if sub != subset or not uid:
+                    raise SystemExit(f"{path}: traj_id {x.get('traj_id')!r} is not {subset}/<uid>")
+                out[uid] = x
+    return out
+
+
+def v3_summary(d: Path, args, trees: dict, files: dict) -> None:
+    """summary.json of a v3 output directory: the build flags, the tree statistics and the md5s of its files."""
+    mine = {p: n for p, n in files.items() if Path(p).parent == (d.relative_to(ROOT) if d.is_relative_to(ROOT) else d)}
+    (d / "summary.json").write_text(json.dumps({"args": vars(args), "trees": trees, "md5": md5_all(mine)}, indent=1,
+                                               ensure_ascii=False, default=str))
+
+
+def add_v3_args(ap: argparse.ArgumentParser, pattern: bool = True) -> None:
+    hint = " (a path with {subset})" if pattern else ""
+    ap.add_argument("--trees-addon", default="", help="v3 add-on lines (fa_trees.addon_record) merged with the trees "
+                    f"by traj_id{hint}")
+    ap.add_argument("--pointer-render", choices=("index", "free"), default="index",
+                    help="free: v3 index-free render of every tree node (fa_trees.free_render)")
+    ap.add_argument("--trees-suffix", default="", help="output suffix of the tree variant (default _t2, or _t3 with "
+                    "--trees-addon / --pointer-render free)")
 
 
 # ------------------------------------------------------------------------------------------------- main
@@ -525,17 +604,21 @@ def build_subset(subset: str, args, tok, ww: dict) -> dict:
                       "types": collections.Counter(), "n_options": collections.Counter(),
                       "answer_pos": collections.Counter(), "depth": collections.Counter(),
                       "answer_step_is_decisive": collections.Counter(), "facts": collections.Counter()}
-            t_tr = tree_items(tr_s, by_uid, tl, args.trees_keep_failed, tstats)
-            t_va = tree_items(va_s, by_uid, tl, args.trees_keep_failed, tstats)
+            addons, suffix = v3_setup(args, tstats, subset)
+            t_tr = tree_items(tr_s, by_uid, tl, args.trees_keep_failed, tstats, addons, args.pointer_render)
+            t_va = tree_items(va_s, by_uid, tl, args.trees_keep_failed, tstats, addons, args.pointer_render)
             for it in t_tr + t_va:
                 statement_block(it)                       # GFP-S view of every item builds
-            write(ROOT / f"{args.out_prefix}_{subset}_t2" / "train.jsonl", t_tr, files)
-            write(ROOT / f"{args.out_prefix}_{subset}_t2" / "val.jsonl", t_va, files)
-            write(ROOT / f"{args.out_prefix}_{subset}_disj_t2" / "train.jsonl", keep(t_tr), files)
-            write(ROOT / f"{args.out_prefix}_{subset}_disj_t2" / "val.jsonl", t_va, files)
+            write(ROOT / f"{args.out_prefix}_{subset}{suffix}" / "train.jsonl", t_tr, files)
+            write(ROOT / f"{args.out_prefix}_{subset}{suffix}" / "val.jsonl", t_va, files)
+            write(ROOT / f"{args.out_prefix}_{subset}_disj{suffix}" / "train.jsonl", keep(t_tr), files)
+            write(ROOT / f"{args.out_prefix}_{subset}_disj{suffix}" / "val.jsonl", t_va, files)
             trees = {k: (dict(sorted(v.items(), key=lambda kv: str(kv[0])))
                          if isinstance(v, collections.Counter) else v) for k, v in tstats.items()}
             trees["tokens_train"] = token_report(t_tr, tok, args.budget)
+            if "v3" in tstats:
+                for d in (f"{args.out_prefix}_{subset}{suffix}", f"{args.out_prefix}_{subset}_disj{suffix}"):
+                    v3_summary(ROOT / d, args, trees, files)
         else:
             trees = {"file": str(tpath), "missing": True}
             print(f"{subset}: no trees file {tpath}", flush=True)
@@ -593,6 +676,7 @@ def main(argv=None) -> None:
     ap.add_argument("--trees", default="", help="MC trees per subset, a path with {subset}, e.g. "
                     "data/raw/stepfinder_trees/{subset}.jsonl (writes the _t2 variants)")
     ap.add_argument("--trees-keep-failed", action="store_true", help="also convert trees whose own checks failed")
+    add_v3_args(ap)
     ap.add_argument("--compare-norm", default="data/student_fa1/norm/stepfinder.jsonl",
                     help="normalized StepFinder records of the fa1 builds to compare with ('' = off)")
     ap.add_argument("--dry", action="store_true", help="splits and overlap only")

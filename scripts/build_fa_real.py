@@ -19,7 +19,8 @@ train. rse is never trained on (held-out domain: code agents), nor are Who&When,
   CUDA_VISIBLE_DEVICES= ~/.venvs/sev/bin/python -P -E scripts/build_fa_real.py            # items
   python3 scripts/build_fa_real.py --export-sf                                          # tree-teacher inputs
 
-Writes data/student_fa_real/{train,val}.jsonl (+ _t2 with --trees), data/eval/fa_real_test.jsonl (in-domain),
+Writes data/student_fa_real/{train,val}.jsonl (+ _t2 with --trees; _t3 with v3 --trees-addon / --pointer-render free,
+as build_fa_sf), data/eval/fa_real_test.jsonl (in-domain),
 data/eval/fa_rse.jsonl (held-out), data/student_fa_real/summary.json; --export-sf writes data/raw/real_sf/REAL/train/
 <uid>.json (StepFinder file format, train + val) and data/raw/real_trees/{all_ids.json, shards/}.
 """
@@ -174,9 +175,10 @@ def export_sf(train_val: list[dict], shards: int) -> None:
     print(f"exported {len(ids)} trajectories, {shards} shards")
 
 
-def main() -> None:
+def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--out", default="data/student_fa_real")
+    ap.add_argument("--eval-dir", default="data/eval", help="where fa_real_test.jsonl and fa_rse.jsonl are written")
     ap.add_argument("--test-frac", type=float, default=0.30)
     ap.add_argument("--val-frac", type=float, default=0.10)
     ap.add_argument("--gt-p", type=float, default=0.5)
@@ -187,9 +189,12 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--trees", default="")
     ap.add_argument("--trees-keep-failed", action="store_true")
+    ap.add_argument("--trees-addon", default="", help="v3 add-on lines (fa_trees.addon_record), merged by traj_id")
+    ap.add_argument("--pointer-render", choices=("index", "free"), default="index")
+    ap.add_argument("--trees-suffix", default="")
     ap.add_argument("--export-sf", action="store_true")
     ap.add_argument("--shards", type=int, default=12)
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     counts: collections.Counter = collections.Counter()
     pool_all = read_teb(counts) + read_apb(counts)
     rse_all = read_rse(counts)
@@ -234,8 +239,8 @@ def main() -> None:
     out = ROOT / args.out
     sf.write(out / "train.jsonl", tr, files)
     sf.write(out / "val.jsonl", va, files)
-    sf.write(ROOT / "data/eval/fa_real_test.jsonl", te, files)
-    sf.write(ROOT / "data/eval/fa_rse.jsonl", rs_items, files)
+    sf.write(ROOT / args.eval_dir / "fa_real_test.jsonl", te, files)
+    sf.write(ROOT / args.eval_dir / "fa_rse.jsonl", rs_items, files)
     trees = None
     if args.trees:
         tl = {}
@@ -248,13 +253,16 @@ def main() -> None:
                   "refused": collections.Counter(), "types": collections.Counter(), "n_options": collections.Counter(),
                   "answer_pos": collections.Counter(), "depth": collections.Counter(),
                   "answer_step_is_decisive": collections.Counter(), "facts": collections.Counter()}
-        t_tr = sf.tree_items(tr, by_uid, tl, args.trees_keep_failed, tstats)
-        t_va = sf.tree_items(va, by_uid, tl, args.trees_keep_failed, tstats)
+        addons, suffix = sf.v3_setup(args, tstats, SUBSET)
+        t_tr = sf.tree_items(tr, by_uid, tl, args.trees_keep_failed, tstats, addons, args.pointer_render)
+        t_va = sf.tree_items(va, by_uid, tl, args.trees_keep_failed, tstats, addons, args.pointer_render)
         for it in t_tr + t_va:
             sf.statement_block(it)
-        sf.write(ROOT / f"{args.out}_t2" / "train.jsonl", t_tr, files)
-        sf.write(ROOT / f"{args.out}_t2" / "val.jsonl", t_va, files)
+        sf.write(ROOT / f"{args.out}{suffix}" / "train.jsonl", t_tr, files)
+        sf.write(ROOT / f"{args.out}{suffix}" / "val.jsonl", t_va, files)
         trees = {k: (dict(v) if isinstance(v, collections.Counter) else v) for k, v in tstats.items()}
+        if "v3" in tstats:
+            sf.v3_summary(ROOT / f"{args.out}{suffix}", args, trees, files)
     comp = lambda rs: dict(collections.Counter(f"{r['origin']}/{r['subset']}" for r in rs))  # noqa: E731
     summary = {"args": vars(args), "counts": dict(sorted(counts.items())),
                "sizes": {"train": len(tr), "val": len(va), "test": len(te), "rse": len(rs_items)},
