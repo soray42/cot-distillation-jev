@@ -35,8 +35,19 @@ SUBQ_BARE_TEMPLATE = SUBQ_OPTS_TEMPLATE.replace("{problem}\n\n", "", 1)
 # value nodes (scripts/build_gsm8k_ops.py): one node per atomic operation, in an item field of its own, asked as a
 # multiple-choice node in one of its renderings (--node-format value / yesno+value, --node-render)
 VALUE_FIELD = "value_nodes"
-VALUE_RENDERINGS = ("op", "qop", "opsel")
+VALUE_RENDERINGS = ("op", "qop", "opsel", "vt", "vtr")
 VALUE_FORMATS = ("value", "yesno+value")
+# verification nodes (scripts/build_gsm8k_vt.py; arms GFPQVT / GFPQVTR): one node per option of the final question
+# ("In this problem, what does option C (8) stand for?", four descriptions), in an item field of their own, asked
+# through the value-node path in the problem view (the prompt WITH its options); rendering vt = the real answers, vtr =
+# the same stems and choices with each problem's descriptions permuted among its nodes (wrong-content control)
+VERIFY_FIELD = "verify_nodes"
+VERIFY_RENDERINGS = ("vt", "vtr")
+
+
+def value_field(render: str) -> str:
+    """The item field that holds the nodes of a value-node rendering: VERIFY_FIELD for vt / vtr, else VALUE_FIELD."""
+    return VERIFY_FIELD if render in VERIFY_RENDERINGS else VALUE_FIELD
 
 
 @dataclass
@@ -194,9 +205,10 @@ def mc_node_example(problem: str, sq: dict, weight: float, item_id) -> Example:
 
 
 def value_mc_node(sq: dict, render: str) -> dict | None:
-    """A value node (item field VALUE_FIELD) as a multiple-choice node in one rendering: {id, question, options,
-    answer, type value_<render>, node_depth, depends_on}; None when the node has no such rendering (qop / opsel exist
-    only where the Socratic sub-question is true as worded; opsel only for a step's last operation)."""
+    """A value node (item field VALUE_FIELD; vt / vtr: a verification node of VERIFY_FIELD) as a multiple-choice node
+    in one rendering: {id, question, options, answer, type value_<render>, node_depth, depends_on}; None when the node
+    has no such rendering (qop / opsel exist only where the Socratic sub-question is true as worded; opsel only for a
+    step's last operation)."""
     if render not in VALUE_RENDERINGS:
         raise ValueError(f"value node rendering {render!r}: one of {', '.join(VALUE_RENDERINGS)}")
     r = (sq.get("renderings") or {}).get(render)
@@ -221,15 +233,17 @@ def value_node_example(context: str | None, mc: dict, weight: float, item_id) ->
 
 def _value_views(item: dict, *, view: str, rng: random.Random, cap: int, aux_total: float, node_render: str,
                  node_weight: float, stats: dict | None) -> list[Example]:
-    """The value-node views of one problem (--node-format value / yesno+value): every node of item[VALUE_FIELD] that
-    has the rendering node_render (at most cap, drawn from rng only when the problem has more), asked in the view's
-    context (problem: the prompt with options; statements: statement_block; statements+question: problem_no_options;
-    bare: nothing) with weight node_weight, else aux_total / number of views (the per-problem convention), times the
-    item weight."""
-    nodes = [mc for mc in (value_mc_node(sq, node_render) for sq in item.get(VALUE_FIELD) or []) if mc is not None]
+    """The value-node views of one problem (--node-format value / yesno+value): every node of item[value_field(
+    node_render)] (VALUE_FIELD; VERIFY_FIELD for vt / vtr) that has the rendering node_render (at most cap, drawn from
+    rng only when the problem has more), asked in the view's context (problem: the prompt with options; statements:
+    statement_block; statements+question: problem_no_options; bare: nothing) with weight node_weight, else aux_total /
+    number of views (the per-problem convention), times the item weight. vtr also counts vtr_agree in stats (asked
+    nodes whose control answer is the real one)."""
+    field = item.get(value_field(node_render)) or []
+    nodes = [mc for mc in (value_mc_node(sq, node_render) for sq in field) if mc is not None]
     if stats is not None:
         stats["value_nodes_without_render"] = (stats.get("value_nodes_without_render", 0)
-                                              + len(item.get(VALUE_FIELD) or []) - len(nodes))
+                                              + len(field) - len(nodes))
     if cap and len(nodes) > cap:
         nodes = rng.sample(nodes, cap)
     if not nodes:
@@ -240,6 +254,9 @@ def _value_views(item: dict, *, view: str, rng: random.Random, cap: int, aux_tot
     if stats is not None:
         stats["value_views"] = stats.get("value_views", 0) + len(nodes)
         stats["items_with_value_views"] = stats.get("items_with_value_views", 0) + 1
+        if node_render == "vtr":
+            real = {sq["id"]: sq["renderings"]["vt"]["answer"] for sq in field}
+            stats["vtr_agree"] = stats.get("vtr_agree", 0) + sum(real.get(mc["id"]) == mc["answer"] for mc in nodes)
     return [value_node_example(context, mc, w, item["item_id"]) for mc in nodes]
 
 
@@ -541,6 +558,11 @@ def build_full_tree(item: dict, *, mode: str, rng: random.Random, cap: int = 10,
     SUBQ_BARE_TEMPLATE), labels A..C, one-hot target on its answer, weight aux_total / number of value views (or
     node_weight) times the item weight (_value_views). The yes/no nodes in item["subqs"] are not asked. Nothing is
     drawn from rng (cap 0; a cap below the node count samples them).
+    node_render "vt" / "vtr" (verification nodes, scripts/build_gsm8k_vt.py; arms GFPQVT / GFPQVTR; view "problem"
+    only): the same, with the nodes of item[VERIFY_FIELD] (one per asked option of the final question, four
+    descriptions as options, labels A..D) in the problem view (the prompt with its options); vtr = vt's stems and
+    options with the control answer (the problem's descriptions permuted among its nodes); the value nodes in
+    item[VALUE_FIELD] are not asked.
     node_format "yesno+value" (GFPQVM; views problem / statements / statements+question): exactly the yes/no views of
     node_format "yesno" (the same call: same nodes, option orders, targets and rng draws), followed by the value views
     of node_render. Weights (node_weight 0): with both formats present, every yes/no view weighs (aux_total / n_yesno)
@@ -688,6 +710,9 @@ def _value_tree(item: dict, *, mode: str, rng: random.Random, cap: int, aux_tota
                          "--tree-node-types")
     if node_render not in VALUE_RENDERINGS:
         raise ValueError(f"--node-render {node_render!r}: one of {', '.join(VALUE_RENDERINGS)}")
+    if node_render in VERIFY_RENDERINGS and view != "problem":
+        raise ValueError(f"--node-render {node_render} (verification nodes ask what an option is): --tree-view problem "
+                         "(the prompt with its options)")
     if node_format == "yesno+value":                  # the GFPQ group itself: same call, same draws
         out = build_full_tree(item, mode=mode, rng=rng, cap=cap, aux_total=aux_total, final=final,
                               subq_target=subq_target, permute_final=permute_final, node_format="yesno",
@@ -2016,8 +2041,10 @@ def evaluate_subq(model, tok, items: list[dict], max_len: int, bs: int, cache: d
     Value nodes (item field VALUE_FIELD, scripts/build_gsm8k_ops.py) in the rendering value_render (None: not scored)
     are asked like MC nodes in the same context (the prompt with its options; no rng draw, so the yes/no draws are
     those of the items without value nodes), after the item's other questions, kind "value": groups all_value,
-    value/<source>, value/type/value_<render>, value/mc and value/depth/<node_depth>; preds also carry node_id and
-    render. Nodes without that rendering are skipped."""
+    value/<source>, value/type/value_<render>, value/mc and value/depth/<node_depth> (nodes with a node_depth);
+    preds also carry node_id and render. Nodes without that rendering are skipped. value_render vt / vtr scores the
+    verification nodes of VERIFY_FIELD instead (scripts/build_gsm8k_vt.py; vtr against the control answers, so
+    train_student scores vt for the vtr arm), with the extra groups value/vt_kind/<gold|step|given|none>."""
     rng = random.Random(seed)
     exs, meta = [], []
     for it in items:
@@ -2050,7 +2077,7 @@ def evaluate_subq(model, tok, items: list[dict], max_len: int, bs: int, cache: d
                     if "depth" in it:
                         meta[-1]["chain_top"] = f"{tag}/top-{it['depth'] - sq['node_depth']}"
                         meta[-1]["chain_item"] = f"{tag}/item_d{it['depth']}"
-        for sq in (it.get(VALUE_FIELD) or []) if value_render else []:      # value nodes: own options, no rng draw
+        for sq in (it.get(value_field(value_render)) or []) if value_render else []:   # value nodes: own options
             mc = value_mc_node(sq, value_render)
             if mc is None:
                 continue
@@ -2058,7 +2085,9 @@ def evaluate_subq(model, tok, items: list[dict], max_len: int, bs: int, cache: d
             meta.append({"item_id": it["item_id"], "source": it.get("source"), "kind": "value", "type": mc["type"],
                          "truth_known": True, "target": mc["answer"], "mc": len(mc["options"]),
                          "question": mc["question"], "var": None, "node_id": sq["id"], "render": value_render,
-                         "depth": f"value/depth/{sq.get('node_depth')}"})
+                         "depth": None if sq.get("node_depth") is None else f"value/depth/{sq.get('node_depth')}"})
+            if sq.get("vt_kind"):
+                meta[-1]["vt_kind"] = sq["vt_kind"]
     was_training = model.training
     model.eval()
     dev = next(model.parameters()).device
@@ -2106,8 +2135,10 @@ def evaluate_subq(model, tok, items: list[dict], max_len: int, bs: int, cache: d
         for g in ("chain", "chain_top", "chain_item"):
             if g in m:
                 groups.setdefault(f"cot/{m[g]}", []).append(ok)
-        if m["kind"] == "value":
+        if m["kind"] == "value" and m["depth"] is not None:
             groups.setdefault(m["depth"], []).append(ok)
+        if m.get("vt_kind"):
+            groups.setdefault(f"value/vt_kind/{m['vt_kind']}", []).append(ok)
     metrics = {g: {"n": len(v), "acc": sum(v) / len(v)} for g, v in sorted(groups.items())}
     return metrics, preds
 

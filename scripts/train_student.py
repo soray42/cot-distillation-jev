@@ -41,7 +41,7 @@ from cotdistill.student import (Example, brier_loss, build_examples, build_fact_
 RESUME_FREE = {"stop_after_h", "ckpt_every_min", "ckpt_single", "stop_at_step", "code_commit", "eval", "eval_subq", "eval_bs",
                "eval_max_len", "dump_hidden", "dump_layers", "log_every", "save", "eval_local", "eval_local_view",
                "log_update_loss", "eval_mid_preds", "slot_necessity", "slot_necessity_sets", "slot_swap_token",
-               "slot_decode", "slot_decode_set", "slot_mean_n", "save_dir"}
+               "slot_decode", "slot_decode_set", "slot_mean_n", "save_dir", "eval_value_render"}
 
 # Training arguments added after checkpoints may have been written: a checkpoint without the key had this value.
 NEW_ARG_DEFAULTS = {"tree_view": "problem", "tree_sources": "", "tree_node_weight": 0.0, "attn_impl": "", "fsdp": False,
@@ -187,11 +187,21 @@ def main() -> None:
                          "statements+question / bare); yesno+value = GFPQVM: the yes/no views exactly as yesno, plus "
                          "the value views, each format carrying half of the per-problem --aux-total (a problem with "
                          "one format only gives it the whole)")
-    ap.add_argument("--node-render", default="op", choices=["op", "qop", "opsel"],
+    ap.add_argument("--node-render", default="op", choices=["op", "qop", "opsel", "vt", "vtr"],
                     help="--node-format value / yesno+value: the value-node rendering: op = the bare operation "
                          "('What is 4 x 1.5?'), qop = the Socratic sub-question plus the operation, opsel = operation "
                          "selection ('<sub-question> Which computation gives it?', three expressions); nodes without "
-                         "the rendering are not asked. --eval-subq scores the value nodes in this rendering")
+                         "the rendering are not asked. vt = the verification nodes (item field verify_nodes, "
+                         "scripts/build_gsm8k_vt.py; GFPQVT; --tree-view problem only): one node per asked option of "
+                         "the final question, 'In this problem, what does option C (8) stand for?' with four "
+                         "descriptions (the answer / a solution step's sub-question / a number written in the problem "
+                         "/ none of the solution's quantities); vtr = the same stems and choices, each problem's "
+                         "descriptions permuted among its nodes (GFPQVTR, wrong-content control). --eval-subq scores "
+                         "the value nodes in this rendering (vtr: in vt; --eval-value-render)")
+    ap.add_argument("--eval-value-render", default="auto", choices=["auto", "none", "op", "qop", "opsel", "vt"],
+                    help="the rendering in which --eval-subq scores value / verification nodes: auto = --node-render "
+                         "(vt for vtr, whose targets are the control's); none = not scored; e.g. vt scores the "
+                         "verification nodes of a data/student_gsm8k_tf_vt val file for any arm (A2, GFPQ, ...)")
     ap.add_argument("--si-stages", type=int, default=0,
                     help="stepwise internalisation (SI / SIY / SIS; Deng et al. 2024, ICoT-SI; full-tree loop): the "
                          "final question is trained with the problem's worked steps written between the problem and "
@@ -427,6 +437,9 @@ def main() -> None:
     value_fmt = args.node_format in ("value", "yesno+value")
     if args.node_render != "op" and not value_fmt:
         raise SystemExit(f"--node-render {args.node_render}: for --node-format value / yesno+value")
+    if args.node_render in ("vt", "vtr") and args.tree_view != "problem":
+        raise SystemExit(f"--node-render {args.node_render} (verification nodes ask what an option is): --tree-view "
+                         "problem (the prompt with its options)")
     if value_fmt and (args.tree_full != "plain" or args.tree_view not in ("problem", "statements", "statements+question")
                       + (("bare",) if args.node_format == "value" else ()) or args.tree_eligible_only or
                       args.tree_scaffold or args.tree_depth_weight or args.tree_pack or args.tree_node_types or
@@ -769,13 +782,15 @@ def main() -> None:
                              f"{','.join(sorted(node_types - have))} in the {args.tree_sources or 'tree'} items of "
                              f"{args.train} (types there: {','.join(sorted(str(x) for x in have))})")
     if value_fmt:                            # GFPQV / GFPQVQ / GFPQO / GFPVB / GFPQVM: value nodes with the rendering
-        from cotdistill.student import VALUE_FIELD                            # must exist in the tree items
+        from cotdistill.student import value_field                            # must exist in the tree items
+        vfield = value_field(args.node_render)                                 # (vt / vtr: verify_nodes)
         n_val = sum(bool((sq.get("renderings") or {}).get(args.node_render)) for it in train_items
-                    if tree_sources is None or it.get("source") in tree_sources for sq in it.get(VALUE_FIELD) or [])
+                    if tree_sources is None or it.get("source") in tree_sources for sq in it.get(vfield) or [])
         if not n_val:
             raise SystemExit(f"--node-format {args.node_format}: no {args.tree_sources or 'tree'} item of {args.train} "
-                             f"has value nodes ({VALUE_FIELD}) with the rendering {args.node_render} "
-                             "(build them with scripts/build_gsm8k_ops.py)")
+                             f"has value nodes ({vfield}) with the rendering {args.node_render} "
+                             "(build them with scripts/build_gsm8k_ops.py, verification nodes with "
+                             "scripts/build_gsm8k_vt.py)")
         print(f"value nodes ({args.node_render}): {n_val}", flush=True)
     if args.curriculum_steps:                # GFPQC: every tree node of the --tree-sources items needs its step
         from cotdistill.student import curriculum_stage
@@ -1447,9 +1462,11 @@ def main() -> None:
                    mean_items=train_items[:args.slot_mean_n])
         if is_main:
             (out / SLOT_SIDECAR).write_text(json.dumps(slot.as_dict(), indent=1))
+    eval_value_render = (None if args.eval_value_render == "none" else args.eval_value_render
+                         if args.eval_value_render != "auto" else "vt" if args.node_render == "vtr" else args.node_render)
     for sname, spath in subq_sets(args.eval_subq or ""):
         sm, spreds = evaluate_subq(model, tok, read_jsonl(spath), args.max_len, args.eval_bs, cache, seed=args.seed,
-                                   value_render=args.node_render)
+                                   value_render=eval_value_render)
         results["eval"][sname] = sm
         if is_main:
             with open(out / f"preds_{sname}.jsonl", "w") as f:

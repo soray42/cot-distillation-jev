@@ -96,6 +96,20 @@
 # last operation only) · GFPVB = GFPQV's nodes asked alone, no problem text (--tree-view bare) · GFPQVM = GFPQ's yes/no
 # views unchanged plus GFPQV's value views, each format half of the per-problem auxiliary weight. The yes/no arms on
 # the same data train exactly as on data/student_gsm8k_tf (the value nodes are in a field of their own).
+# Verification nodes (DATA=data/student_gsm8k_tf_vt, scripts/build_gsm8k_vt.py; XARGS="--tree-sources gsm8k_tf" as for
+# GFPQ): GFPQVT = the final + one node per asked option of the final question, in the problem view (the prompt WITH its
+# options): "In this problem, what does option C (8) stand for?" with four descriptions (the answer to the problem's
+# final question / a Socratic sub-question of the solution / a number written in the problem text / none of the
+# solution's quantities), labels A..D, one-hot target, the per-problem aux weight split over the problem's nodes
+# (about 2.5: the gold option, every option equal to a step value or a written number, one "none" option) ·
+# GFPQVTR = the same stems, choices and weights with each problem's descriptions permuted among its nodes (wrong-
+# content control; about 37% keep their own by chance, logged as tree_view_stats.vtr_agree). --eval-subq scores the
+# verification nodes of $DATA/val.jsonl in vt for both (groups value/vt_kind/<gold|step|given|none>); other arms on
+# this DATA can score them too with XARGS="... --eval-value-render vt" (A2: XARGS="--eval-value-render vt"). The rows
+# are data/student_gsm8k_tf_si's plus the field verify_nodes, so every other arm trains on them exactly as on its own
+# data. Other-problem test sets (scripts/build_mc_xprob.py: the same problems and golds, the 4 distractors final
+# answers of other problems of the file): EXTRA_EVALS="... gsm8kx=data/eval/gsm8k_mc_v2_xprob.jsonl
+# gsm1kx=data/eval/gsm1k_mc_xprob.jsonl" next to gsm8kv2 / gsm1k.
 # Stepwise internalisation (Deng et al. 2024, ICoT-SI; DATA=data/student_gsm8k_tf_si*, built by scripts/build_gsm8k_si.py,
 # or data/student_numgen_tf*, whose programs give the steps; XARGS="--tree-sources gsm8k_tf" / "--tree-sources numgen" as
 # for GFPQ): the final question is trained with the problem's worked steps written between the problem and its options
@@ -304,6 +318,8 @@ arm_config() {           # sets F S T RLM DS DX EPD for arm $1 (EPD: the arm's d
     GFPQO) F=teacher; S=cot; T=cot; DX="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --node-format value --node-render opsel" ;;  # GFPQ with operation-selection nodes ("Which computation gives it?", 3 expressions)
     GFPVB) F=teacher; S=cot; T=cot; DX="--tree-full plain --tree-view bare --tree-cap 0 --tree-sources knights_knaves --node-format value --node-render op" ;;  # value nodes asked alone (no problem text)
     GFPQVM) F=teacher; S=cot; T=cot; DX="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --node-format yesno+value --node-render op" ;;  # GFPQ's yes/no nodes + the op value nodes, half the per-problem weight each
+    GFPQVT) F=teacher; S=cot; T=cot; DX="--tree-full plain --tree-view problem --tree-cap 0 --tree-sources knights_knaves --node-format value --node-render vt" ;;  # final + verification nodes: what each option is (problem view, options shown)
+    GFPQVTR) F=teacher; S=cot; T=cot; DX="--tree-full plain --tree-view problem --tree-cap 0 --tree-sources knights_knaves --node-format value --node-render vtr" ;;  # GFPQVT's stems and choices, descriptions permuted among a problem's options (wrong-content control)
     SI) F=teacher; S=cot; T=cot; EPD=$(( ${SISTAGES:-4} + 1 )); DX="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --si-stages ${SISTAGES:-4} --si-final-only" ;;  # stepwise internalisation: the final question with the worked steps, removed front-first stage by stage
     SIY) F=teacher; S=cot; T=cot; EPD=$(( ${SISTAGES:-4} + 1 )); DX="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --si-stages ${SISTAGES:-4}" ;;  # SI + GFPQ's yes/no node views every update
     SIS) F=teacher; S=cot; T=cot; EPD=$(( ${SISTAGES:-4} + 1 )); DX="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --si-stages ${SISTAGES:-4} --si-final-only --si-chain wrong" ;;  # SI with every computed value written wrongly (wrong-content control)

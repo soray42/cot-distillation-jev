@@ -80,6 +80,8 @@ Owner: Haotian "Sora" Yang. Private research repository; data, results and notes
 | `GFPQO` | Final + operation choice per step ("Which computation gives it? A) 4 × 2 B) 4 ÷ 2 C) 4 + 2") | Same |
 | `GFPVB` | As GFPQV without the problem text | None (bare arithmetic) |
 | `GFPQVM` | GFPQ's yes/no nodes + GFPQV's value nodes, half the node weight each | Statements plus the final question |
+| `GFPQVT` | Final + verification nodes, one per asked option ("In this problem, what does option C (8) stand for?": the final answer / a solution step's sub-question / a number written in the problem / none of the solution's quantities) | Full problem with its options |
+| `GFPQVTR` | As GFPQVT with each problem's descriptions permuted among its options (wrong-content control) | Same |
 | `SI` / `SIB` | Stepwise internalisation: the worked atomic chain written before the options, removed over 4 stages (SI from the start, SIB from the answer end), last stage = test format | Final question only |
 | `GFPQC` | Step curriculum: yes/no nodes of steps <= j, stage by stage, then the final questions (--curriculum-steps) | Statements plus the final question |
 | `SIYB` / `SISB` | SIB + GFPQ's yes/no nodes / SIB with wrong values in the chain (control) | Same |
