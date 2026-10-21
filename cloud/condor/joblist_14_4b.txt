@@ -1,0 +1,8 @@
+condor/jobs14_4b/303_4b_gsmsi_TSF-pr-c2lr3_s12_fsdp.env, 420, 1
+condor/jobs14_4b/304_4b_gsmsi_TSFN-pr-c2lr3_s12_fsdp.env, 419, 1
+condor/jobs14_4b/305_4b_gsmsi_TSFR-pr-c2lr3_s12_fsdp.env, 418, 1
+condor/jobs14_4b/306_4b_gsmsi_TSFX-pr-c2lr3_s12_fsdp.env, 417, 1
+condor/jobs14_4b/307_4b_gsmsi_TSF6-pr-c2lr3_s12_fsdp.env, 416, 1
+condor/jobs14_4b/308_4b_gsmsi_PTAD-pr-c2lr3_s12_fsdp.env, 415, 1
+condor/jobs14_4b/309_4b_gsmsi_PTADR-pr-c2lr3_s12_fsdp.env, 414, 1
+condor/jobs14_4b/310_4b_gsmsi_PTADX-pr-c2lr3_s12_fsdp.env, 413, 1
