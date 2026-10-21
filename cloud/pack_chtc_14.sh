@@ -133,7 +133,7 @@ for e in envs:
     if not t or t.group(1) != v["EPOCHS"] or float(v["LR"]) != float(t.group(2)) * 1e-6:
         bad.append(f"{e}: TAG {v['TAG']} vs EPOCHS {v['EPOCHS']} LR {v['LR']}")
     arm = v["ARMS"]
-    if arm not in slot_arms + ("A2", "GFPQ", "GFPQVT", "GFPQVTR", "TSF", "TSFN", "TSFR", "TSFX", "TSF6", "PTAD", "PTADR", "PTADX"): bad.append(f"{e}: ARMS {arm!r}, not an arm of batch 14")
+    if arm not in slot_arms + ("A2", "GFPQ", "GFPQR", "GFPQVT", "GFPQVTR", "TSF", "TSFN", "TSFR", "TSFX", "TSF6", "PTAD", "PTADR", "PTADX"): bad.append(f"{e}: ARMS {arm!r}, not an arm of batch 14")
     if arm in slot_arms and v["XARGS"] != "--tree-sources gsm8k_tf": bad.append(f"{e}: XARGS {v['XARGS']!r}")   # batch 10: A2 baselines have no tree sources
     if v["SISTAGES"] or v["CSTEPS"] or v["NODEW"]: bad.append(f"{e}: SISTAGES={v['SISTAGES']!r} CSTEPS={v['CSTEPS']!r} NODEW={v['NODEW']!r}")
     pts = [x for x in v["EVALAT"].split(",") if x]

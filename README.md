@@ -121,6 +121,7 @@ python scripts/ladder_readout.py 'results/hpc/l4b/*' --out results/ladder_readou
 
 The README is updated with every push.
 
+- 2026-10-21 (4): batch 14 also carries the cue-free confirmation of the yes/no tree (jobs 311-325: A2 1/2 ep, GFPQ 1/2 ep, GFPQR 2 ep, seeds 13-15) with its own pre-registration card.
 - 2026-10-21 (3): batch-13 results in (verification trees null; every arm loses 12-14 points on the other-problem distractor sets); batch-14 card G3 now uses the same-seed batch-13 A2 baselines on both test-set kinds.
 - 2026-10-21 (2): teacher-state slots with forced reading (TSF family) and answer-position alignment (PTAD family) with an early use detector; CHTC batch 14 = their pilot (8 arms, seed 12, 2 epochs).
 - 2026-10-21: verification trees (GFPQVT / GFPQVTR: what does each option stand for) and other-problem distractor test sets (gsm8kx / gsm1kx; options-only adversary at chance); batch 12 results (step-1-only slots: partly written, never used); CHTC batch 13 = the verification-tree pilot plus the GSM8K-Aug 24k scale test, evaluated on both test-set kinds.

@@ -1,7 +1,8 @@
 {
- "_comment": "CHTC batch 14 (Qwen3.5-4B, teacher-state slots TSF* and answer-position alignment PTAD*): batch 12's data (data/student_gsm8k_tf_si, eval files incl. gsm8k_mc_v2_steps.jsonl, now the gsm8kv2 eval so the use detector has worked steps) plus the other-problem distractor sets. Checked by cloud/pack_chtc_14.sh.",
+ "_comment": "CHTC batch 14 (Qwen3.5-4B, teacher-state slots TSF* and answer-position alignment PTAD*): batch 12's data (data/student_gsm8k_tf_si, eval files incl. gsm8k_mc_v2_steps.jsonl, now the gsm8kv2 eval so the use detector has worked steps) plus the other-problem distractor sets. Checked by cloud/pack_chtc_14.sh. Plus data/student_gsm8k_tf_vt for the confirmation jobs 311-325 (A2 / GFPQ / GFPQR, seeds 13-15, same data as batch 13).",
  "dirs": [
-  "data/student_gsm8k_tf_si"
+  "data/student_gsm8k_tf_si",
+  "data/student_gsm8k_tf_vt"
  ],
  "files": [
   "data/eval/bbh_sub500.jsonl",
@@ -47,6 +48,8 @@
   "data/eval/bbeh.jsonl": "40d9a4d45f497c6edaaa66ed5d02f988",
   "data/eval/gsm8k_mc_v2_steps.jsonl": "9596cd7608b6fce5b97350bfa7509697",
   "data/eval/gsm8k_mc_v2_xprob.jsonl": "802f87738aac9e0e535416d044c488d4",
-  "data/eval/gsm1k_mc_xprob.jsonl": "f3d35073fcf474911892d1b2210f3c75"
+  "data/eval/gsm1k_mc_xprob.jsonl": "f3d35073fcf474911892d1b2210f3c75",
+  "data/student_gsm8k_tf_vt/train.jsonl": "28298610aa972d9ea6d472dbd80138c3",
+  "data/student_gsm8k_tf_vt/val.jsonl": "9f55fec541246e41401a7b5fa6c5510a"
  }
 }
