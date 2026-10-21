@@ -121,6 +121,7 @@ python scripts/ladder_readout.py 'results/hpc/l4b/*' --out results/ladder_readou
 
 The README is updated with every push.
 
+- 2026-10-21 (2): teacher-state slots with forced reading (TSF family) and answer-position alignment (PTAD family) with an early use detector; CHTC batch 14 = their pilot (8 arms, seed 12, 2 epochs).
 - 2026-10-21: verification trees (GFPQVT / GFPQVTR: what does each option stand for) and other-problem distractor test sets (gsm8kx / gsm1kx; options-only adversary at chance); batch 12 results (step-1-only slots: partly written, never used); CHTC batch 13 = the verification-tree pilot plus the GSM8K-Aug 24k scale test, evaluated on both test-set kinds.
 - 2026-10-20 (3): batch-11 pilot failed both gates (layer-20 readout 3%, at the shuffled-control level; necessity +0.15); read-only audit found no implementation bug (loss weight, fill and frozen-lens design). Latent-slot diagnostics: --slot-pad-weight, step-1-only K=1, scripts/probe_slots.py (every layer, logistic probes and frozen-head lens), sbatch PROBE / PROBE_ONLY; CHTC batch 12 = probes of LSL / LSLU / the base model and the step-1-only arm at 2 and 6 epochs.
 - 2026-10-20 (2): latent slots v2.1 (arms LSL / LSLU / LSLR / LSLY: middle-layer slot loss, own-head value readout without a second pass, filled tail slots, distinct slot tokens; mean-ablation necessity and a pre-registered pilot gate); scripts/paired_stats.py (seed-level t, shared-index item bootstrap, two-level bootstrap, val-only epoch choice); CHTC batch 11 = the v2.1 pilot (batch 10 on hold).
