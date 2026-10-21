@@ -121,6 +121,7 @@ python scripts/ladder_readout.py 'results/hpc/l4b/*' --out results/ladder_readou
 
 The README is updated with every push.
 
+- 2026-10-21 (7): failure attribution: leave-one-framework-out fold builder (scripts/build_fa_lofo.py, standard library only, deterministic; uncapped and StepFinder-capped variants) and the readout recompute under the seed-level statistics (scripts/fa_recompute.py), with tests.
 - 2026-10-21 (6): scripts/analyze_batch14.py, the pre-registered readout of batch 14 (cards A and B; paired_stats for the seed-level t and the two-level bootstrap; pending rows for missing runs).
 - 2026-10-21 (5): cue-free validation set data/eval/gsm8k_val_xprob.jsonl (scripts/build_val_xprob.py: the 393 validation finals with other problems' answers as distractors, same construction as the cue-free test sets) evaluated at every 0.5 epoch in all batch-14 jobs; epochs are chosen on it.
 - 2026-10-21 (4): batch 14 also carries the cue-free confirmation of the yes/no tree (jobs 311-325: A2 1/2 ep, GFPQ 1/2 ep, GFPQR 2 ep, seeds 13-15) with its own pre-registration card.
