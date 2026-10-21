@@ -180,6 +180,29 @@
 # latent_slots.json instead) into runs/PROBE-<arm><knobs>-<model>-<data> (logged as "=== PROBE -> <dir>"). PROBE_ARGS:
 # more probe_slots.py options. The smoke stage probes the smoke model (PROBE_ONLY: MODEL) on 16 + 4 items. Relays must
 # put SLOTPADW SLOTOV PROBE PROBE_ONLY PROBE_N PROBE_HELDOUT PROBE_SPEC PROBE_TMP PROBE_ARGS in their reset list.
+# Teacher-state slots with forced reading (TSF; notes/latent_comeback_memo_2026-10-21.md section 3; DATA=
+# data/student_gsm8k_tf_si*, XARGS="--tree-sources gsm8k_tf" as for LSL): the deployed prompt is LSL's with SLOTK
+# (default 2) slots of 2 distinct reserved tokens before the options, final views only. In training a teacher view of
+# the same weights (the final question with worked-step lines before its options, SI stage 0, no slot line) gives
+# the targets: slot j's two tokens <- the teacher's residual states at the outputs of layers TSFAL (default 12-20) at
+# the token that predicts the value's first token of step j's line and at the value's last token (SLOTOV=truncate:
+# steps 1, 2); align loss smooth L1 / teacher RMS, stop-grad, weight TSFLAM (default 1) per problem; with probability
+# TSFP (default 0.5) per micro-batch the layer-SLOTL (default 0.67 = 20 of 32) slot states are REPLACED by the teacher's
+# before the later layers compute the letter CE (forced reading); the teacher view trains the letter CE at TSFCE
+# (default 0.5). TSF = steps · TSFN = TSF without forcing (p 0) · TSFR = another problem's steps in the teacher view
+# (wrong content) · TSFX = the problem's own sentences in place of the steps (placebo) · TSF6 = TSF with 6 slots, merge
+# (steps 1-5 + the last). Defaults: the gradient-norm probe at updates TSFPROBE (default 0,5,10,15,20; off = none: the
+# align loss rescaled once if align / CE is outside [0.3, 3]), TSFGUARD=<A2 val accuracy at the first EVALAT point>
+# (the teacher CE drops to 0.25 if the first EVALMID set's accuracy is 3 points below it; default off), the "use"
+# detector at every EVALAT point on the EVALMID sets with worked steps (TSF arms; TSFDET: other sets / none): intact /
+# mean / force / forceswap and the alignment loss into metrics.json trajectory; SLOTNEC default swap,drop,mean,force,
+# forceswap (force modes need eval files with worked_steps: gsm8kv2=data/eval/gsm8k_mc_v2_steps.jsonl, identical to
+# gsm8k_mc_v2 plus the field). PTAD / PTADR / PTADX (memo section 4, zero-latent CODI): the A2 prompt, final views only;
+# the "Answer:" states at layers PTADAL (default 12-27) aligned to the teacher view's (steps / another problem's /
+# placebo), weight PTADLAM (default 1), teacher CE TSFCE; PTADPROBE: the gradient probe (default off). Run dirs: TSF
+# arms -sk -sp -sL -sT -sO as LSL plus -fp<TSFP> -wl<TSFLAM> -tc<TSFCE> -al<TSFAL> -tg<TSFGUARD> -gp<TSFPROBE>; PTAD
+# arms -al<PTADAL> -wl<PTADLAM> -tc<TSFCE> -tg<TSFGUARD> -gp<PTADPROBE>. Relays must put TSFP TSFLAM TSFCE TSFAL
+# TSFGUARD TSFPROBE TSFDET PTADAL PTADLAM PTADPROBE in their reset list.
 # NODEW=w gives every node view weight w (--tree-node-weight; default: the per-problem split, aux 1.0 / views, about
 # .023 per K&K node); set it to the same value for all arms of a comparison. LOCAL_EVAL=path scores the
 # local-step probe (--eval-local: every K&K node in its local view, eval key local_kk); when unset it is
@@ -258,6 +281,9 @@ arm_config() {           # sets F S T RLM DS DX EPD for arm $1 (EPD: the arm's d
   RLM=; DS=; DX=; EPD=
   local SL="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --latent-slots ${SLOTK:-6} --slot-c ${SLOTC:-1} --slot-lambda ${SLOTLAM:-1.0} --slot-place ${SLOTPLACE:-before-options} --slot-necessity ${SLOTNEC:-swap,drop,noise@mid:1.0} --slot-decode ${SLOTDEC:-32}"
   local NS="${SLOTNECSETS:-${EVALMID:-}}"; SL="$SL${NS:+ --slot-necessity-sets $NS}"
+  local TSFB="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --latent-slots ${SLOTK:-2} --slot-c 2 --slot-place ${SLOTPLACE:-before-options} --slot-layer ${SLOTL:-0.67} --slot-readout tsf --slot-overflow ${SLOTOV:-truncate} --slot-tokens ${SLOTTOK:-distinct} --slot-align-layers ${TSFAL:-12-20} --slot-align-lambda ${TSFLAM:-1.0} --slot-teacher-ce ${TSFCE:-0.5} --slot-final-only --slot-necessity ${SLOTNEC:-swap,drop,mean,force,forceswap}${NS:+ --slot-necessity-sets $NS}${TSFDET:+ --slot-detect-sets $TSFDET}${TSFGUARD:+ --teacher-ce-guard $TSFGUARD}"
+  [ "${TSFPROBE:-0,5,10,15,20}" = off ] || TSFB="$TSFB --teacher-grad-probe ${TSFPROBE:-0,5,10,15,20}"
+  local PTB="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --answer-align-layers ${PTADAL:-12-27} --answer-align-lambda ${PTADLAM:-1.0} --answer-teacher-ce ${TSFCE:-0.5}${TSFGUARD:+ --teacher-ce-guard $TSFGUARD}${PTADPROBE:+ --teacher-grad-probe $PTADPROBE}"
   local SLL="--tree-full plain --tree-view statements+question --tree-cap 0 --tree-sources knights_knaves --latent-slots ${SLOTK:-6} --slot-c ${SLOTC:-4} --slot-lambda ${SLOTLAM:-1.0} --slot-place ${SLOTPLACE:-before-options} --slot-layer ${SLOTL:-0.67} --slot-readout lens --slot-fill ${SLOTFILL:-last}${SLOTPADW:+ --slot-pad-weight $SLOTPADW}${SLOTOV:+ --slot-overflow $SLOTOV} --slot-tokens ${SLOTTOK:-distinct} --slot-necessity ${SLOTNEC:-swap,drop,mean} --slot-decode ${SLOTDEC:-400}${SLOTDECSET:+ --slot-decode-set $SLOTDECSET}${NS:+ --slot-necessity-sets $NS}"
   case "$1" in
     A1) F=gold;    S=none;   T=cot ;;
@@ -335,6 +361,14 @@ arm_config() {           # sets F S T RLM DS DX EPD for arm $1 (EPD: the arm's d
     LSLU) F=teacher; S=cot; T=cot; DX="$SLL --slot-final-only --slot-target none" ;;   # the same prompt, no slot loss
     LSLR) F=teacher; S=cot; T=cot; DX="$SLL --slot-final-only --slot-target shuffled" ;;   # values from other problems
     LSLY) F=teacher; S=cot; T=cot; DX="$SLL" ;;   # LSL + GFPQ's yes/no node views
+    TSF) F=teacher; S=cot; T=cot; DX="$TSFB --slot-teacher steps --slot-force-p ${TSFP:-0.5}" ;;   # teacher-state slots + forced reading
+    TSFN) F=teacher; S=cot; T=cot; DX="$TSFB --slot-teacher steps --slot-force-p 0" ;;   # TSF without forced reading (write only)
+    TSFR) F=teacher; S=cot; T=cot; DX="$TSFB --slot-teacher shuffled --slot-force-p ${TSFP:-0.5}" ;;   # another problem's steps (wrong content)
+    TSFX) F=teacher; S=cot; T=cot; DX="$TSFB --slot-teacher placebo --slot-force-p ${TSFP:-0.5}" ;;   # the problem's sentences as steps (placebo)
+    TSF6) F=teacher; S=cot; T=cot; DX="$TSFB --slot-teacher steps --slot-force-p ${TSFP:-0.5} --latent-slots 6 --slot-overflow merge" ;;   # 6 slots: steps 1-5 + the last (readout upper bound)
+    PTAD) F=teacher; S=cot; T=cot; DX="$PTB --answer-teacher steps" ;;   # zero-latent CODI: Answer: states <- the teacher view's
+    PTADR) F=teacher; S=cot; T=cot; DX="$PTB --answer-teacher shuffled" ;;   # another problem's steps in the teacher view
+    PTADX) F=teacher; S=cot; T=cot; DX="$PTB --answer-teacher placebo" ;;   # placebo lines in the teacher view
     *) echo "unknown ARM $1"; return 1 ;;
   esac
 }
@@ -360,7 +394,12 @@ probe() {                # probe <model dir> <out dir> <train.jsonl> [more probe
 }
 probe_spec() {           # PROBE_ONLY: the slot line of v2.1 arm $1 as probe_slots.py flags (PROBE_SPEC: from that run)
   if [ -n "${PROBE_SPEC:-}" ]; then echo "--slot-spec-from $PROBE_SPEC"; return 0; fi
-  case "$1" in LSL|LSLU|LSLR|LSLY) ;; *) echo "PROBE_ONLY: $1 is not a v2.1 slot arm (LSL / LSLU / LSLR / LSLY); set PROBE_SPEC" >&2; return 1 ;; esac
+  case "$1" in
+    LSL|LSLU|LSLR|LSLY) ;;
+    TSF|TSFN|TSFR|TSFX|TSF6) local k="${SLOTK:-2}" ov="${SLOTOV:-truncate}"; [ "$1" = TSF6 ] && k=6 && ov=merge
+      echo "--latent-slots $k --slot-c 2 --slot-tokens ${SLOTTOK:-distinct} --slot-place ${SLOTPLACE:-before-options} --slot-layer ${SLOTL:-0.67} --slot-fill none --slot-overflow $ov"; return 0 ;;
+    *) echo "PROBE_ONLY: $1 is not a v2.1 / TSF slot arm (LSL / LSLU / LSLR / LSLY / TSF*); set PROBE_SPEC" >&2; return 1 ;;
+  esac
   echo "--latent-slots ${SLOTK:-6} --slot-c ${SLOTC:-4} --slot-tokens ${SLOTTOK:-distinct} --slot-place ${SLOTPLACE:-before-options} --slot-layer ${SLOTL:-0.67} --slot-fill ${SLOTFILL:-last} --slot-overflow ${SLOTOV:-merge}${SLOTPADW:+ --slot-pad-weight $SLOTPADW}"
 }
 stop_h() {               # hours left until STOPH hours after the job start (at least 0.01)
@@ -456,6 +495,10 @@ for ARM in $ARMS; do
   SF=$(sed -n 's/.*--subq-filter[ =]\([a-z]*\).*/\1/p' <<< "${XARGS:-}")               # XARGS chain filter -> -sf<f>
   SLD=; case "$ARM" in LS|LSU|LSR|LSY|LSL|LSLU|LSLR|LSLY) SLD="${SLOTK:+-sk$SLOTK}${SLOTC:+-sc$SLOTC}${SLOTLAM:+-sl$SLOTLAM}${SLOTPLACE:+-sp${SLOTPLACE%%-*}}" ;; esac
   case "$ARM" in LSL|LSLU|LSLR|LSLY) SLD="$SLD${SLOTL:+-sL$SLOTL}${SLOTFILL:+-sF$SLOTFILL}${SLOTTOK:+-sT$SLOTTOK}${SLOTPADW:+-sW$SLOTPADW}${SLOTOV:+-sO$SLOTOV}" ;; esac   # v2.1 knobs
+  case "$ARM" in   # TSF / PTAD knobs
+    TSF|TSFN|TSFR|TSFX|TSF6) SLD="${SLOTK:+-sk$SLOTK}${SLOTPLACE:+-sp${SLOTPLACE%%-*}}${SLOTL:+-sL$SLOTL}${SLOTTOK:+-sT$SLOTTOK}${SLOTOV:+-sO$SLOTOV}${TSFP:+-fp$TSFP}${TSFLAM:+-wl$TSFLAM}${TSFCE:+-tc$TSFCE}${TSFAL:+-al$TSFAL}${TSFGUARD:+-tg$TSFGUARD}${TSFPROBE:+-gp${TSFPROBE//,/_}}" ;;
+    PTAD|PTADR|PTADX) SLD="${PTADAL:+-al$PTADAL}${PTADLAM:+-wl$PTADLAM}${TSFCE:+-tc$TSFCE}${TSFGUARD:+-tg$TSFGUARD}${PTADPROBE:+-gp${PTADPROBE//,/_}}" ;;
+  esac
   if [ -n "${PROBE_ONLY:-}" ]; then     # no training: the untrained MODEL with this arm's slot line
     po="runs/PROBE-${ARM}${SLD}-$(basename "$MODEL")-$(basename "$DATA")"
     ps=$(probe_spec "$ARM") || exit 1

@@ -34,14 +34,15 @@ from cotdistill.student import (Example, brier_loss, build_examples, build_fact_
                                 label_logits,
                                 lm_loss, load_model, logit_softcap, micro_batches, pack_rng, pack_views, readouts,
                                 scaffold_fade, si_group, slot_forward, slot_group, special_prefix, subq_sets,
-                                use_chat_template, worked_steps)
+                                teacher_forward, use_chat_template, worked_steps)
 
 
 # Arguments that do not change the training trajectory: a checkpoint may be resumed with different values.
 RESUME_FREE = {"stop_after_h", "ckpt_every_min", "ckpt_single", "stop_at_step", "code_commit", "eval", "eval_subq", "eval_bs",
                "eval_max_len", "dump_hidden", "dump_layers", "log_every", "save", "eval_local", "eval_local_view",
                "log_update_loss", "eval_mid_preds", "slot_necessity", "slot_necessity_sets", "slot_swap_token",
-               "slot_decode", "slot_decode_set", "slot_mean_n", "save_dir", "eval_value_render"}
+               "slot_decode", "slot_decode_set", "slot_mean_n", "save_dir", "eval_value_render", "slot_detect_sets",
+               "teacher_align_train_n"}
 
 # Training arguments added after checkpoints may have been written: a checkpoint without the key had this value.
 NEW_ARG_DEFAULTS = {"tree_view": "problem", "tree_sources": "", "tree_node_weight": 0.0, "attn_impl": "", "fsdp": False,
@@ -52,7 +53,11 @@ NEW_ARG_DEFAULTS = {"tree_view": "problem", "tree_sources": "", "tree_node_weigh
                     "curriculum_mode": "cumulative", "curriculum_final_nodes": False, "latent_slots": 0, "slot_c": 1,
                     "slot_token": "auto", "slot_place": "before-options", "slot_lambda": 1.0, "slot_target": "tree",
                     "slot_overflow": "merge", "slot_final_only": False, "slot_layer": "final", "slot_readout": "decode",
-                    "slot_fill": "none", "slot_tokens": "same", "slot_head_grad": False, "slot_pad_weight": 1.0}
+                    "slot_fill": "none", "slot_tokens": "same", "slot_head_grad": False, "slot_pad_weight": 1.0,
+                    "slot_teacher": "none", "slot_align_layers": "12-20", "slot_align_lambda": 1.0, "slot_force_p": 0.5,
+                    "slot_teacher_ce": 0.5, "answer_teacher": "none", "answer_align_layers": "12-27",
+                    "answer_align_lambda": 1.0, "answer_teacher_ce": 0.5, "teacher_grad_probe": "",
+                    "teacher_ce_guard": 0.0}
 
 LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj",
                 "in_proj_qkv", "in_proj_z", "in_proj_a", "in_proj_b", "out_proj"]
@@ -301,11 +306,13 @@ def main() -> None:
                          "final normed states, read by no later position), a 0-based layer index (negative from the "
                          "end) or a fraction of the depth (0.67 -> layer round(0.67 n) - 1: 20 of 32 on Qwen3.5-4B / 9B, "
                          "15 of 24 on 2B); an intermediate layer for --slot-readout lens")
-    ap.add_argument("--slot-readout", default="decode", choices=["decode", "lens"],
+    ap.add_argument("--slot-readout", default="decode", choices=["decode", "lens", "tsf"],
                     help="--latent-slots: decode (v2) = the final slot states start a separate decoding pass of the "
                          "worked step's text; lens (v2.1) = slot j's c states at --slot-layer through the model's own "
                          "final norm + LM head (no second pass, no new parameters), position i predicting token i of "
-                         "the step's VALUE ('6'), then '\\n' up to c")
+                         "the step's VALUE ('6'), then '\\n' up to c; tsf = teacher-state slots with forced reading "
+                         "(TSF, notes/latent_comeback_memo_2026-10-21.md section 3: --slot-teacher, --slot-align-*, "
+                         "--slot-force-p, --slot-teacher-ce)")
     ap.add_argument("--slot-fill", default="none", choices=["none", "last", "answer"],
                     help="--slot-readout lens: slots after a shorter chain get no target (none), the chain's last value "
                          "(last: the answer's step) or the gold option's text (answer)")
@@ -322,6 +329,58 @@ def main() -> None:
                          "only the value's tokens count), the CE renormalised over the weights")
     ap.add_argument("--slot-mean-n", type=int, default=300,
                     help="--slot-necessity mean: the slot means come from the first N training items")
+    # TSF (teacher-state slots with forced reading; arms TSF / TSFN / TSFR / TSFX / TSF6): --slot-readout tsf. Defaults
+    # = off (every other arm unchanged)
+    ap.add_argument("--slot-teacher", default="none", choices=["none", "steps", "shuffled", "placebo"],
+                    help="--slot-readout tsf: the teacher view (the same weights: the final question with worked-step "
+                         "lines before its options, no slot line) whose states the slots are aligned to and forced "
+                         "with: steps = the item's worked steps (TSF / TSFN / TSF6), shuffled = another item's (TSFR, "
+                         "keyed by --seed and the item, fixed), placebo = the problem's own sentences in place of its "
+                         "steps (TSFX); slot j's c = 2 tokens <- the line's token that predicts the value's first token "
+                         "and the value's last token (steps; placebo: the line's last two tokens)")
+    ap.add_argument("--slot-align-layers", default="12-20",
+                    help="--slot-readout tsf: the decoder layers (0-based outputs, 'a-b' or a comma list) whose slot "
+                         "states are aligned to the teacher's (smooth L1 / teacher RMS, stop-grad); the last must be "
+                         "--slot-layer, where the forced reading replaces them")
+    ap.add_argument("--slot-align-lambda", type=float, default=1.0,
+                    help="--slot-readout tsf: alignment-loss weight per problem, split over its supervised slots")
+    ap.add_argument("--slot-force-p", type=float, default=0.5,
+                    help="--slot-readout tsf: probability that a micro-batch is forced (the layer-L states of its "
+                         "supervised slots replaced by the teacher's before the later layers compute the letter CE; "
+                         "the coin keyed by --seed, the update and the micro-batch's items); 0 = TSFN")
+    ap.add_argument("--slot-teacher-ce", type=float, default=0.5,
+                    help="--slot-readout tsf: letter-CE weight of the teacher view (x the final view's weight)")
+    ap.add_argument("--slot-detect-sets", default="auto",
+                    help="--slot-readout tsf, at every --eval-at point: the early 'use' detector (accuracy intact / "
+                         "slot states mean-ablated / teacher-forced / forced with another item's teacher states, on all "
+                         "and on the chained items, and the alignment loss) on these --eval-mid sets; auto = those with "
+                         "an item with worked steps, none = off")
+    # PTAD (zero-latent CODI, answer-position self-distillation; arms PTAD / PTADR / PTADX): no slots. Defaults = off
+    ap.add_argument("--answer-teacher", default="none", choices=["none", "steps", "shuffled", "placebo"],
+                    help="PTAD (full-tree loop, --tree-full plain, yes/no nodes; final views only, the A2 prompt): the "
+                         "student's 'Answer:' states at --answer-align-layers are aligned (smooth L1 / teacher RMS, "
+                         "stop-grad) to those of a teacher view through the same weights, the final question with "
+                         "worked-step lines before its options (steps = the item's, shuffled = another item's, placebo "
+                         "= the problem's sentences), which also trains the letter CE at --answer-teacher-ce")
+    ap.add_argument("--answer-align-layers", default="12-27",
+                    help="--answer-teacher: aligned decoder layers (0-based outputs, 'a-b' or a comma list; the memo "
+                         "leaves out the last four of 32)")
+    ap.add_argument("--answer-align-lambda", type=float, default=1.0, help="--answer-teacher: alignment-loss weight")
+    ap.add_argument("--answer-teacher-ce", type=float, default=0.5,
+                    help="--answer-teacher: letter-CE weight of the teacher view")
+    ap.add_argument("--teacher-grad-probe", default="",
+                    help="TSF / PTAD: comma list of update indices (0-based, e.g. 0,5,10,15,20) at which the gradient "
+                         "norms of the student CE, the teacher CE and the alignment loss are measured (three extra "
+                         "forward + backward passes of the update, which itself is unchanged); after the last one, a "
+                         "median ratio alignment / student CE outside [0.3, 3] rescales the alignment loss once to "
+                         "ratio 1 (metrics teacher.grad_probe)")
+    ap.add_argument("--teacher-ce-guard", type=float, default=0.0,
+                    help="TSF / PTAD: at the first --eval-at point, an accuracy on the first --eval-mid set more than 3 "
+                         "points below this reference (A2 at the same point) lowers the teacher-view CE weight to 0.25 "
+                         "for the rest of the run (memo section 3.10; metrics teacher.guard; 0 = off)")
+    ap.add_argument("--teacher-align-train-n", type=int, default=200,
+                    help="TSF / PTAD: the alignment loss is also measured on the first N training items at every "
+                         "--eval-at point and at the end (the train / held-out gap)")
     ap.add_argument("--aux-total", type=float, default=1.0,
                     help="full-tree groups: auxiliary weight per problem, split evenly over its node views")
     ap.add_argument("--aux-sources", default="", help="grouped training: comma list of item sources whose auxiliary "
@@ -419,11 +478,11 @@ def main() -> None:
     args = ap.parse_args()
     tree_opts = (args.tree_view != "problem" or args.tree_sources or args.tree_node_weight or args.tree_cap == 0 or
                  args.tree_scaffold or args.tree_depth_weight or args.tree_pack or args.tree_node_types or
-                 args.tree_target != "real" or args.latent_slots)
+                 args.tree_target != "real" or args.latent_slots or args.answer_teacher != "none")
     if tree_opts and not args.tree_full:
         raise SystemExit("--tree-view / --tree-sources / --tree-node-weight / --tree-cap 0 / --tree-scaffold / "
-                         "--tree-depth-weight / --tree-pack / --tree-node-types / --tree-target / --latent-slots need "
-                         "--tree-full")
+                         "--tree-depth-weight / --tree-pack / --tree-node-types / --tree-target / --latent-slots / "
+                         "--answer-teacher need --tree-full")
     if args.tree_target != "real" and (args.tree_full != "plain" or args.node_format != "yesno" or
                                        args.tree_view not in ("problem", "statements", "statements+question") or
                                        args.tree_eligible_only or args.tree_scaffold):
@@ -535,6 +594,9 @@ def main() -> None:
                   args.slot_layer != "final" or args.slot_readout != "decode" or args.slot_fill != "none" or
                   args.slot_tokens != "same" or args.slot_mean_n != 300 or args.slot_head_grad or
                   args.slot_pad_weight != 1.0)
+    tsf_flags = (args.slot_teacher != "none" or args.slot_align_layers != "12-20" or args.slot_align_lambda != 1.0 or
+                 args.slot_force_p != 0.5 or args.slot_teacher_ce != 0.5 or args.slot_detect_sets != "auto")
+    slot_flags = slot_flags or tsf_flags
     if args.latent_slots < 0 or slot_flags and not args.latent_slots:
         raise SystemExit("--slot-* options need --latent-slots K >= 1")
     if args.latent_slots and (args.tree_full != "plain" or args.node_format != "yesno" or
@@ -566,6 +628,55 @@ def main() -> None:
             raise SystemExit("--slot-mean-n >= 1")
         if "mean" in parse_slot_necessity(args.slot_necessity) and args.slot_layer == "final":
             raise SystemExit("--slot-necessity mean ablates the slot states at --slot-layer: set it, or use mean@<layer>")
+        if args.slot_readout != "tsf" and tsf_flags:
+            raise SystemExit("--slot-teacher / --slot-align-layers / --slot-align-lambda / --slot-force-p / "
+                             "--slot-teacher-ce / --slot-detect-sets are for --slot-readout tsf")
+        if args.slot_readout != "tsf" and {"force", "forceswap"} & set(parse_slot_necessity(args.slot_necessity)):
+            raise SystemExit("--slot-necessity force / forceswap: for --slot-readout tsf (teacher states)")
+        if args.slot_readout == "tsf":
+            if args.slot_teacher == "none":
+                raise SystemExit("--slot-readout tsf needs --slot-teacher steps / shuffled / placebo")
+            if args.slot_layer == "final":
+                raise SystemExit("--slot-readout tsf needs an intermediate --slot-layer (the forcing layer, e.g. 0.67)")
+            if args.slot_c != 2:
+                raise SystemExit("--slot-readout tsf: --slot-c 2 (token 1 <- the teacher's pre-value position, 2 <- its "
+                                 "value end)")
+            if (args.slot_fill != "none" or args.slot_target != "tree" or args.slot_lambda != 1.0 or
+                    args.slot_head_grad or args.slot_pad_weight != 1.0 or args.slot_decode or args.slot_decode_set):
+                raise SystemExit("--slot-readout tsf: no --slot-fill (slots past the chain have no target), "
+                                 "--slot-target (the content controls are --slot-teacher shuffled / placebo), "
+                                 "--slot-lambda (its weight is --slot-align-lambda), --slot-head-grad, --slot-pad-weight "
+                                 "or --slot-decode / --slot-decode-set (no slot readout)")
+            if not (0.0 <= args.slot_force_p <= 1.0 and args.slot_align_lambda >= 0 and args.slot_teacher_ce >= 0):
+                raise SystemExit("--slot-force-p in [0, 1], --slot-align-lambda >= 0, --slot-teacher-ce >= 0")
+    tsf = bool(args.latent_slots) and args.slot_readout == "tsf"
+    ptad = args.answer_teacher != "none"
+    if (args.answer_align_layers != "12-27" or args.answer_align_lambda != 1.0 or args.answer_teacher_ce != 0.5) \
+            and not ptad:
+        raise SystemExit("--answer-align-layers / --answer-align-lambda / --answer-teacher-ce need --answer-teacher")
+    if ptad and (args.latent_slots or args.tree_full != "plain" or args.node_format != "yesno" or
+                 args.tree_view not in ("problem", "statements", "statements+question") or args.si_stages or
+                 args.curriculum_steps or args.tree_pack or args.tree_scaffold or args.tree_target != "real" or
+                 args.tree_eligible_only or args.chat_template or args.depth_stages or args.fact_stages or
+                 args.facts_always or args.rationale_lm or args.answer_align_lambda < 0 or args.answer_teacher_ce < 0):
+        raise SystemExit(f"--answer-teacher {args.answer_teacher} (PTAD): for the full-tree loop with --tree-full plain "
+                         "and yes/no nodes (views problem / statements / statements+question; final views only), "
+                         "without --latent-slots, --si-stages, --curriculum-steps, --tree-pack, --tree-scaffold, "
+                         "--tree-target, --tree-eligible-only, --chat-template, --depth-stages, --fact-stages, "
+                         "--facts-always or --rationale-lm; --answer-align-lambda >= 0, --answer-teacher-ce >= 0")
+    if (args.teacher_grad_probe or args.teacher_ce_guard or args.teacher_align_train_n != 200) and not (tsf or ptad):
+        raise SystemExit("--teacher-grad-probe / --teacher-ce-guard / --teacher-align-train-n are for TSF "
+                         "(--slot-readout tsf) and PTAD (--answer-teacher)")
+    try:
+        probe_steps = sorted({int(x) for x in args.teacher_grad_probe.split(",") if x.strip()})
+    except ValueError:
+        raise SystemExit(f"--teacher-grad-probe {args.teacher_grad_probe!r}: a comma list of update indices")
+    if any(x < 0 for x in probe_steps) or args.teacher_align_train_n < 0 or args.teacher_ce_guard < 0:
+        raise SystemExit("--teacher-grad-probe indices >= 0, --teacher-align-train-n >= 0, --teacher-ce-guard >= 0")
+    if args.teacher_ce_guard and not args.eval_at:
+        raise SystemExit("--teacher-ce-guard acts at the first --eval-at point: set --eval-at")
+    if (tsf or ptad) and args.lambda_brier:
+        raise SystemExit("TSF / PTAD: no --lambda-brier")
     if args.ckpt_single and not resumable:
         raise SystemExit("--ckpt-single needs --stop-after-h, --ckpt-every-min or --stop-at-step")
     if args.chat_template and args.rationale_lm:
@@ -650,6 +761,23 @@ def main() -> None:
     slot = None                      # --latent-slots: the slot spec (registered for every final question evaluate builds)
     slot_tg: dict = {}               # item_id -> slot targets (LS / LSY: the worked steps; LSR: other problems' steps)
     slot_loss_on = False             # a decoding pass (LSU and --slot-lambda 0: none)
+    tplans: dict = {}                # TSF / PTAD: item_id -> the teacher view's plan (student.TeacherPlan)
+
+    def build_plans(items: list[dict], kind: str, k: int, overflow: str) -> dict:
+        """TSF / PTAD: every item's teacher plan (shuffled: the partners of student.teacher_partners, keyed by --seed)."""
+        from cotdistill.student import slot_step_map, teacher_partners, teacher_plan
+        try:
+            partners = {}
+            if kind == "shuffled":
+                need = {it["item_id"]: (sum(x is not None for x in slot_step_map(len(worked_steps(it) or []), k,
+                                                                                 overflow)) if k else 1)
+                        for it in items}
+                partners = teacher_partners(items, args.seed, need)
+            by = {it["item_id"]: it for it in items}
+            return {it["item_id"]: teacher_plan(it, kind, k=k, overflow=overflow,
+                                                partner=by.get(partners.get(it["item_id"]))) for it in items}
+        except ValueError as e:
+            raise SystemExit(f"teacher view ({kind}): {e}")
     slot_stats: dict = {}
     swap_token = None
     slot_info: dict = {}             # v2.1 (lens): the resolved layer and the value coverage, in metrics latent_slots
@@ -689,7 +817,11 @@ def main() -> None:
             raise SystemExit(f"--latent-slots: {e}")
         srcs = {x for x in args.tree_sources.split(",") if x} or None     # supervision: the --tree-sources items
         sup_items = [it for it in train_items if srcs is None or it.get("source") in srcs]
-        if args.slot_target == "shuffled" and slot.readout == "lens":
+        if slot.readout == "tsf":            # TSF: the teacher plans give the supervised slots (fill none)
+            from cotdistill.student import plan_slot_targets
+            tplans = build_plans(sup_items, args.slot_teacher, slot.k, args.slot_overflow)
+            slot_tg = {iid: plan_slot_targets(pl, slot.k) for iid, pl in tplans.items()}
+        elif args.slot_target == "shuffled" and slot.readout == "lens":
             slot_tg = shuffled_value_targets(sup_items, k=slot.k, overflow=args.slot_overflow, fill=slot.fill,
                                              seed=args.seed)
         elif args.slot_target == "shuffled":
@@ -702,7 +834,7 @@ def main() -> None:
         if args.slot_target != "none" and not n_sup:
             raise SystemExit(f"--latent-slots: no {args.tree_sources or 'training'} item of {args.train} has worked "
                              "steps (field worked_steps: scripts/build_gsm8k_si.py, or a numgen program)")
-        slot_loss_on = args.slot_target != "none" and args.slot_lambda > 0
+        slot_loss_on = args.slot_target != "none" and args.slot_lambda > 0 and slot.readout != "tsf"
         print(f"latent slots: {slot.k} x {slot.c} {token!r} (id {slot_token_id(tok, token)}), {slot.place}, target "
               f"{args.slot_target}, lambda {args.slot_lambda}, overflow {args.slot_overflow}, "
               f"{'final views only' if args.slot_final_only else 'with the node views'}; {n_sup} supervised slots over "
@@ -721,6 +853,49 @@ def main() -> None:
                   f"{slot.fill}, tokens {list(slot.slot_tokens())} (ids {[slot_token_id(tok, t) for t in slot.slot_tokens()]})"
                   f", swap {swap_token!r}" + (f", pad weight {slot.pad_weight}" if slot.pad_weight != 1.0 else ""),
                   flush=True)
+    teacher_cfg = None               # TSF / PTAD: the teacher settings (student.TeacherConfig, registered for tok)
+    teacher_log: dict = {}           # metrics "teacher": settings, views, gradient probe, CE guard
+    teacher_state = {"probe": [], "decided": None, "guard": None}   # checkpointed with the run
+    if tsf or ptad:
+        from cotdistill.student import (TeacherConfig, decoder_count, parse_layer_list, set_teacher, slot_step_map,
+                                        teacher_text_marks, teacher_mark_positions)
+        try:
+            t_layers = parse_layer_list(args.slot_align_layers if tsf else args.answer_align_layers,
+                                        decoder_count(model))
+        except ValueError as e:
+            raise SystemExit(f"--{'slot' if tsf else 'answer'}-align-layers: {e}")
+        if tsf and max(t_layers) != slot.layer:
+            raise SystemExit(f"--slot-align-layers {args.slot_align_layers}: the last layer must be the forcing layer "
+                             f"--slot-layer ({slot.layer})")
+        if ptad:
+            tsrc = {x for x in args.tree_sources.split(",") if x} or None
+            tplans = build_plans([it for it in train_items if tsrc is None or it.get("source") in tsrc],
+                                 args.answer_teacher, 0, "merge")
+        n_view = sum(bool(pl.lines) for pl in tplans.values())
+        if not n_view:
+            raise SystemExit(f"teacher view: no {args.tree_sources or 'training'} item of {args.train} has worked steps")
+        teacher_cfg = TeacherConfig("tsf" if tsf else "ptad", args.slot_teacher if tsf else args.answer_teacher,
+                                    tuple(t_layers), force_p=args.slot_force_p if tsf else 0.0,
+                                    teacher_ce=args.slot_teacher_ce if tsf else args.answer_teacher_ce, seed=args.seed,
+                                    smoothing=args.label_smoothing)
+        set_teacher(tok, teacher_cfg)
+        teacher_log = {"mode": teacher_cfg.mode, "kind": teacher_cfg.kind, "layers": list(t_layers),
+                       "lambda": args.slot_align_lambda if tsf else args.answer_align_lambda,
+                       "force_p": teacher_cfg.force_p, "teacher_ce": teacher_cfg.teacher_ce,
+                       "items_with_teacher_view": n_view, "items": len(tplans)}
+        ex_id = next(iid for iid, pl in tplans.items() if pl.lines)
+        ex_it = next(it for it in train_items if it["item_id"] == ex_id)
+        ex_text, ex_marks = teacher_text_marks(f"{ex_it['prompt']}\n\nAnswer:", tplans[ex_id])
+        if tsf:                          # the teacher tokens of the example's slots (logged, decoded)
+            from cotdistill.student import text_ids as _tids
+            ids = special_prefix(tok) + _tids(tok, ex_text)
+            teacher_log["example"] = {"item_id": ex_id, "slots": [
+                None if pp is None else [tok.decode([ids[q]]) for q in pp]
+                for pp in teacher_mark_positions(tok, ex_text, ex_marks, 10 ** 9)]}
+        print(f"teacher view ({teacher_cfg.mode}, {teacher_cfg.kind}): {n_view} of {len(tplans)} items, layers "
+              f"{list(t_layers)}, lambda {teacher_log['lambda']}, force p {teacher_cfg.force_p}, teacher CE "
+              f"{teacher_cfg.teacher_ce}; e.g. {ex_text!r}" + (f"; slot tokens {teacher_log['example']['slots']}"
+                                                              if tsf else ""), flush=True)
 
     def epoch_examples() -> list[Example]:
         ex = []
@@ -868,6 +1043,7 @@ def main() -> None:
         groups, ps = [], []
         sst: dict = {}                       # --si-stages: this pass's chain counts
         sst_slot: dict = {}                  # --latent-slots: this pass's slot counts
+        sst_t: dict = {}                     # PTAD: this pass's answer-view counts
         for it in items:
             p_sc = None
             if fade is not None:             # GTF: p(t) of the update this problem's group lands in
@@ -898,8 +1074,16 @@ def main() -> None:
                              epoch=ep, smooth=args.si_smooth, final_only=args.si_final_only, remove=args.si_remove,
                              stats=sst)
             if g and slot is not None:       # --latent-slots: the slot line (+ targets) in the final view
+                tkw = {}
+                if tsf:                      # TSF: the teacher view rides on the final view (TeacherExample)
+                    from cotdistill.student import TeacherPlan
+                    tkw = {"teacher": tplans.get(it["item_id"], TeacherPlan((), (None,) * slot.k))}
                 g = slot_group(g, it, spec=slot, targets=slot_tg.get(it["item_id"]) if slot_tg else None,
-                               lam=args.slot_lambda, final_only=args.slot_final_only, stats=sst_slot)
+                               lam=args.slot_align_lambda if tsf else args.slot_lambda,
+                               final_only=args.slot_final_only, stats=sst_slot, **tkw)
+            if g and ptad:                   # PTAD: the final view only (A2 prompt) + its teacher view
+                from cotdistill.student import answer_group
+                g = answer_group(g, it, plan=tplans.get(it["item_id"]), lam=args.answer_align_lambda, stats=sst_t)
             if g and node_stage:             # node stages train no final question
                 g = [e for e in g if e.kind != "final"]
             if g:
@@ -911,6 +1095,9 @@ def main() -> None:
         if slot is not None and not slot_stats:
             slot_stats.update(sst_slot)
             print("latent slot views", json.dumps(sst_slot, sort_keys=True), flush=True)
+        if ptad and "views" not in teacher_log:
+            teacher_log["views"] = dict(sst_t)
+            print("answer views", json.dumps(sst_t, sort_keys=True), flush=True)
         if args.tree_view == "mix":
             print(f"mix pass {ep}: {st.get('statements_views', 0)} statements views, {st.get('local_views', 0)} local "
                   "views", flush=True)
@@ -1010,16 +1197,79 @@ def main() -> None:
         k = max(1, -(-len(items) // args.eval_mid_max))
         mid_sets[name] = items[::k]
 
+    detect_sets: list = []               # TSF / PTAD: the --eval-mid sets of the "use" detector / held-out alignment
+    if teacher_cfg is not None and args.slot_detect_sets != "none":
+        want = [x for x in args.slot_detect_sets.split(",") if x] if args.slot_detect_sets != "auto" else list(mid_sets)
+        detect_sets = [x for x in want if x in mid_sets and any(worked_steps(it) for it in mid_sets[x])]
+        print(f"teacher detector sets: {detect_sets or 'none'}", flush=True)
+
+    def teacher_detect(row: dict, mid_preds: dict) -> None:
+        """TSF at an --eval-at point (memo section 3.8 G5): on each detector set, accuracy with the layer-L slot states
+        mean-ablated (training means), teacher-forced (the item's own teacher vectors) and forced with another item's
+        (<set>@mean / @force / @forceswap: acc, acc_drop = intact - mode, the chained-item numbers of tsf_subsets),
+        the chained-item summary (row[set]["detect"]: force - intact, intact - mean, intact - forceswap) and the
+        alignment loss against the item's own teacher (row[set]["align"]); the alignment on the first
+        --teacher-align-train-n training items (row["align_train"]). PTAD: the held-out / training alignment only."""
+        from cotdistill.student import (_SlotMean, ptad_eval, slot_layer_means, tsf_eval, tsf_subsets)
+        bs, ml = args.eval_bs, args.eval_max_len
+        if teacher_cfg.mode == "ptad":
+            for name in detect_sets:
+                row[name]["align"] = ptad_eval(model, tok, mid_sets[name], max_len=ml, bs=bs, layers=teacher_cfg.layers)
+            if args.teacher_align_train_n:
+                row["align_train"] = ptad_eval(model, tok, train_items[:args.teacher_align_train_n], max_len=ml, bs=bs,
+                                               layers=teacher_cfg.layers)
+            return
+        means = None
+        for name in detect_sets:
+            items, ip = mid_sets[name], mid_preds[name]
+            if means is None:
+                means = slot_layer_means(model, tok, train_items[:args.slot_mean_n], layer=slot.layer, max_len=ml, bs=bs)
+            with _SlotMean(model, tok, slot.layer, means):
+                res = {"mean": evaluate(model, tok, items, ml, bs, cache)}
+            res.update(tsf_eval(model, tok, items, max_len=ml, bs=bs, modes=("force", "forceswap"),
+                                align_layers=teacher_cfg.layers))
+            det = {}
+            for mode in ("mean", "force", "forceswap"):
+                mm, pr = res[mode]
+                sub = tsf_subsets(items, pr, ip, slot)
+                row[f"{name}@{mode}"] = {**{k: mm[k] for k in ("acc", "nll", "ece") if k in mm},
+                                         "acc_drop": row[name].get("acc", 0.0) - mm.get("acc", 0.0), **sub}
+                det[f"{mode}_chain"] = sub["acc_chain"]
+            det.update(n_chain=sub["n_chain"], intact_chain=sub["acc_intact_chain"])
+            if det["intact_chain"] is not None:
+                det.update(force_minus_intact=det["force_chain"] - det["intact_chain"],
+                           intact_minus_mean=det["intact_chain"] - det["mean_chain"],
+                           intact_minus_forceswap=det["intact_chain"] - det["forceswap_chain"])
+            row[name]["detect"] = det
+            row[name]["align"] = res["align"]
+        if args.teacher_align_train_n:
+            row["align_train"] = tsf_eval(model, tok, train_items[:args.teacher_align_train_n], max_len=ml, bs=bs,
+                                          modes=(), align_layers=teacher_cfg.layers).get("align")
+
     def mid_eval(at_step: int) -> None:
         row = {"step": at_step, "epoch": eval_steps[at_step], "s_elapsed": round(time.time() - t0, 1)}
+        mid_preds = {}
         for name, items in mid_sets.items():
             m, preds = evaluate(model, tok, items, args.eval_max_len, args.eval_bs, cache)
             row[name] = {k: m[k] for k in ("acc", "nll", "ece", "brier") if k in m}
+            mid_preds[name] = preds
             if args.eval_mid_preds and is_main:          # opt-in: the predictions of this point
                 (out / "mid").mkdir(exist_ok=True)
                 with open(out / "mid" / f"preds_{name}_e{eval_steps[at_step]:g}.jsonl", "w") as f:
                     for p in preds:
                         f.write(json.dumps(p) + "\n")
+        if teacher_cfg is not None:
+            teacher_detect(row, mid_preds)
+            if args.teacher_ce_guard and teacher_state["guard"] is None and mid_sets:   # memo 3.10: once, at the
+                first = next(iter(mid_sets))                                             # first point
+                acc = row[first].get("acc")
+                low = acc is not None and acc < args.teacher_ce_guard - 0.03
+                if low:
+                    teacher_cfg.teacher_ce = 0.25
+                teacher_state["guard"] = {"set": first, "epoch": eval_steps[at_step], "acc": acc,
+                                          "ref": args.teacher_ce_guard, "lowered": low,
+                                          "teacher_ce": teacher_cfg.teacher_ce}
+                print("teacher CE guard", json.dumps(teacher_state["guard"]), flush=True)
         trajectory.append(row)
         print("trajectory", json.dumps(row), flush=True)
         if is_main:
@@ -1074,7 +1324,18 @@ def main() -> None:
                 torch.cuda.set_rng_state_all(resume["cuda_rng"])
             passes["n"], micro, seen_tok = resume["passes"], resume["micro"], resume["seen_tok"]
             history, trajectory = resume["history"], resume["trajectory"]
+            if teacher_cfg is not None and "teacher_state" in resume:   # TSF / PTAD: probe rows, rescale, CE guard
+                teacher_state.update(resume["teacher_state"]["state"])
+                teacher_cfg.scale = resume["teacher_state"]["scale"]
+                teacher_cfg.teacher_ce = resume["teacher_state"]["teacher_ce"]
             t0 = time.time() - resume["elapsed"]    # s_per_step stays an average over the whole run
+
+    def teacher_ckpt() -> dict:
+        """TSF / PTAD: the run-time teacher state of a checkpoint (nothing for every other arm)."""
+        if teacher_cfg is None:
+            return {}
+        return {"teacher_state": {"state": dict(teacher_state), "scale": teacher_cfg.scale,
+                                  "teacher_ce": teacher_cfg.teacher_ce}}
 
     def save_ckpt(sched, upd_iter: list) -> None:
         tmp, old = ck_tmp, ck_old
@@ -1095,7 +1356,7 @@ def main() -> None:
                             "elapsed": time.time() - t0, "sched": sched.state_dict(), "upd_iter": upd_iter,
                             "history": history, "trajectory": trajectory, "rng": rng.getstate(),
                             "order_rng": order_rng.getstate(), "torch_rng": torch.get_rng_state(), "cuda_rng": None,
-                            "world": fs.world}, tmp / "state.part")
+                            "world": fs.world, **teacher_ckpt()}, tmp / "state.part")
                 (tmp / "state.part").rename(tmp / "state.pt")
                 if ck_dir.exists():
                     ck_dir.rename(old)
@@ -1115,7 +1376,8 @@ def main() -> None:
                     "elapsed": time.time() - t0, "sched": sched.state_dict(), "upd_iter": upd_iter,
                     "history": history, "trajectory": trajectory, "rng": rng.getstate(),
                     "order_rng": order_rng.getstate(), "torch_rng": torch.get_rng_state(),
-                    "cuda_rng": torch.cuda.get_rng_state_all() if dev == "cuda" else None}, tmp / "state.part")
+                    "cuda_rng": torch.cuda.get_rng_state_all() if dev == "cuda" else None, **teacher_ckpt()},
+                   tmp / "state.part")
         (tmp / "state.part").rename(tmp / "state.pt")
         if ck_dir.exists():
             ck_dir.rename(old)
@@ -1123,7 +1385,27 @@ def main() -> None:
         shutil.rmtree(old, ignore_errors=True)
         print(f"checkpoint {ck_dir} at step {step} ({time.time() - t_start:.0f} s into this process)", flush=True)
 
-    def fsdp_update(upd: list[Example], norm: float) -> dict:
+    def probe_loss(z, rd, tp, term: str, norm: float):
+        """--teacher-grad-probe: one loss term of a TSF / PTAD micro-batch (the others at weight 0, so the backward
+        covers the same graph)."""
+        parts = {"ce": kl_loss(z, rd, args.label_smoothing) * len(rd), "teacher": tp["teacher"], "align": tp["align"]}
+        return sum((1.0 if k == term else 0.0) * v for k, v in parts.items()) / norm
+
+    def probe_decide(at: int) -> None:
+        """After the last --teacher-grad-probe update: the median ratio of the alignment loss's gradient norm to the
+        student CE's; outside [0.3, 3] the alignment loss is rescaled once to ratio 1 (teacher_cfg.scale)."""
+        rows = teacher_state["probe"]
+        ratios = sorted(r["align"] / r["ce"] for r in rows if r["ce"] > 0)
+        med = (ratios[len(ratios) // 2] if len(ratios) % 2 else 0.5 * (ratios[len(ratios) // 2 - 1] +
+                                                                        ratios[len(ratios) // 2])) if ratios else None
+        scale = 1.0
+        if med is not None and med > 0 and not 0.3 <= med <= 3.0:
+            scale = 1.0 / med
+        teacher_cfg.scale = scale
+        teacher_state["decided"] = {"after_step": at, "ratio_median": med, "scale": scale, "rescaled": scale != 1.0}
+        print("teacher grad probe", json.dumps(teacher_state["decided"]), flush=True)
+
+    def fsdp_update(upd: list[Example], norm: float, at_step: int = 0) -> dict:
         """--fsdp: one optimizer update over the sequences upd, split across the ranks (cotdistill.fsdp.split_update).
         Each sequence's loss is weight x CE / norm as in the single-GPU loops and FSDP sums the ranks' gradients, so
         the update is the single-GPU one. Clips, steps and zeroes the gradients (the caller steps the scheduler).
@@ -1132,10 +1414,25 @@ def main() -> None:
         t_a = time.time()
         parts = fsdp_lib.split_update(tok, upd, args.max_len, args.micro_bs, args.token_budget,
                                       args.token_budget_seqs, fs.world)
-        acc = torch.zeros(6 if not slot_loss_on else 9, dtype=torch.float64, device=fs.device)  # loss, final, node,
-        for mb, pad, ntok in parts[fs.rank]:      # node CE sum, nodes, padded tok (+ slot loss, slot CE sum, slots)
+        acc = torch.zeros((6 if not slot_loss_on else 9) + (10 if teacher_cfg is not None else 0), dtype=torch.float64,
+                          device=fs.device)  # loss, final, node, node CE sum, nodes, padded tok (+ slot loss, slot CE
+        probe = None                         # sum, slots; TSF / PTAD: align loss, align sum, aligned, teacher loss,
+        if teacher_cfg is not None and at_step in probe_steps:   # teacher CE sum, views, forced mbs, mbs, forced
+            probe = {"step": at_step}                            # examples, marks cut)
+            for term in ("ce", "teacher", "align"):  # the update's gradient of one term at a time (every rank)
+                for mb, pad, ntok in parts[fs.rank]:
+                    with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
+                        z, tp, _ = teacher_forward(model, tok, mb, args.max_len, cache, step=at_step)
+                        loss = probe_loss(z, mb, tp, term, norm)
+                    loss.backward()
+                probe[term] = float(fsdp_lib.sharded_grad_norm(params, fs.device))
+                trainer.zero_grad()
+        for mb, pad, ntok in parts[fs.rank]:
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
-                if slot_loss_on:         # every rank runs both passes (pads at weight 0): same collectives
+                if teacher_cfg is not None:  # TSF / PTAD: teacher pass + student pass on every rank (pads at weight 0)
+                    z, tp, tst = teacher_forward(model, tok, mb, args.max_len, cache, step=at_step)
+                    loss = (kl_loss(z, mb, args.label_smoothing) * len(mb) + tp["teacher"] + tp["align"]) / norm
+                elif slot_loss_on:       # every rank runs both passes (pads at weight 0): same collectives
                     z, sl, sls = slot_forward(model, tok, mb, args.max_len, cache)
                     loss = (kl_loss(z, mb, args.label_smoothing) * len(mb) + sl) / norm
                 else:
@@ -1152,6 +1449,11 @@ def main() -> None:
                 acc[6] += sl.item() / norm
                 acc[7] += sls["slot_ce_sum"]
                 acc[8] += sls["slot_n"]
+            if teacher_cfg is not None:
+                for q, v in enumerate((tp["align"].detach().item() / norm, tst["align_sum"], tst["slot_n"],
+                                       tp["teacher"].detach().item() / norm, tst["teacher_ce_sum"], tst["teacher_n"],
+                                       tst["forced"], 1, tst["forced_n"], tst["marks_cut"])):
+                    acc[6 + q] += v
             if tree_opts:
                 with torch.no_grad():
                     for zz, e in zip(z, mb):
@@ -1171,6 +1473,9 @@ def main() -> None:
         trainer.zero_grad()
         a = acc.tolist()
         slot_part = {"loss_slot": a[6], "slot_ce_sum": a[7], "slot_n": int(a[8])} if slot_loss_on else {}
+        if teacher_cfg is not None:
+            slot_part = dict(zip(("align", "align_sum", "align_n", "teacher", "teacher_ce", "teacher_n", "forced_mb",
+                                  "mb", "forced_n", "marks_cut"), a[6:16]), probe=probe)
         return {"loss": a[0], "loss_final": a[1], "loss_node": a[2], "node_ce": a[3] / max(1.0, a[4]), "gnorm": gnorm,
                 "fwd": len(parts[fs.rank]) * fs.world, "pad_fwd": sum(x[1] for r in parts for x in r),
                 "pad_tok": int(a[5]), "fb_s": t_b - t_a, "clip_s": t_c - t_b, "opt_s": time.time() - t_c,
@@ -1231,12 +1536,20 @@ def main() -> None:
             split = {"final": 0.0, "subq": 0.0, "node_ce": 0.0, "node_n": 0}
             if slot_loss_on:
                 split.update(slot=0.0, slot_ce=0.0, slot_n=0)
+            if teacher_cfg is not None:      # TSF / PTAD: align loss, teacher CE, forcing counts
+                split.update(align=0.0, align_sum=0.0, align_n=0, teacher=0.0, teacher_ce=0.0, teacher_n=0,
+                             forced_mb=0, mb=0, forced_n=0, marks_cut=0)
             if fs is not None:           # the same sequences split across the ranks, gradients summed
-                fu = fsdp_update(upd, norm)
+                fu = fsdp_update(upd, norm, step)
                 upd_loss = fu["loss"]
                 split.update(final=fu["loss_final"], subq=fu["loss_node"], node_ce=fu["node_ce"], node_n=1)
                 if slot_loss_on:
                     split.update(slot=fu["loss_slot"], slot_ce=fu["slot_ce_sum"], slot_n=fu["slot_n"])
+                if teacher_cfg is not None:
+                    split.update({k: fu[k] for k in ("align", "align_sum", "align_n", "teacher", "teacher_ce",
+                                                     "teacher_n", "forced_mb", "mb", "forced_n", "marks_cut")})
+                    if fu["probe"] is not None:
+                        teacher_state["probe"].append(fu["probe"])
                 seen_tok += sum(min(args.max_len, len(e.text) // 3) for e in upd)
                 if tree_opts:
                     gwin.append(fu["gnorm"])
@@ -1244,10 +1557,32 @@ def main() -> None:
             else:
                 # micro_bs chunks, or length-sorted micro-batches of at most token_budget padded tokens
                 mbs = micro_batches(tok, upd, args.max_len, args.micro_bs, args.token_budget, args.token_budget_seqs)
+                if teacher_cfg is not None and step in probe_steps:   # TSF / PTAD: one term's gradient at a time
+                    prow = {"step": step}
+                    for term in ("ce", "teacher", "align"):
+                        for mb in mbs:
+                            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
+                                z, tp, _ = teacher_forward(model, tok, mb, args.max_len, cache, step=step)
+                                loss = probe_loss(z, readouts(mb), tp, term, norm)
+                            loss.backward()
+                        gs = [p_.grad for p_ in params if p_.grad is not None]
+                        prow[term] = float(torch.nn.utils.get_total_norm(gs)) if gs else 0.0
+                        opt.zero_grad(set_to_none=True)
+                    teacher_state["probe"].append(prow)
                 for mb in mbs:
                     rd = readouts(mb)                  # --tree-pack: one entry per node view of a pack; else mb
                     with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
-                        if slot_loss_on:               # --latent-slots: the main pass + the slot decoding pass
+                        if teacher_cfg is not None:    # TSF / PTAD: the teacher pass + the student pass (forced or not)
+                            z, tp, tst = teacher_forward(model, tok, mb, args.max_len, cache, step=step)
+                            loss = (kl_loss(z, rd, args.label_smoothing) * len(rd) + tp["teacher"] + tp["align"]) / norm
+                            split["align"] += tp["align"].detach().item() / norm
+                            split["teacher"] += tp["teacher"].detach().item() / norm
+                            for k_, v_ in (("align_sum", "align_sum"), ("align_n", "slot_n"), ("teacher_ce", "teacher_ce_sum"),
+                                           ("teacher_n", "teacher_n"), ("forced_mb", "forced"), ("forced_n", "forced_n"),
+                                           ("marks_cut", "marks_cut")):
+                                split[k_] += tst[v_]
+                            split["mb"] += 1
+                        elif slot_loss_on:             # --latent-slots: the main pass + the slot decoding pass
                             z, sl, sls = slot_forward(model, tok, mb, args.max_len, cache)
                             loss = (kl_loss(z, rd, args.label_smoothing) * len(rd) + sl) / norm
                             split["slot"] += sl.item() / norm
@@ -1277,6 +1612,8 @@ def main() -> None:
                 sched.step()
                 opt.zero_grad(set_to_none=True)
             step += 1
+            if teacher_cfg is not None and probe_steps and step - 1 == probe_steps[-1]:
+                probe_decide(step - 1)       # the alignment loss's one-time rescale (from the next update on)
             if step % args.log_every == 0 or step == total_steps:
                 dt = time.time() - t0
                 mem = torch.cuda.max_memory_allocated() / 2**30 if dev == "cuda" else 0.0
@@ -1297,6 +1634,14 @@ def main() -> None:
                     if slot_loss_on:   # the slot decoding loss (weighted, in loss) and its mean unweighted CE per slot
                         row.update(loss_slot=split["slot"], slot_ce=split["slot_ce"] / max(1, split["slot_n"]),
                                    slot_n=split["slot_n"])
+                    if teacher_cfg is not None:   # TSF / PTAD: the weighted align loss and teacher CE (in loss), their
+                        row.update(loss_align=split["align"],     # mean unweighted values, the forcing counts
+                                   align=split["align_sum"] / max(1, split["align_n"]), align_n=int(split["align_n"]),
+                                   loss_teacher=split["teacher"],
+                                   teacher_ce=split["teacher_ce"] / max(1, split["teacher_n"]),
+                                   teacher_n=int(split["teacher_n"]), forced_mb=int(split["forced_mb"]),
+                                   mb=int(split["mb"]), forced_n=int(split["forced_n"]),
+                                   marks_cut=int(split["marks_cut"]))
                     gwin.clear()
                 history.append(row)
                 print(json.dumps(row), flush=True)
@@ -1437,10 +1782,13 @@ def main() -> None:
         results["curriculum"] = cur_log
     if fs is not None:
         results["fsdp"] = {"world": fs.world, "optim": args.fsdp_optim}
+    final_preds: dict = {}               # TSF: the intact predictions, for the chained-item necessity numbers
     for name, items in evals.items():    # (--fsdp: every rank evaluates its share of the batches; rank 0 writes)
         hid = [] if name in args.dump_hidden.split(",") else None
         m, preds = evaluate(model, tok, items, args.eval_max_len, args.eval_bs, cache, hidden=hid,
                             layers=[int(x) for x in args.dump_layers.split(",") if x] or None)
+        if tsf:
+            final_preds[name] = preds
         if hid is not None and is_main:
             torch.save(torch.stack(hid).half(), out / f"hidden_{name}.pt")
         results["eval"][name] = m
@@ -1459,9 +1807,27 @@ def main() -> None:
                    sets=[x for x in args.slot_necessity_sets.split(",") if x], swap_token=swap_token,
                    decode_n=args.slot_decode, decode_set=args.slot_decode_set, max_len=args.eval_max_len,
                    bs=args.eval_bs, cache=cache, seed=args.seed, overflow=args.slot_overflow, write=is_main,
-                   mean_items=train_items[:args.slot_mean_n])
+                   mean_items=train_items[:args.slot_mean_n], **({"intact_preds": final_preds} if tsf else {}))
         if is_main:
             (out / SLOT_SIDECAR).write_text(json.dumps(slot.as_dict(), indent=1))
+    if teacher_cfg is not None:          # TSF / PTAD: the settings, probe, guard; the held-out / training alignment
+        from cotdistill.student import ptad_eval, tsf_eval
+        results["teacher"] = {**teacher_log, "scale": teacher_cfg.scale, "teacher_ce_final": teacher_cfg.teacher_ce,
+                              "grad_probe": {"rows": teacher_state["probe"], **(teacher_state["decided"] or {})},
+                              "guard": teacher_state["guard"]}
+        al: dict = {}
+        sets_a = [(n, its) for n, its in evals.items() if any(worked_steps(it) for it in its)]
+        if args.teacher_align_train_n:
+            sets_a.append(("train", train_items[:args.teacher_align_train_n]))
+        for name, its in sets_a:
+            if teacher_cfg.mode == "tsf":
+                al[name] = tsf_eval(model, tok, its, max_len=args.eval_max_len, bs=args.eval_bs, modes=(),
+                                    align_layers=teacher_cfg.layers).get("align")
+            else:
+                al[name] = ptad_eval(model, tok, its, max_len=args.eval_max_len, bs=args.eval_bs,
+                                     layers=teacher_cfg.layers)
+            print(f"teacher align {name}", json.dumps(al[name]), flush=True)
+        results["teacher_align"] = al
     eval_value_render = (None if args.eval_value_render == "none" else args.eval_value_render
                          if args.eval_value_render != "auto" else "vt" if args.node_render == "vtr" else args.node_render)
     for sname, spath in subq_sets(args.eval_subq or ""):

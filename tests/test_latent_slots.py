@@ -1404,7 +1404,8 @@ class TestV22Train(unittest.TestCase):
                 self.assertEqual(a.get(key), b.get(key), (arm, key))
             self.assertEqual(sorted(set(a) - {"args"}), sorted(set(b) - {"args"}), arm)
             self.assertEqual({k: v for k, v in a["args"].items() if k != "out"},
-                             {k: v for k, v in b["args"].items() if k not in ("out", "slot_pad_weight", "save_dir")})
+                             {k: v for k, v in b["args"].items() if k not in ("out", "slot_pad_weight", "save_dir") and
+                              k in a["args"]})                     # (later arguments: tests/test_tsf.py TestUnchanged)
             self.assertEqual((b["args"]["slot_pad_weight"], b["args"]["save_dir"]), (1.0, ""))
             self.assertEqual(sorted(p.name for p in outs[0].iterdir()), sorted(p.name for p in outs[1].iterdir()))
             for f in sorted(p.name for p in outs[0].glob("*.jsonl")) + ["latent_slots.json"]:

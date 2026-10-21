@@ -2253,7 +2253,8 @@ SLOT_POOL = SLOT_TOKENS + ("<|fim_pad|>", "<|repo_name|>", "<|file_sep|>", "<|fi
 SLOT_PLACES = ("before-options", "after-options")
 SLOT_TARGETS = ("tree", "none", "shuffled")
 SLOT_OVERFLOW = ("merge", "truncate")
-SLOT_READOUTS = ("decode", "lens")        # decode: v2 (separate decoding pass, step text); lens: v2.1 (layer L, value)
+SLOT_READOUTS = ("decode", "lens", "tsf")  # decode: v2 (separate decoding pass, step text); lens: v2.1 (layer L, value);
+                                          # tsf: teacher-state slots with forced reading (teacher_forward)
 SLOT_FILLS = ("none", "last", "answer")
 SLOT_TOKEN_MODES = ("same", "distinct")
 SLOT_MERGE_SEP = "; "
@@ -2573,13 +2574,16 @@ def _shuffle_slot_targets(real: dict, seed: int) -> dict:
 
 
 def slot_group(group: list[Example], item: dict, *, spec: SlotSpec, targets: list | None, lam: float = 1.0,
-               final_only: bool = False, stats: dict | None = None) -> list[Example]:
+               final_only: bool = False, stats: dict | None = None, teacher=None) -> list[Example]:
     """A full-tree group (build_full_tree's [final] + node views) of a slot arm: the final view's text gets the slot line
     (slot_text) and becomes a SlotExample with targets (LS: slot_targets, LSR: shuffled_slot_targets) and slot_lambda =
     lam / supervised slots; targets None (LSU, the pause-token control) keeps a plain Example (no decoding pass). Node
     views stay as built (LSY: GFPQ's, without slots) or are dropped (final_only: LS / LSU / LSR). Draws nothing from any
     generator (rng lockstep with the arm's GFPQ). stats counts slot_items, slot_supervised (slots with a target),
-    slot_items_without_chain and slot_items_merged (an overflow target)."""
+    slot_items_without_chain and slot_items_merged (an overflow target). teacher (TSF, --slot-readout tsf: a
+    TeacherPlan, the item's teacher view): the final view becomes a TeacherExample whose teacher_text / teacher_marks
+    come from teacher_text_marks (targets: the plan's line per supervised slot, plan_slot_targets); default None: as
+    before."""
     st = stats if stats is not None else {}
     bump = lambda key, n=1: st.__setitem__(key, st.get(key, 0) + n)
     out = []
@@ -2597,6 +2601,15 @@ def slot_group(group: list[Example], item: dict, *, spec: SlotSpec, targets: lis
             bump("slot_supervised", m)
             bump("slot_items_without_chain", m == 0)
             bump("slot_items_merged", any(t is not None and SLOT_MERGE_SEP in t for t in tg))
+            if teacher is not None:          # TSF: the teacher view of the same final view (no slot line)
+                t_text, marks = teacher_text_marks(e.text, teacher)
+                if len(marks) != spec.k or [mk is not None for mk in marks] != [t is not None for t in tg]:
+                    raise ValueError(f"{item.get('item_id')}: the teacher plan's slots differ from the slot targets")
+                bump("teacher_views", bool(t_text))
+                out.append(TeacherExample(**dict(dataclasses.asdict(e), text=text), slot_targets=tg,
+                                          slot_lambda=lam / m if m else 0.0, teacher_text=t_text,
+                                          teacher_marks=marks))
+                continue
             out.append(SlotExample(**dict(dataclasses.asdict(e), text=text), slot_targets=tg,
                                    slot_lambda=lam / m if m else 0.0))
         elif not final_only:
@@ -2756,6 +2769,8 @@ def slot_forward(model, tokenizer, batch: list, max_len: int, cache: dict, _deta
     if getattr(model, "cotd_readout", False):
         return model.run(slot_forward, tokenizer, batch, max_len, cache, _detach, True)
     spec, _ = _slot_reg(tokenizer)
+    if spec.readout == "tsf":
+        raise ValueError("--slot-readout tsf: the training pass is teacher_forward, not slot_forward")
     if spec.readout == "lens":
         return _slot_forward_lens(model, tokenizer, batch, max_len, cache, _detach, _always)
     sid = _slot_ids(tokenizer)
@@ -3167,14 +3182,16 @@ def parse_slot_necessity(spec: str) -> list[str]:
     """--slot-necessity value -> modes: "swap" (every slot token replaced by the swap token: same length), "drop" (the
     prompt without the slot line: the A2 format), "noise@<layer>:<sigma>" (_SlotNoise; <layer> an int or "mid"),
     "mean" / "mean@<layer>" (v2.1, _SlotMean: the slot states at the output of the slot layer, or of <layer>, replaced
-    by their mean over training items, slot_layer_means)."""
+    by their mean over training items, slot_layer_means), "force" / "forceswap" (TSF, --slot-readout tsf: the layer-L
+    slot states replaced by the teacher view's vectors of the item's own worked steps / of another item's, tsf_eval)."""
     modes = [x.strip() for x in spec.split(",") if x.strip()]
     for m in modes:
-        if m in ("swap", "drop", "mean") or re.fullmatch(r"mean@(mid|-?\d+)", m):
+        if m in ("swap", "drop", "mean", "force", "forceswap") or re.fullmatch(r"mean@(mid|-?\d+)", m):
             continue
         hit = re.fullmatch(r"noise@(mid|-?\d+):([0-9.]+(?:e-?\d+)?)", m)
         if not hit:
-            raise ValueError(f"--slot-necessity {m!r}: swap, drop, mean[@<layer|mid>] or noise@<layer|mid>:<sigma>")
+            raise ValueError(f"--slot-necessity {m!r}: swap, drop, mean[@<layer|mid>], noise@<layer|mid>:<sigma>, "
+                             "force or forceswap")
     return modes
 
 
@@ -3185,13 +3202,23 @@ def slot_necessity(model, tok, items: list[dict], max_len: int, bs: int, cache: 
     modes), next to the intact metrics: {mode: (metrics + acc_intact / nll_intact / acc_drop = intact - perturbed,
     preds)}. Swap replaces every slot token (distinct ones too) by the one swap token. The mean modes need mean_items
     (training items: their slot means are computed once per layer and kept in means, a dict layer -> tensor). The
-    registered slot prompt is restored afterwards."""
+    registered slot prompt is restored afterwards. force / forceswap (TSF): tsf_eval, run once for both."""
     spec, _ = _slot_reg(tok)
     means = means if means is not None else {}
     out = {}
+    forced = None
     try:
         for m in modes:
-            if m == "swap":
+            if m in ("force", "forceswap"):
+                set_slot_prompt(tok, spec)
+                if not any(worked_steps(it) for it in items):    # nothing to force: the mode is left out
+                    print(f"slot necessity {m}: no item with worked steps, skipped", flush=True)
+                    continue
+                if forced is None:
+                    forced = tsf_eval(model, tok, items, max_len=max_len, bs=bs,
+                                      modes=tuple(x for x in modes if x in ("force", "forceswap")))
+                mm, pr = forced[m]
+            elif m == "swap":
                 set_slot_prompt(tok, dataclasses.replace(spec, token=swap_token, tokens=()))
                 mm, pr = evaluate(model, tok, items, max_len, bs, cache)
             elif m == "drop":
@@ -3237,7 +3264,8 @@ SLOT_SIDECAR = "latent_slots.json"          # next to a saved slot-arm model: th
 
 def slot_evals(model, tok, evals: dict, results: dict, out, *, modes: list[str], sets: list[str], swap_token: str | None,
                decode_n: int, decode_set: str, max_len: int, bs: int, cache: dict, seed: int = 0,
-               overflow: str = "merge", write: bool = True, mean_items: list | None = None) -> None:
+               overflow: str = "merge", write: bool = True, mean_items: list | None = None,
+               intact_preds: dict | None = None) -> None:
     """After the plain evaluations of a slot arm (results["eval"][set] = the intact metrics): the necessity test
     (slot_necessity) on the named sets (all when empty; names not in evals are skipped), eval keys <set>@<mode>,
     results["slot_necessity"][set][mode] and preds_<set>@<mode>.jsonl; then the decoding readout (slot_decode) of the
@@ -3247,11 +3275,15 @@ def slot_evals(model, tok, evals: dict, results: dict, out, *, modes: list[str],
     results["slot_readout"][set] (slot_readout_summary) and results["slot_pilot"] (the pilot's pass criteria: value
     readout >= 45% on the first readout set and an acc_drop >= 2 points in the mean (else swap) mode of the first
     necessity set). mean_items: the training items of the mean modes. write False: no files (FSDP ranks other than
-    0)."""
+    0). A TSF spec (--slot-readout tsf) has no slot readout: every necessity mode also gets its numbers on the items
+    with a chain (tsf_subsets; intact_preds: name -> the intact predictions, else they are recomputed) and
+    results["tsf_pilot"] the own-run part of gate G1 (mean drop >= 2, forceswap drop >= 3 points)."""
     import json
     from pathlib import Path
     out = Path(out)
     means: dict = {}
+    spec0 = slot_spec(tok)
+    tsf = spec0 is not None and spec0.readout == "tsf"
     for name in sets or list(evals):
         if name not in evals:
             print(f"slot necessity: no eval set {name!r}, skipped", flush=True)
@@ -3261,18 +3293,38 @@ def slot_evals(model, tok, evals: dict, results: dict, out, *, modes: list[str],
         intact = results["eval"].get(name) or evaluate(model, tok, evals[name], max_len, bs, cache)[0]
         res = slot_necessity(model, tok, evals[name], max_len, bs, cache, modes, swap_token=swap_token or "",
                              intact=intact, seed=seed, mean_items=mean_items, means=means)
+        if tsf:
+            ip = (intact_preds or {}).get(name)
+            if ip is None:
+                ip = evaluate(model, tok, evals[name], max_len, bs, cache)[1]
         for mode, (mm, pr) in res.items():
             key = f"{name}@{mode}"
             results["eval"][key] = mm
             results.setdefault("slot_necessity", {}).setdefault(name, {})[mode] = {
                 k: mm.get(k) for k in ("n", "acc", "acc_intact", "acc_drop", "nll", "nll_intact", "ece") +
-                (("mean_layer", "mean_items") if "mean_layer" in mm else ())}
+                (("mean_layer", "mean_items") if "mean_layer" in mm else ()) + (("n_forced",) if "n_forced" in mm else ())}
+            if tsf:                          # TSF: the chained items, and the items with an intermediate value as option
+                results["slot_necessity"][name][mode].update(tsf_subsets(evals[name], pr, ip, spec0))
             if write:
                 with open(out / f"preds_{name}@{slot_mode_name(mode)}.jsonl", "w") as f:
                     for p in pr:
                         f.write(json.dumps(p) + "\n")
             print(key, json.dumps(results["slot_necessity"][name][mode]), flush=True)
     spec = slot_spec(tok)
+    if tsf:                                  # no slot readout; the own-run part of G1 on the first necessity set
+        if results.get("slot_necessity"):
+            nset, nm = next(iter(results["slot_necessity"].items()))
+            pil = {"necessity_set": nset}
+            for mode in ("mean", "swap", "drop", "force", "forceswap"):
+                if mode in nm:
+                    pil[f"{mode}_drop"] = nm[mode].get("acc_drop")
+                    pil[f"{mode}_drop_chain"] = nm[mode].get("acc_drop_chain")
+            if "mean_drop" in pil and "forceswap_drop" in pil:
+                pil["g1_own"] = bool(pil["mean_drop"] is not None and pil["mean_drop"] >= 0.02 and
+                                     pil["forceswap_drop"] is not None and pil["forceswap_drop"] >= 0.03)
+            results["tsf_pilot"] = pil
+            print("tsf pilot", json.dumps(pil), flush=True)
+        return
     if spec is not None and spec.readout == "lens":
         if decode_n and evals:
             names = [x for x in decode_set.split(",") if x in evals] or [next(iter(evals))]
@@ -3318,3 +3370,695 @@ def slot_evals(model, tok, evals: dict, results: dict, out, *, modes: list[str],
         for r in rows[:2]:
             print("  ", r["item_id"], " | ".join(f"{s['slot']}: {s['decoded']!r} ({s['target']!r})" for s in r["slots"]),
                   flush=True)
+
+
+# ---- teacher-state slots (TSF) and answer-position self-distillation (PTAD) ------------------------------------------
+# notes/latent_comeback_memo_2026-10-21.md: §3 TSF (arms TSF / TSFN / TSFR / TSFX / TSF6; --slot-readout tsf) and §4
+# PTAD, the zero-latent CODI backup (PTAD / PTADR / PTADX; --answer-teacher). All opt-in: nothing below runs on any
+# other arm's path. A teacher view through the same weights, the final question with the item's worked steps written
+# before its options (SI stage 0: insert_chain + chain_block; no slot line), gives (i) regression targets, its residual
+# states at the OUTPUT of decoder layers B (stop-grad): TSF at two positions of the line of slot j's worked step (slot
+# token 1 <- the token that predicts the value's first token, token 2 <- the value's last token), PTAD at the
+# "Answer:" position; loss smooth L1 (beta 1) of s / sigma vs t / sigma, sigma = the RMS of the teacher vector (the
+# memo's small-batch variant of CODI's batch std), mean over hidden dims, layers (and the c tokens), weight x lambda /
+# supervised slots per problem (TSF) or x lambda (PTAD); (ii) TSF only, forced reading: in a micro-batch whose coin
+# (keyed by seed, update and the micro-batch's items: tsf_coin) falls below p, the student's layer-L slot states are
+# REPLACED by the teacher's layer-L vectors before layers L + 1 .. n - 1 compute the letter CE; the align loss is taken
+# on the states before the replacement, so one student pass + one teacher pass per micro-batch. The teacher view also
+# trains the letter CE at weight teacher_ce x the example's weight. Deployed: LSL's prompt (TSF) / A2's (PTAD).
+TEACHER_KINDS = ("steps", "shuffled", "placebo")
+TEACHER_MODES = ("tsf", "ptad")
+
+
+@dataclass
+class TeacherConfig:
+    """A TSF / PTAD run's teacher settings, registered per tokenizer (set_teacher) like the slot prompt. layers: the
+    decoder layers (0-based) whose OUTPUT is aligned (TSF: the last one is the slot spec's layer L, where forcing
+    happens); scale: the one-time rescale of the align loss (--teacher-grad-probe); teacher_ce: the teacher view's
+    letter-CE weight (--teacher-ce-guard may lower it once). Both are read at every forward."""
+    mode: str
+    kind: str
+    layers: tuple
+    force_p: float = 0.0
+    teacher_ce: float = 0.5
+    seed: int = 0
+    scale: float = 1.0
+    smoothing: float = 0.0
+
+
+_TEACHERS: dict[int, tuple] = {}
+
+
+def set_teacher(tokenizer, cfg: TeacherConfig | None) -> None:
+    """Register (cfg) or clear (None) the teacher settings teacher_forward reads for this tokenizer."""
+    if cfg is None:
+        _TEACHERS.pop(id(tokenizer), None)
+        return
+    if cfg.mode not in TEACHER_MODES or cfg.kind not in TEACHER_KINDS:
+        raise ValueError(f"teacher: mode {cfg.mode!r} / kind {cfg.kind!r}")
+    _TEACHERS[id(tokenizer)] = (tokenizer, cfg)
+
+
+def teacher_config(tokenizer) -> TeacherConfig | None:
+    hit = _TEACHERS.get(id(tokenizer))
+    return hit[1] if hit is not None and hit[0] is tokenizer else None
+
+
+@dataclass
+class TeacherExample(SlotExample):
+    """A final view with a teacher view (TSF / PTAD; a subclass, so Example / SlotExample are unchanged). teacher_text:
+    the final question with worked-step lines before its options (the item's own: steps; another item's: shuffled;
+    the problem's sentences: placebo), no slot line; "" = no teacher view (an item without a chain: no teacher CE, no
+    alignment). teacher_marks (TSF): per slot None or (first, last), the characters of teacher_text that start / end the
+    'value' of the slot's line (steps: what follows the last '='; placebo: the line's last character). slot_lambda:
+    lambda / supervised slots (TSF), lambda (PTAD), 0 without a teacher view."""
+    teacher_text: str = ""
+    teacher_marks: tuple = ()
+
+
+@dataclass(frozen=True)
+class TeacherPlan:
+    """The teacher view of one item: lines (the step lines written, empty = no teacher view), slot_lines (TSF: per slot
+    the index of its line, None = unsupervised; PTAD: ()), rule ("value": the value after the line's last '=';
+    "last": the line's last character, placebo lines)."""
+    lines: tuple = ()
+    slot_lines: tuple = ()
+    rule: str = "value"
+
+
+def parse_layer_list(spec: str, n: int) -> tuple:
+    """--slot-align-layers / --answer-align-layers: "a-b" ranges and integers, comma separated (0-based decoder layers
+    whose OUTPUT is meant; each must be read by a later layer: 0..n-2) -> sorted unique tuple."""
+    out = set()
+    for part in (x.strip() for x in str(spec).split(",")):
+        if not part:
+            continue
+        a, sep, b = part.partition("-")
+        try:
+            got = range(int(a), int(b) + 1) if sep and a else [int(part)]
+        except ValueError:
+            raise ValueError(f"{spec!r}: 'a-b' ranges or integers")
+        out.update(got)
+    if not out:
+        raise ValueError(f"{spec!r}: no layer")
+    bad = [x for x in out if not 0 <= x <= n - 2]
+    if bad:
+        raise ValueError(f"{spec!r}: layers {sorted(bad)} outside 0..{n - 2} (intermediate layers of {n})")
+    return tuple(sorted(out))
+
+
+def slot_step_map(n: int, k: int, overflow: str = "merge") -> list:
+    """Slot j's worked step (0-based index into a chain of n steps) or None, as slot_value_targets with fill none: a
+    chain of n <= k steps fills slots 1..n; a longer one: merge = steps 1..k-1 and the LAST step on slot k (TSF6:
+    the first five steps + the answer's), truncate = steps 1..k (TSF)."""
+    if overflow not in SLOT_OVERFLOW:
+        raise ValueError(f"--slot-overflow {overflow!r}: one of {', '.join(SLOT_OVERFLOW)}")
+    if n <= k:
+        return list(range(n)) + [None] * (k - n)
+    return list(range(k - 1)) + [n - 1] if overflow == "merge" else list(range(k))
+
+
+def placebo_lines(item: dict, n: int) -> list[str]:
+    """TSFX / PTADX: n lines of text with no computation in place of the n worked steps: the sentences of the item's
+    placebo text (placebo_text: the problem's statements), in order, cycled to n lines."""
+    sents = [x.strip() for x in _pl_sentences(placebo_text(item)) if x.strip()]
+    if not sents:
+        raise ValueError(f"{item.get('item_id')}: no placebo sentence")
+    return [sents[i % len(sents)] for i in range(n)]
+
+
+def teacher_partners(items: list[dict], seed, need: dict | None = None) -> dict:
+    """TSFR / PTADR (and the cross-item forced evaluation, forceswap): item_id -> the id of another item whose worked
+    steps the item's teacher view shows. Candidates: items with a chain of at least need[item] steps (default 1, so
+    every supervised slot of the item gets a line), other than the item and with other step lines; drawn by a
+    generator keyed by seed and the item (never the training rng; fixed over the epochs)."""
+    chains = {it["item_id"]: tuple(s["text"] for s in worked_steps(it) or []) for it in items}
+    ids = sorted((i for i, c in chains.items() if c), key=str)
+    by_min: dict = {}
+    out = {}
+    for iid in ids:
+        m = max(1, int((need or {}).get(iid, 1)))
+        if m not in by_min:
+            by_min[m] = [j for j in ids if len(chains[j]) >= m]
+        pool = by_min[m]
+        rng = random.Random(f"teacher-partner|{seed}|{iid}")
+        pick = None
+        for _ in range(64):
+            j = pool[rng.randrange(len(pool))] if pool else None
+            if j is not None and j != iid and chains[j] != chains[iid]:
+                pick = j
+                break
+        if pick is None:
+            ok = [j for j in pool if j != iid and chains[j] != chains[iid]]
+            if not ok:
+                raise ValueError(f"teacher partners: no other item with >= {m} worked steps for {iid}")
+            pick = ok[rng.randrange(len(ok))]
+        out[iid] = pick
+    return out
+
+
+def teacher_plan(item: dict, kind: str, *, k: int = 0, overflow: str = "merge", partner: dict | None = None) -> TeacherPlan:
+    """The teacher view of item: steps = its worked steps (slot j <- slot_step_map's step); shuffled = partner's steps
+    (the item's supervised slots, each the partner's line at that slot by the same map; the partner has at least as
+    many steps as the item has supervised slots); placebo = placebo_lines in place of its n steps (same slots, rule
+    "last"). k = 0 (PTAD): no slots. An item without a chain gets the empty plan."""
+    if kind not in TEACHER_KINDS:
+        raise ValueError(f"teacher kind {kind!r}: one of {', '.join(TEACHER_KINDS)}")
+    steps = worked_steps(item) or []
+    if not steps:
+        return TeacherPlan((), (None,) * k)
+    own = slot_step_map(len(steps), k, overflow) if k else []
+    if kind == "steps":
+        return TeacherPlan(tuple(s["text"] for s in steps), tuple(own), "value")
+    if kind == "placebo":
+        return TeacherPlan(tuple(placebo_lines(item, len(steps))), tuple(own), "last")
+    if partner is None:
+        raise ValueError(f"{item.get('item_id')}: shuffled teacher view without a partner")
+    lines = tuple(s["text"] for s in worked_steps(partner) or [])
+    pm = slot_step_map(len(lines), k, overflow) if k else []
+    smap = []
+    for j, li in enumerate(own):
+        if li is not None and pm[j] is None:
+            raise ValueError(f"{item.get('item_id')}: partner {partner.get('item_id')} has no line for slot {j + 1}")
+        smap.append(pm[j] if li is not None else None)
+    if not lines:
+        raise ValueError(f"{item.get('item_id')}: partner {partner.get('item_id')} has no worked steps")
+    return TeacherPlan(lines, tuple(smap), "value")
+
+
+def plan_slot_targets(plan: TeacherPlan, k: int) -> list:
+    """The slot targets of a TSF item (SlotExample.slot_targets): its plan's line per supervised slot, else None."""
+    if not plan.lines:
+        return [None] * k
+    return [plan.lines[li] if li is not None else None for li in plan.slot_lines]
+
+
+def teacher_text_marks(text: str, plan: TeacherPlan) -> tuple[str, tuple]:
+    """(teacher view text, marks) of a final view text (FINAL_TEMPLATE; no slot line): text with chain_block(lines)
+    inserted before its options (insert_chain), and per slot of plan.slot_lines None or (first, last), the character
+    indices of the value of the slot's line in it (rule "value": from the first non-space character after the line's
+    last '=' to its last non-space character; "last": the line's last non-space character twice). ("", all None)
+    for an empty plan."""
+    if not plan.lines:
+        return "", tuple(None for _ in plan.slot_lines)
+    t = insert_chain(text, chain_block(list(plan.lines)))
+    off = len(text.rpartition("\nOptions:\n")[0]) + len(f"\n\n{CHAIN_HEADER}\n")
+    starts = []
+    for i, ln in enumerate(plan.lines):
+        pre = f"Step {i + 1}: "
+        starts.append(off + len(pre))
+        off += len(pre) + len(ln) + 1
+    marks = []
+    for li in plan.slot_lines:
+        if li is None:
+            marks.append(None)
+            continue
+        ln = plan.lines[li]
+        end = len(ln.rstrip()) - 1
+        if end < 0:
+            raise ValueError("teacher view: an empty line")
+        if plan.rule == "value":
+            eq = ln.rfind("=")
+            tail = ln[eq + 1:] if eq >= 0 else ""
+            if not tail.strip():
+                raise ValueError(f"teacher view: worked step {ln!r} has no value after '='")
+            first = eq + 1 + len(tail) - len(tail.lstrip())
+        else:
+            first = end
+        marks.append((starts[li] + first, starts[li] + end))
+    return t, tuple(marks)
+
+
+def _offsets(tokenizer, text: str) -> tuple[list[int], list]:
+    enc = tokenizer(text, add_special_tokens=False, return_offsets_mapping=True)
+    ids = list(enc["input_ids"])
+    if ids != text_ids(tokenizer, text):
+        raise ValueError("teacher view: the offset-mapped encoding differs from text_ids (a slow tokenizer, or a chat "
+                         "template)")
+    return ids, [tuple(o) for o in enc["offset_mapping"]]
+
+
+def _token_of(offs: list, c: int) -> int:
+    for t, (a, b) in enumerate(offs):
+        if a <= c < b:
+            return t
+    raise ValueError(f"teacher view: no token covers character {c}")
+
+
+def teacher_mark_positions(tokenizer, text: str, marks: tuple, max_len: int) -> list:
+    """Per slot (marks order): None, or the two positions of the slot's teacher tokens in collate's row of text (the
+    special prefix + text_ids cut at the head to max_len, as encode_tail): (the token BEFORE the token holding the
+    value's first character = the position whose next token is the value's first; on Qwen3.5 "= 6" is ' =', ' ', '6',
+    so it is the bare space, on GPT-2 ' =' before ' 6'), the token holding the value's last character); None when a
+    position falls in the cut head."""
+    ids, offs = _offsets(tokenizer, text)
+    pre = len(special_prefix(tokenizer))
+    cut = max(0, len(ids) - max(1, max_len - pre))
+    out = []
+    for mk in marks:
+        if mk is None:
+            out.append(None)
+            continue
+        t1, t2 = _token_of(offs, mk[0]) - 1, _token_of(offs, mk[1])
+        out.append((pre + t1 - cut, pre + t2 - cut) if t1 >= 0 and t1 - cut >= 0 else None)
+    return out
+
+
+def tsf_coin(seed: int, step: int, batch: list) -> float:
+    """The forced-reading coin of one micro-batch: keyed by the seed, the update and the micro-batch's item ids (sorted),
+    never by its index, so --fsdp's re-ordered micro-batches (split_update) draw the single-process coins."""
+    key = "|".join(sorted(str(e.item_id) for e in batch))
+    return random.Random(f"tsf-force|{seed}|{step}|{key}").random()
+
+
+class _LayerCapture:
+    """The OUTPUT of decoder layers `layers` (0-based) at every position, not detached (one-shot forward pre-hooks on
+    layer l + 1, as _SlotCapture: with or without gradient checkpointing the captured input of a checkpointed layer is
+    the graph tensor itself). force = (li, rows, pos, vals): the output of layer li at (rows[r], pos[r]) replaced by
+    vals[r] (a forward hook on layer li); its un-replaced output is the capture of li. While the context is open in
+    training, layer li runs WITHOUT gradient checkpointing: a checkpointed layer recomputes its forward in backward,
+    after the context (and its hook) is gone, which would drop the replacement from the gradient. A context manager
+    over one forward."""
+
+    def __init__(self, body, layers, force=None):
+        from .fsdp import decoder_layers
+        self.dl = decoder_layers(body)
+        n = len(self.dl)
+        for li in list(layers) + ([force[0]] if force is not None else []):
+            if not 0 <= li <= n - 2:
+                raise ValueError(f"layer {li}: an intermediate decoder layer, 0..{n - 2}")
+        self.layers, self.force = sorted(set(layers)), force
+        self.h, self.handles, self._ckpt = {}, [], None
+
+    def __enter__(self):
+        for li in self.layers:
+            def pre(mod, args, kwargs, li=li):
+                if li not in self.h:
+                    self.h[li] = args[0] if args else kwargs["hidden_states"]
+            self.handles.append(self.dl[li + 1].register_forward_pre_hook(pre, with_kwargs=True))
+        if self.force is not None:
+            li, rows, pos, vals = self.force
+            lay = self.dl[li]
+            if getattr(lay, "gradient_checkpointing", False):
+                self._ckpt = lay
+                lay.gradient_checkpointing = False
+
+            def post(mod, args, out):
+                h = out[0] if isinstance(out, tuple) else out
+                if li not in self.h:
+                    self.h[li] = h
+                h = h.clone()
+                h[rows, pos] = vals.to(h.device, h.dtype)
+                return (h,) + tuple(out[1:]) if isinstance(out, tuple) else h
+            self.handles.append(lay.register_forward_hook(post))
+        return self
+
+    def __exit__(self, *exc):
+        for hd in self.handles:
+            hd.remove()
+        self.handles = []
+        if self._ckpt is not None:
+            self._ckpt.gradient_checkpointing = True
+            self._ckpt = None
+        return False
+
+
+def _align_rows(s: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    """[N] alignment losses of student / teacher states [N, ..., d]: smooth L1 (beta 1) of s / sigma vs t / sigma with
+    sigma the RMS of each teacher vector (detached), mean over the hidden dims, then over every other axis."""
+    t = t.detach().float()
+    s = s.float()
+    sig = t.pow(2).mean(-1, keepdim=True).sqrt().clamp_min(1e-6)
+    per = F.smooth_l1_loss(s / sig, t / sig, reduction="none", beta=1.0).mean(-1)
+    return per.flatten(1).mean(1)
+
+
+def teacher_forward(model, tokenizer, batch: list, max_len: int, cache: dict, step: int = 0, _always: bool = False):
+    """One training micro-batch of a TSF / PTAD arm: (the student's letter logits as label_logits gives them, parts,
+    stats); parts = {"teacher": the teacher views' letter CE summed over examples (teacher_ce x weight each),
+    "align": scale x the summed weighted alignment loss}, so loss = (kl_loss x n + teacher + align) / norm. TSF also
+    forces (tsf_coin(seed, step, batch) < force_p). Under FSDP both passes run inside the root's forward, and a
+    micro-batch without a teacher view still runs a weight-0 teacher pass (the same collectives on every rank).
+    stats: slot_n (aligned slots / answer positions), align_sum (their unweighted losses), teacher_n, teacher_ce_sum,
+    forced (0 / 1), forced_n (examples forced), marks_cut (teacher positions lost to max_len)."""
+    if getattr(model, "cotd_readout", False):
+        return model.run(teacher_forward, tokenizer, batch, max_len, cache, step, True)
+    cfg = teacher_config(tokenizer)
+    if cfg is None:
+        raise ValueError("teacher_forward: no teacher settings registered for this tokenizer (set_teacher)")
+    return (_tsf_forward if cfg.mode == "tsf" else _ptad_forward)(model, tokenizer, batch, max_len, cache, step,
+                                                                  _always, cfg)
+
+
+def _teacher_pass(model, tokenizer, batch: list, max_len: int, cache: dict, cfg: TeacherConfig, layers, _always: bool):
+    """The teacher views of a micro-batch in one pass: None (no view and not _always), else (letter-CE sum, the views'
+    batch indices, the collated views, {layer: output, detached}, stats). A micro-batch without a view under FSDP runs
+    batch[0]'s text at weight 0 instead (no stats, no targets)."""
+    body, head = text_parts(model)
+    dev = head.weight.device
+    idx = [i for i, e in enumerate(batch) if isinstance(e, TeacherExample) and e.teacher_text]
+    tex = [Example(batch[i].teacher_text, batch[i].labels, batch[i].target, batch[i].weight * cfg.teacher_ce,
+                   "teacher", batch[i].item_id) for i in idx]
+    if not tex and not _always:
+        return None
+    stand = not tex
+    if stand:
+        e0 = batch[0]
+        tex = [Example(e0.text, e0.labels, e0.target, 0.0, "teacher", e0.item_id)]
+    bt = collate(tokenizer, tex, max_len, dev)
+    with _LayerCapture(body, layers) as cap:
+        ht = body(input_ids=bt["input_ids"], attention_mask=bt["attention_mask"], use_cache=False).last_hidden_state
+    zt = _letters(model, tokenizer, head, ht[torch.arange(len(tex), device=dev), bt["last"]], tex, cache)
+    ce = kl_loss(zt, tex, cfg.smoothing) * len(tex)
+    with torch.no_grad():
+        ce_sum = 0.0 if stand else sum(float(kl_loss([z.detach().float()], [dataclasses.replace(e, weight=1.0)],
+                                                     cfg.smoothing)) for z, e in zip(zt, tex))
+    hs = {li: cap.h[li].detach() for li in layers}
+    return ce, ([] if stand else idx), bt, hs, {"teacher_n": 0 if stand else len(tex), "teacher_ce_sum": ce_sum}
+
+
+def _tsf_forward(model, tokenizer, batch, max_len, cache, step, _always, cfg):
+    spec, _ = _slot_reg(tokenizer)
+    sid = _slot_ids(tokenizer)
+    body, head = text_parts(model)
+    dev = head.weight.device
+    layers = tuple(sorted(set(cfg.layers)))
+    L = spec.layer
+    if L is None or L not in layers or spec.c != 2:
+        raise ValueError("TSF: the slot layer must be the last align layer, and c = 2 tokens per slot")
+    li_L = layers.index(L)
+    zero = torch.zeros((), device=dev, dtype=torch.float32)
+    tp = _teacher_pass(model, tokenizer, batch, max_len, cache, cfg, layers, _always)
+    tgt: dict = {}                           # batch index -> [(slot j, teacher states [layers, c, d])]
+    cut = 0
+    if tp is not None:
+        ce_t, idx, _, hs, tst = tp
+        for r, i in enumerate(idx):
+            e = batch[i]
+            for j, pp in enumerate(teacher_mark_positions(tokenizer, e.teacher_text, e.teacher_marks, max_len)):
+                if e.teacher_marks[j] is None:
+                    continue
+                if pp is None:
+                    cut += 1
+                    continue
+                ix = torch.tensor(pp, device=dev)
+                tgt.setdefault(i, []).append((j, torch.stack([hs[li][r, ix] for li in layers])))
+        del hs
+    else:
+        ce_t, tst = zero, {"teacher_n": 0, "teacher_ce_sum": 0.0}
+    b = collate(tokenizer, batch, max_len, dev)
+    rows, poss, tgts, wts = [], [], [], []
+    for i, lst in tgt.items():
+        e = batch[i]
+        sp = _slot_positions(b["input_ids"][i], sid, spec, e.item_id)
+        for j, t in lst:
+            rows.append(i)
+            poss.append(sp[j * spec.c:(j + 1) * spec.c])
+            tgts.append(t)
+            wts.append(e.weight * e.slot_lambda)
+    forced = bool(rows) and cfg.force_p > 0 and tsf_coin(cfg.seed, step, batch) < cfg.force_p
+    force = None
+    if forced:
+        force = (L, torch.tensor([r for r in rows for _ in range(spec.c)], device=dev), torch.cat(poss),
+                 torch.cat([t[li_L] for t in tgts]))
+    with _LayerCapture(body, layers, force) as cap:
+        hidden = body(input_ids=b["input_ids"], attention_mask=b["attention_mask"], use_cache=False).last_hidden_state
+    out = _letters(model, tokenizer, head, hidden[torch.arange(hidden.shape[0], device=dev), b["last"]], batch, cache)
+    align, asum = zero, 0.0
+    if rows:
+        S = torch.stack([torch.stack([cap.h[li][r, p] for li in layers]) for r, p in zip(rows, poss)])
+        per = _align_rows(S, torch.stack(tgts))
+        align = cfg.scale * (torch.tensor(wts, device=dev, dtype=torch.float32) * per).sum()
+        asum = float(per.detach().sum())
+    return out, {"teacher": ce_t, "align": align}, {
+        "slot_n": len(rows), "align_sum": asum, "teacher_n": tst["teacher_n"], "teacher_ce_sum": tst["teacher_ce_sum"],
+        "forced": int(forced), "forced_n": len(set(rows)) if forced else 0, "marks_cut": cut}
+
+
+def _ptad_forward(model, tokenizer, batch, max_len, cache, step, _always, cfg):
+    body, head = text_parts(model)
+    dev = head.weight.device
+    layers = tuple(sorted(set(cfg.layers)))
+    zero = torch.zeros((), device=dev, dtype=torch.float32)
+    tp = _teacher_pass(model, tokenizer, batch, max_len, cache, cfg, layers, _always)
+    tgt: dict = {}                           # batch index -> teacher states at "Answer:" [layers, d]
+    if tp is not None:
+        ce_t, idx, bt, hs, tst = tp
+        for r, i in enumerate(idx):
+            if batch[i].slot_lambda:
+                tgt[i] = torch.stack([hs[li][r, bt["last"][r]] for li in layers])
+        del hs
+    else:
+        ce_t, tst = zero, {"teacher_n": 0, "teacher_ce_sum": 0.0}
+    b = collate(tokenizer, batch, max_len, dev)
+    with _LayerCapture(body, layers) as cap:
+        hidden = body(input_ids=b["input_ids"], attention_mask=b["attention_mask"], use_cache=False).last_hidden_state
+    out = _letters(model, tokenizer, head, hidden[torch.arange(hidden.shape[0], device=dev), b["last"]], batch, cache)
+    align, asum = zero, 0.0
+    rows = sorted(tgt)
+    if rows:
+        S = torch.stack([torch.stack([cap.h[li][i, b["last"][i]] for li in layers]) for i in rows])
+        per = _align_rows(S, torch.stack([tgt[i] for i in rows]))
+        w = torch.tensor([batch[i].weight * batch[i].slot_lambda for i in rows], device=dev, dtype=torch.float32)
+        align = cfg.scale * (w * per).sum()
+        asum = float(per.detach().sum())
+    return out, {"teacher": ce_t, "align": align}, {
+        "slot_n": len(rows), "align_sum": asum, "teacher_n": tst["teacher_n"], "teacher_ce_sum": tst["teacher_ce_sum"],
+        "forced": 0, "forced_n": 0, "marks_cut": 0}
+
+
+def answer_group(group: list[Example], item: dict, *, plan: TeacherPlan | None, lam: float = 1.0,
+                 stats: dict | None = None) -> list[Example]:
+    """PTAD: a full-tree group reduced to its final view (the A2 prompt, no slots), as a TeacherExample whose teacher
+    view is the final question with the plan's lines (teacher_text_marks) and slot_lambda = lam (0 and no teacher view
+    for an item without a chain). The node views are dropped. Draws nothing from any generator."""
+    st = stats if stats is not None else {}
+    out = []
+    for e in group:
+        if e.kind != "final":
+            continue
+        t_text = teacher_text_marks(e.text, plan)[0] if plan is not None and plan.lines else ""
+        st["teacher_views"] = st.get("teacher_views", 0) + bool(t_text)
+        st["answer_items"] = st.get("answer_items", 0) + 1
+        out.append(TeacherExample(**dataclasses.asdict(e), slot_targets=(), slot_lambda=lam if t_text else 0.0,
+                                  teacher_text=t_text, teacher_marks=()))
+    return out
+
+
+# ---- TSF / PTAD evaluation: the early "use" detector, the forced necessity modes, held-out alignment -------------------
+def _item_example(tokenizer, it: dict, text: str | None = None, kind: str = "final") -> Example:
+    return Example(final_text(tokenizer, it["prompt"]) if text is None else text, it["labels"],
+                   [0.0] * len(it["labels"]), 1.0, kind, it["item_id"])
+
+
+def _metrics_preds(items: list[dict], probs_by: dict) -> tuple[dict, list[dict]]:
+    """evaluate's (metrics, predictions) from per-index probabilities."""
+    probs, gold, preds = [], [], []
+    for i, it in enumerate(items):
+        p = probs_by[i]
+        preds.append({"item_id": it["item_id"], "group": it.get("group"), "labels": it["labels"], "probs": p,
+                      "gold_label": it.get("gold_label"), "gold_probs": it.get("gold_probs")})
+        if it.get("gold_label") in it["labels"]:
+            probs.append(p)
+            gold.append(it["labels"].index(it["gold_label"]))
+    return (calibration(probs, gold) if gold else {"n": 0}), preds
+
+
+def tsf_eval(model, tokenizer, items: list[dict], *, max_len: int, bs: int = 8, modes=("force", "forceswap"),
+             align_layers=None) -> dict:
+    """TSF evaluation on items with the registered slot line (one pass per mode; eval mode, no gradient). A teacher
+    pass over every item with a chain (its own worked steps, FINAL_TEMPLATE without the slot line) gives the item's
+    teacher vectors at its supervised slots (slot_step_map with the spec's k / overflow; positions as in training).
+    Modes: "force" = the layer-L slot states of those slots replaced by the item's own vectors; "forceswap" = by those
+    of another item (teacher_partners keyed "eval-swap", so every arm swaps the same pairs; the partner has a line for
+    each of the item's supervised slots); items without a chain are run unchanged. Returns {mode: (metrics + n_forced,
+    preds)}, "chained" (the ids with a chain) and, with align_layers, "align": the alignment loss (_align_rows, the
+    training loss without weights) of the student's slot states at those layers (before any replacement) against the
+    item's own teacher vectors, mean over supervised slots (n_slots; per slot j: align_slot<j>). Under FSDP every rank
+    runs every item inside the root's forward."""
+    if getattr(model, "cotd_readout", False):
+        return model.run(_tsf_eval, tokenizer, items, max_len, bs, tuple(modes), tuple(align_layers or ()))
+    return _tsf_eval(model, tokenizer, items, max_len, bs, tuple(modes), tuple(align_layers or ()))
+
+
+@torch.no_grad()
+def _tsf_eval(model, tokenizer, items, max_len, bs, modes, align_layers) -> dict:
+    spec, _ = _slot_reg(tokenizer)
+    if spec.layer is None or spec.c != 2:
+        raise ValueError("forced evaluation: a TSF slot spec (an intermediate slot layer, c = 2)")
+    for m in modes:
+        if m not in ("force", "forceswap"):
+            raise ValueError(f"tsf_eval mode {m!r}")
+    sid = _slot_ids(tokenizer)
+    L = spec.layer
+    al = tuple(sorted(set(align_layers)))
+    layers = tuple(sorted(set(al) | {L}))
+    was_training = model.training
+    model.eval()
+    body, head = text_parts(model)
+    dev = head.weight.device
+    auto = dict(device_type="cuda", dtype=torch.bfloat16, enabled=dev.type == "cuda")
+    plans = {}
+    for it in items:
+        pl = teacher_plan(it, "steps", k=spec.k, overflow=spec.overflow)
+        if pl.lines:
+            plans[it["item_id"]] = pl
+    chained = [it for it in items if it["item_id"] in plans]
+    V: dict = {}                             # item id -> {slot j: [layers, c, d] float32, CPU}
+    order = sorted(range(len(chained)), key=lambda i: len(chained[i]["prompt"]))
+    for s in range(0, len(order), bs):
+        its = [chained[i] for i in order[s:s + bs]]
+        tm = [teacher_text_marks(FINAL_TEMPLATE.format(problem=it["prompt"]), plans[it["item_id"]]) for it in its]
+        exs = [_item_example(tokenizer, it, t, "teacher") for it, (t, _) in zip(its, tm)]
+        with torch.autocast(**auto):
+            bt = collate(tokenizer, exs, max_len, dev)
+            with _LayerCapture(body, layers) as cap:
+                body(input_ids=bt["input_ids"], attention_mask=bt["attention_mask"], use_cache=False)
+        for r, (it, (t, mk)) in enumerate(zip(its, tm)):
+            V[it["item_id"]] = {j: torch.stack([cap.h[li][r, torch.tensor(pp, device=dev)] for li in layers]).float().cpu()
+                                for j, pp in enumerate(teacher_mark_positions(tokenizer, t, mk, max_len)) if pp is not None}
+    partners = {}
+    if "forceswap" in modes and V:
+        partners = teacher_partners(chained, "eval-swap", {i: len(v) for i, v in V.items()})
+    res: dict = {"chained": sorted((it["item_id"] for it in chained), key=str)}
+    order_all = sorted(range(len(items)), key=lambda i: len(items[i]["prompt"]))
+    li_L = layers.index(L)
+    passes = list(modes) or (["align"] if al else [])
+    if al and "force" not in passes and "align" not in passes:
+        passes.append("align")
+    aligned: list = []
+    for mode in passes:
+        probs_by, n_forced = {}, 0
+        for s in range(0, len(order_all), bs):
+            idx = order_all[s:s + bs]
+            exs = [_item_example(tokenizer, items[i]) for i in idx]
+            b = collate(tokenizer, exs, max_len, dev)
+            rows, poss, vals, own = [], [], [], []
+            for r, i in enumerate(idx):
+                iid = items[i]["item_id"]
+                if not V.get(iid):
+                    continue
+                src = V[partners[iid]] if mode == "forceswap" else V[iid]
+                sp = _slot_positions(b["input_ids"][r], sid, spec, iid)
+                n_forced += mode != "align"
+                for j, t in V[iid].items():
+                    own.append((r, sp[j * spec.c:(j + 1) * spec.c], t, j))
+                    if j not in src:             # (a partner always has the item's slots; kept as a guard)
+                        continue
+                    rows += [r] * spec.c
+                    poss.append(sp[j * spec.c:(j + 1) * spec.c])
+                    vals.append(src[j][li_L])
+            force = None
+            if rows and mode != "align":
+                force = (L, torch.tensor(rows, device=dev), torch.cat(poss), torch.cat(vals).to(dev))
+            with torch.autocast(**auto):
+                with _LayerCapture(body, al if mode in ("force", "align") else (), force) as cap:
+                    hidden = body(input_ids=b["input_ids"], attention_mask=b["attention_mask"],
+                                  use_cache=False).last_hidden_state
+                zs = _letters(model, tokenizer, head, hidden[torch.arange(len(idx), device=dev), b["last"]], exs, {})
+            for r, i in enumerate(idx):
+                probs_by[i] = torch.softmax(zs[r], -1).tolist()
+            if al and mode in ("force", "align") and own:
+                ia = [layers.index(li) for li in al]
+                S = torch.stack([torch.stack([cap.h[li][r, p] for li in al]) for r, p, _, _ in own]).float().cpu()
+                T = torch.stack([t[ia] for _, _, t, _ in own])
+                aligned += list(zip([j for _, _, _, j in own], _align_rows(S, T).tolist()))
+        if mode != "align":
+            mm, pr = _metrics_preds(items, probs_by)
+            res[mode] = (dict(mm, n_forced=n_forced), pr)
+        if al and mode in ("force", "align") and "align" not in res:
+            a = {"n_slots": len(aligned), "align": sum(x for _, x in aligned) / len(aligned) if aligned else None,
+                 "layers": list(al)}
+            for j in sorted({j for j, _ in aligned}):
+                xs = [x for jj, x in aligned if jj == j]
+                a[f"align_slot{j + 1}"] = sum(xs) / len(xs)
+            res["align"] = a
+    if was_training:
+        model.train()
+    return res
+
+
+def ptad_eval(model, tokenizer, items: list[dict], *, max_len: int, bs: int = 8, layers=()) -> dict:
+    """PTAD's held-out alignment: for every item with a chain, the alignment loss (_align_rows, unweighted) of the
+    student's "Answer:" states (the A2 prompt) at layers against the teacher view's (its own worked steps); {"n",
+    "align"} (mean over items). Under FSDP every rank runs every item inside the root's forward."""
+    if getattr(model, "cotd_readout", False):
+        return model.run(_ptad_eval, tokenizer, items, max_len, bs, tuple(layers))
+    return _ptad_eval(model, tokenizer, items, max_len, bs, tuple(layers))
+
+
+@torch.no_grad()
+def _ptad_eval(model, tokenizer, items, max_len, bs, layers) -> dict:
+    layers = tuple(sorted(set(layers)))
+    was_training = model.training
+    model.eval()
+    body, head = text_parts(model)
+    dev = head.weight.device
+    auto = dict(device_type="cuda", dtype=torch.bfloat16, enabled=dev.type == "cuda")
+    chained = [it for it in items if worked_steps(it)]
+    order = sorted(range(len(chained)), key=lambda i: len(chained[i]["prompt"]))
+    losses = []
+    for s in range(0, len(order), bs):
+        its = [chained[i] for i in order[s:s + bs]]
+        hs = []
+        for teacher in (True, False):
+            exs = [_item_example(tokenizer, it, teacher_text_marks(FINAL_TEMPLATE.format(problem=it["prompt"]),
+                                                                   teacher_plan(it, "steps"))[0] if teacher
+                                 else FINAL_TEMPLATE.format(problem=it["prompt"])) for it in its]
+            with torch.autocast(**auto):
+                b = collate(tokenizer, exs, max_len, dev)
+                with _LayerCapture(body, layers) as cap:
+                    body(input_ids=b["input_ids"], attention_mask=b["attention_mask"], use_cache=False)
+            hs.append(torch.stack([torch.stack([cap.h[li][r, b["last"][r]] for li in layers])
+                                   for r in range(len(its))]).float().cpu())
+        losses += _align_rows(hs[1], hs[0]).tolist()
+    if was_training:
+        model.train()
+    return {"n": len(losses), "align": sum(losses) / len(losses) if losses else None, "layers": list(layers)}
+
+
+def _num(x) -> float | None:
+    try:
+        return float(str(x).replace(",", "").replace("$", "").strip())
+    except ValueError:
+        return None
+
+
+def option_has_intermediate(item: dict) -> bool:
+    """Whether an option of the item equals one of its worked steps' values other than the last (the answer's): the
+    'partial value' items of the memo's G1 split."""
+    vals = slot_values(item)[:-1]
+    want = {v for v in (_num(x) for x in vals) if v is not None}
+    if not want:
+        return False
+    opts = []
+    for line in item["prompt"].rpartition("\nOptions:\n")[2].split("\n"):
+        m = _OPT_LINE.match(line.strip())
+        if m:
+            opts.append(_num(m.group(2)))
+    return any(o is not None and any(abs(o - w) < 1e-9 for w in want) for o in opts)
+
+
+def _acc_of(preds: list[dict], ids: set) -> tuple[int, float | None]:
+    xs = [p for p in preds if p["item_id"] in ids and p.get("gold_label") in p["labels"]]
+    if not xs:
+        return 0, None
+    ok = sum(max(range(len(p["probs"])), key=lambda i: p["probs"][i]) == p["labels"].index(p["gold_label"]) for p in xs)
+    return len(xs), ok / len(xs)
+
+
+def tsf_subsets(items: list[dict], preds: list[dict], intact: list[dict], spec: SlotSpec) -> dict:
+    """A TSF necessity mode's accuracy on the items with a chain (the only ones a force mode changes) and on those with /
+    without an intermediate value among the options (option_has_intermediate, chained items), next to the intact
+    accuracy on the same items: n_chain, acc_chain, acc_intact_chain, acc_drop_chain, and the same for _optmid /
+    _nooptmid."""
+    chained = {it["item_id"] for it in items
+               if teacher_plan(it, "steps", k=spec.k, overflow=spec.overflow).lines}
+    mid = {it["item_id"] for it in items if it["item_id"] in chained and option_has_intermediate(it)}
+    out = {}
+    for tag, ids in (("chain", chained), ("optmid", mid), ("nooptmid", chained - mid)):
+        n, a = _acc_of(preds, ids)
+        _, b = _acc_of(intact, ids)
+        out.update({f"n_{tag}": n, f"acc_{tag}": a, f"acc_intact_{tag}": b,
+                    f"acc_drop_{tag}": None if a is None or b is None else b - a})
+    return out
