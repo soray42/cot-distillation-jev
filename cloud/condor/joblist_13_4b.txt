@@ -1,0 +1,11 @@
+condor/jobs13_4b/292_4b_gsmvt_A2-c1lr3_s12_fsdp.env, 400, 1
+condor/jobs13_4b/293_4b_gsmvt_A2-c2lr3_s12_fsdp.env, 399, 1
+condor/jobs13_4b/294_4b_gsmvt_GFPQ-c1lr3_s12_fsdp.env, 398, 1
+condor/jobs13_4b/295_4b_gsmvt_GFPQVT-c1lr3_s12_fsdp.env, 397, 1
+condor/jobs13_4b/296_4b_gsmvt_GFPQ-c2lr3_s12_fsdp.env, 396, 1
+condor/jobs13_4b/297_4b_gsmvt_GFPQVT-c2lr3_s12_fsdp.env, 395, 1
+condor/jobs13_4b/298_4b_gsmvt_GFPQVTR-c2lr3_s12_fsdp.env, 394, 1
+condor/jobs13_4b/299_4b_gsmaug24_A2-c1lr3_s12_fsdp.env, 393, 1
+condor/jobs13_4b/300_4b_gsmaug24_A2-c2lr3_s12_fsdp.env, 392, 1
+condor/jobs13_4b/301_4b_gsmaug24_GFPQ-c1lr3_s12_fsdp.env, 391, 1
+condor/jobs13_4b/302_4b_gsmaug24_GFPQ-c2lr3_s12_fsdp.env, 390, 1
